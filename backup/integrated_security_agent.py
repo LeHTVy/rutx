@@ -66,7 +66,7 @@ ALL SCAN RESULTS AND TECHNICAL OUTPUT MUST BE IN ENGLISH!
 - NEVER translate scan output - keep it in English for technical accuracy
 
 Example:
-User (Vietnamese): "Quét IP này: 192.168.1.100"
+User (any language): "Scan this IP: 192.168.1.100"
 You: "I'll scan this IP address 192.168.1.100...
 [Scan results in English]
 Analysis: The target is running Apache 2.4.41 on port 80..." ✓ CORRECT

@@ -1,515 +1,414 @@
-# 🚀 Integrated Security Agent v2.0 - Nikto Edition
+# 🔒 AI-Driven Penetration Testing Framework v3.0
 
-## ✨ Tính năng mới
+A local AI-powered automated security scanning framework with robust data persistence.
 
-Chương trình đã được nâng cấp thành công với **Nikto Web Scanner**!
+## 🏗️ Architecture Overview
 
-### Trước đây (v1.0):
-- ✅ Nmap (18 tools) - Network scanning
-
-### Bây giờ (v2.0):
-- ✅ Nmap (18 tools) - Network scanning
-- ✅ **Nikto (10 tools) - Web vulnerability scanning** 🆕
-- ✅ **AI intelligent tool selection** 🆕
-- ✅ **English output for professional reports** 🆕
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           USER INPUT                                         │
+│                    "Scan ports and find vulns on snode.com"                  │
+└─────────────────────────────────┬───────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        ORCHESTRATION LAYER                                   │
+│                      (intelligent_agent.py)                                  │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐              │
+│  │   Ollama LLM    │  │  Tool Selection │  │   Conversation  │              │
+│  │  (llama3.2:3b)  │◄─┤    Strategy     │  │    Management   │              │
+│  └────────┬────────┘  └─────────────────┘  └─────────────────┘              │
+└───────────┼─────────────────────────────────────────────────────────────────┘
+            │
+            ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           TOOL EXECUTION LAYER                               │
+│                        (tools/native_tools.py)                               │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐      │
+│  │   Nmap   │  │  Amass   │  │   BBOT   │  │  Shodan  │  │  SQLMap  │      │
+│  │  (5 fn)  │  │  (2 fn)  │  │  (3 fn)  │  │  (2 fn)  │  │ (future) │      │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘  └──────────┘      │
+└───────┼─────────────┼─────────────┼─────────────┼───────────────────────────┘
+        │             │             │             │
+        └─────────────┴──────┬──────┴─────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     DATA PERSISTENCE LAYER (NEW!)                            │
+│                          (database/)                                         │
+│                                                                              │
+│  ┌─────────────────┐      ┌─────────────────┐      ┌─────────────────┐      │
+│  │ Step A: Raw     │      │ Step B: Parse   │      │ Step C: Store   │      │
+│  │ XML/JSON Output ├─────►│ & Normalize     ├─────►│ in SQLite DB    │      │
+│  │ (scan_results/) │      │ (parsers.py)    │      │ (data/pentest.db)│     │
+│  └─────────────────┘      └─────────────────┘      └────────┬────────┘      │
+│                                                              │               │
+│                                                              ▼               │
+│  ┌─────────────────┐      ┌─────────────────┐      ┌─────────────────┐      │
+│  │ Step D: Query   │◄─────│ Repositories    │◄─────│ Models (ORM)    │      │
+│  │ for Reports     │      │ (CRUD Layer)    │      │ Scan, Finding,  │      │
+│  │ (reporting.py)  │      │ (repositories.py│      │ Host, Asset...  │      │
+│  └─────────────────┘      └─────────────────┘      └─────────────────┘      │
+└─────────────────────────────────────────────────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         REPORTING LAYER                                      │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │  get_llm_context() → Structured Data → LLM Analysis → Final Report   │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## 🎯 Cách hoạt động
+## 📁 Directory Structure
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  User nhập prompt (Vietnamese hoặc English)         │
-└────────────────┬────────────────────────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────────────────────────┐
-│  Ollama AI (llama3.2:3b) phân tích ngữ cảnh        │
-│  - Phát hiện keywords                               │
-│  - Xác định mục đích scan                          │
-└────────────────┬────────────────────────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────────────────────────┐
-│  Chọn tool thông minh:                             │
-│  ├─ "web", "HTTP" → Nikto                          │
-│  ├─ "port", "network" → Nmap                       │
-│  └─ "comprehensive" → Both Nmap + Nikto            │
-└────────────────┬────────────────────────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────────────────────────┐
-│  Thực thi scan                                     │
-│  - Nmap: Network reconnaissance                    │
-│  - Nikto: Web vulnerability detection              │
-└────────────────┬────────────────────────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────────────────────────┐
-│  Trả kết quả (ENGLISH)                             │
-│  - Findings & vulnerabilities                       │
-│  - Risk assessment                                  │
-│  - Recommendations                                  │
-└─────────────────────────────────────────────────────┘
+rutx/
+├── config.py                    # Centralized configuration
+├── intelligent_agent.py         # Main AI agent orchestrator
+├── prompts.py                   # System prompts for LLM
+│
+├── tools/                       # Tool Execution Layer
+│   ├── __init__.py              # Tool exports (dual architecture)
+│   ├── native_tools.py          # LLM tool definitions (12 tools)
+│   ├── unified_tool_runner.py   # Core tool executors
+│   ├── nmap_tools.py            # Nmap wrapper functions
+│   ├── amass_tools.py           # Amass subdomain enumeration
+│   ├── bbot_tools.py            # BBOT reconnaissance
+│   ├── shodan_tools.py          # Shodan threat intelligence
+│   ├── output_manager.py        # Large output handling
+│   └── scan_results/            # Raw tool outputs (XML/JSON)
+│
+├── database/                    # Data Persistence Layer (NEW!)
+│   ├── __init__.py              # Module exports
+│   ├── models.py                # SQLAlchemy ORM models
+│   ├── database.py              # Connection management
+│   ├── parsers.py               # Tool output parsers
+│   ├── repositories.py          # Data access layer
+│   ├── service.py               # High-level services
+│   ├── reporting.py             # Report generation
+│   └── tool_integration.py      # Tool runner integration
+│
+├── data/                        # Database storage
+│   └── pentest.db               # SQLite database
+│
+├── logs/                        # Log files
+│   ├── log_normal.json
+│   └── log_anomaly.json
+│
+└── backup/                      # Archived code
 ```
 
 ---
 
-## 📦 Files đã tạo/cập nhật
+## 🗃️ Data Schema (Database Models)
 
-### ✅ Core Files (Updated/Created)
+### Scan Entity
+```json
+{
+  "id": "uuid",
+  "tool": "nmap|amass|bbot|shodan",
+  "target": "snode.com",
+  "scan_profile": "vuln",
+  "status": "completed",
+  "start_time": "2025-11-23T17:00:00Z",
+  "elapsed_seconds": 1171.73,
+  "hosts_discovered": 1,
+  "ports_discovered": 2,
+  "findings_count": 5
+}
+```
 
-1. **nikto_tools.py** 🆕
-   - 10 Nikto scanning functions
-   - Tool definitions for Ollama
-   - Execute dispatcher
+### Finding Entity
+```json
+{
+  "id": "uuid",
+  "scan_id": "uuid",
+  "finding_type": "vulnerability|open_port|subdomain",
+  "title": "Open port 80/tcp (http)",
+  "severity": "critical|high|medium|low|info",
+  "cve_id": "CVE-2021-44228",
+  "status": "new|confirmed|remediated",
+  "evidence": "Raw output proving the finding"
+}
+```
 
-2. **integrated_security_agent.py** (UPDATED)
-   - Import Nikto tools
-   - Unified tool dispatcher
-   - Enhanced system prompts
-   - Intelligent tool selection
+### Host Entity
+```json
+{
+  "id": "uuid",
+  "ip_address": "192.168.1.100",
+  "hostname": "web-server-01",
+  "os_name": "Ubuntu 20.04",
+  "open_ports": 5,
+  "ports": [
+    {"port": 80, "service": "http", "product": "nginx"},
+    {"port": 443, "service": "https", "product": "nginx"}
+  ]
+}
+```
 
-3. **nmap_tools.py** (Existing, no changes)
-   - 18 Nmap scanning functions
-
-### 📚 Documentation Files (Created)
-
-4. **examples_usage.md** 🆕
-   - English usage guide
-   - 10+ example scenarios
-   - Installation instructions
-
-5. **HUONG_DAN.md** 🆕
-   - Vietnamese user guide
-   - Ví dụ chi tiết
-   - Tips & tricks
-
-6. **demo_scenarios.py** 🆕
-   - 10 test scenarios
-   - Quick test commands
-   - Expected behavior
-
-7. **CHANGELOG.md** 🆕
-   - Version history
-   - Feature documentation
-
-8. **README_NIKTO.md** 🆕
-   - This file
-   - Quick start guide
+### Asset Entity
+```json
+{
+  "id": "uuid",
+  "name": "Production Web Server",
+  "ip_address": "192.168.1.100",
+  "domain": "snode.com",
+  "criticality": "high",
+  "owner": "IT Security",
+  "risk_score": 75.5,
+  "open_findings_count": 12
+}
+```
 
 ---
 
 ## 🚀 Quick Start
 
-### Bước 1: Kiểm tra dependencies
+### 1. Install Dependencies
 
 ```bash
-# Check Nmap
-nmap --version
+# Python dependencies
+pip install sqlalchemy shodan requests
 
-# Check Nikto
-nikto -Version
+# Scanning tools
+sudo apt install nmap amass
 
-# Check Ollama
-ollama list
+# BBOT
+pipx install bbot
+
+# Ollama
+curl https://ollama.ai/install.sh | sh
+ollama pull llama3.2:3b
 ```
 
-### Bước 2: Cài Nikto (nếu chưa có)
+### 2. Initialize Database
 
-**Windows:**
-```bash
-# Download: https://github.com/sullo/nikto
-# Giải nén và thêm vào PATH
+```python
+from database import init_database
+
+# Creates tables in data/pentest.db
+db = init_database()
 ```
 
-**Linux:**
-```bash
-sudo apt-get update
-sudo apt-get install nikto
-```
-
-### Bước 3: Chạy agent
+### 3. Run the Agent
 
 ```bash
-python integrated_security_agent.py
+# Interactive mode
+python intelligent_agent.py
+
+# Enter prompt:
+> Perform comprehensive security scan on snode.com
 ```
 
 ---
 
-## 💡 Ví dụ sử dụng
+## 💾 Data Persistence Examples
 
-### Ví dụ 1: Quét network (Nmap)
+### Save Scan Results to Database
 
-```
-[Command]: Tìm các thiết bị trong mạng 192.168.1.0/24
-```
+```python
+from database import save_scan_result
 
-**Kết quả:**
-```
-I'll discover live hosts in the network 192.168.1.0/24...
+# After running a tool, save to database
+result = save_scan_result(
+    tool="nmap",
+    target="snode.com",
+    output_file="tools/scan_results/nmap_snode_com.xml",
+    scan_profile="vuln",
+    elapsed_seconds=1171.73
+)
 
-[Nmap ping scan results]
-Found 5 live hosts:
-- 192.168.1.1 (Gateway)
-- 192.168.1.10
-- 192.168.1.50
-- 192.168.1.100
-- 192.168.1.200
-
-Recommendation: Perform service detection on discovered hosts.
+print(f"Saved scan: {result['scan_id']}")
+print(f"Hosts: {result['hosts_discovered']}")
+print(f"Findings: {result['findings_count']}")
 ```
 
----
+### Query Database for Reports
 
-### Ví dụ 2: Quét web vulnerability (Nikto)
+```python
+from database import query_database
 
+# Get all scans for a target
+scans = query_database("scans", target="snode.com")
+
+# Get critical findings
+findings = query_database("findings", severity="critical")
+
+# Get statistics
+stats = query_database("stats")
+print(f"Total scans: {stats['scan_stats']['total_scans']}")
+print(f"Critical findings: {stats['finding_stats']['by_severity']['critical']}")
 ```
-[Command]: Quét lỗ hổng web của 192.168.1.100
-```
 
-**Kết quả:**
-```
-I'll perform web vulnerability scanning on 192.168.1.100...
+### Generate LLM Context (for Report Generation)
 
-[Nikto scan results]
-Target: 192.168.1.100:80
+```python
+from database import get_llm_context
 
-Findings:
-1. Server: Apache/2.4.41 (Ubuntu)
-   Severity: Low
-   Issue: Server version disclosure
+# Instead of reading raw logs, the LLM gets structured data
+context = get_llm_context()
 
-2. Missing Headers:
-   - X-Frame-Options (Clickjacking protection)
-   - X-Content-Type-Options
-   - Strict-Transport-Security (HSTS)
-   Severity: Medium
-
-3. Directory Listing: /backup/
-   Severity: Medium
-   Risk: Information disclosure
-
-4. Admin Panel: /admin/login.php
-   Severity: High
-   Risk: Potential brute force target
-
-Overall Risk: MEDIUM-HIGH
-
-Recommendations:
-1. Disable server version in Apache config
-2. Implement security headers
-3. Disable directory listing
-4. Protect admin panel with IP whitelist
-5. Implement rate limiting for login attempts
+# Returns comprehensive JSON with:
+# - Executive summary
+# - Findings by severity
+# - Host inventory
+# - Risk assessment
+# - Recommendations
 ```
 
 ---
 
-### Ví dụ 3: Comprehensive scan (Both tools)
+## 🔧 Tool Integration
 
+### With Database Persistence (Recommended)
+
+```python
+from database.tool_integration import (
+    run_nmap_with_db,
+    run_amass_with_db,
+    run_bbot_with_db
+)
+
+# Runs Nmap AND saves to database
+result = run_nmap_with_db(
+    target="192.168.1.100",
+    scan_type="vuln",
+    session_id="my-session-123"
+)
+
+print(f"Database scan_id: {result['database']['scan_id']}")
 ```
-[Command]: Quét toàn diện 192.168.1.100
-```
 
-**Kết quả:**
-```
-I'll perform comprehensive security assessment on 192.168.1.100...
+### Without Database (Direct Execution)
 
-=== NETWORK RECONNAISSANCE (Nmap) ===
-Host: 192.168.1.100
-Status: UP
-Latency: 2.5ms
+```python
+from tools import run_nmap_native
 
-Open Ports:
-- 22/tcp   SSH     OpenSSH 8.2p1 Ubuntu
-- 80/tcp   HTTP    Apache 2.4.41
-- 443/tcp  HTTPS   Apache 2.4.41
-
-OS Detection: Linux 5.4.x
-Device Type: General purpose
-
-=== WEB VULNERABILITY ASSESSMENT (Nikto) ===
-
-Port 80 (HTTP):
-- Missing security headers
-- Outdated jQuery (1.11.0)
-- TRACE method enabled
-- Admin panel accessible
-
-Port 443 (HTTPS):
-- SSL Certificate: Valid
-- TLS Version: TLSv1.2, TLSv1.3
-- Cipher Strength: Strong
-- Same vulnerabilities as port 80
-
-=== RISK ASSESSMENT ===
-Overall Risk: MEDIUM-HIGH
-
-Critical Issues: 0
-High: 2
-Medium: 5
-Low: 3
-
-=== RECOMMENDATIONS ===
-Immediate Actions:
-1. Patch Apache to latest version
-2. Update jQuery library
-3. Disable TRACE method
-4. Implement WAF for admin panel
-
-Medium Priority:
-5. Add security headers
-6. Enable HSTS on HTTPS
-7. Implement CSP policy
-
-Low Priority:
-8. Disable server version disclosure
-9. Review SSL cipher suites
-10. Enable audit logging
-
-=== COMPLIANCE ===
-OWASP Top 10:
-- A5: Security Misconfiguration ⚠️
-- A9: Using Components with Known Vulnerabilities ⚠️
-
-Next Steps:
-- Apply security patches
-- Implement monitoring
-- Schedule regular scans
+# Just runs Nmap, saves to files only
+result = run_nmap_native(
+    target="192.168.1.100",
+    scan_type="quick"
+)
 ```
 
 ---
 
-## 🎓 Tool Selection Examples
+## 📊 Available Tools
 
-| Prompt (Vietnamese) | Tools Selected | Reason |
-|---------------------|----------------|--------|
-| "Quét port của 192.168.1.1" | `nmap_quick_scan` | Keyword: "port" |
-| "Check web security của localhost" | `nikto_scan` | Keyword: "web security" |
-| "Scan lỗ hổng HTTPS của example.com" | `nikto_ssl_scan` | Keywords: "HTTPS", "lỗ hổng" |
-| "Tìm thiết bị trong mạng" | `nmap_ping_scan` | Keywords: "thiết bị", "mạng" |
-| "Quét toàn diện 10.0.0.1" | `nmap_aggressive_scan` + `nikto_full_scan` | Keyword: "toàn diện" |
-| "Kiểm tra XSS trên website" | `nikto_vulnerability_scan` | Keyword: "XSS" |
+| Tool | Type | Description |
+|------|------|-------------|
+| **Nmap** | Network | Port scanning, service detection, OS fingerprinting |
+| **Amass** | OSINT | Subdomain enumeration, attack surface mapping |
+| **BBOT** | Recon | Advanced recursive scanning, web discovery |
+| **Shodan** | Intel | Threat intelligence, vulnerability data |
 
----
-
-## 🎯 Các lệnh có sẵn
-
-### Interactive Mode (Recommended)
-```bash
-python integrated_security_agent.py
-```
-
-### Command Line Mode
-```bash
-# Investigate IP
-python integrated_security_agent.py investigate 192.168.1.100
-
-# Scan network
-python integrated_security_agent.py scan 192.168.1.0/24
-
-# Custom task
-python integrated_security_agent.py custom "Your custom prompt here"
-```
-
-### Demo Mode
-```bash
-# Show all example scenarios
-python demo_scenarios.py
-```
+### Nmap Scan Profiles
+- `quick` - Fast top 100 ports
+- `aggressive` - Full OS/version detection
+- `vuln` - Vulnerability scripts
+- `stealth` - SYN stealth scan
+- `comprehensive` - Everything
 
 ---
 
-## 📊 Tool Comparison
+## 📈 Reporting
 
-| Feature | Nmap | Nikto |
-|---------|------|-------|
-| **Purpose** | Network reconnaissance | Web vulnerability |
-| **Speed** | Fast (seconds-minutes) | Slower (5-30 min) |
-| **Depth** | Port, Service, OS | HTTP, HTTPS, Web apps |
-| **Use Case** | Infrastructure mapping | Web security audit |
-| **Output** | Port lists, versions | Vulnerabilities, risks |
-| **Best For** | Discovery, enumeration | Vulnerability assessment |
+### Executive Summary Query
+```python
+from database import ReportingService
 
-### When to use what?
+summary = ReportingService.get_executive_summary()
+print(f"Risk Level: {summary['risk_assessment']['overall_risk']}")
+print(f"Critical: {summary['critical_findings']}")
+```
 
-**Use Nmap when:**
-- Finding live hosts
-- Discovering open ports
-- Identifying services
-- OS fingerprinting
-- Network mapping
+### Generate Full Report
+```python
+from database import PentestReporter
 
-**Use Nikto when:**
-- Testing web applications
-- Finding web misconfigurations
-- Checking HTTP headers
-- Detecting known vulnerabilities
-- SSL/TLS testing
+reporter = PentestReporter(session_id="my-session")
+report = reporter.get_full_report()
 
-**Use Both when:**
-- Comprehensive security assessment
-- Unknown target (need full picture)
-- Professional pentest report
-- Compliance requirements
+# Contains:
+# - report_metadata
+# - executive_summary
+# - findings (by severity)
+# - hosts
+# - subdomains
+# - risk_assessment
+# - recommendations
+```
 
 ---
 
 ## ⚙️ Configuration
 
-### Model Settings (in integrated_security_agent.py)
 ```python
+# config.py
+
+# Ollama AI
 OLLAMA_ENDPOINT = "http://localhost:11434/api/chat"
 MODEL_NAME = "llama3.2:3b"
+
+# Timeouts (seconds)
+TIMEOUT_NMAP = 1200   # 20 minutes
+TIMEOUT_AMASS = 1200  # 20 minutes
+TIMEOUT_BBOT = 1200   # 20 minutes
+
+# Database
+ENABLE_DATABASE = True
+AUTO_PARSE_RESULTS = True
+DATABASE_URL = "sqlite:///data/pentest.db"
+
+# API Keys
+SHODAN_API_KEY = "your-api-key"
 ```
-
-### Timeout Settings
-- Nmap: 600 seconds (10 minutes)
-- Nikto: 1800 seconds (30 minutes)
-- Ollama: 300 seconds (5 minutes)
-
-### Max Iterations
-- Agent loop: 15 iterations
-- Prevents infinite loops
-
----
-
-## 🐛 Troubleshooting
-
-### Lỗi: "nikto command not found"
-```bash
-# Windows: Add to PATH
-setx PATH "%PATH%;C:\path\to\nikto"
-
-# Linux: Install
-sudo apt-get install nikto
-```
-
-### Lỗi: "nmap command not found"
-```bash
-# Install Nmap
-# Windows: https://nmap.org/download.html
-# Linux: sudo apt-get install nmap
-```
-
-### Lỗi: "Cannot connect to Ollama"
-```bash
-# Start Ollama
-ollama serve
-
-# Pull model if needed
-ollama pull llama3.2:3b
-```
-
-### Agent không chọn đúng tool
-- Dùng từ khóa cụ thể hơn
-- Thêm "nmap" hoặc "nikto" vào prompt
-- Ví dụ: "Dùng nikto quét web server"
-
-### Scan quá lâu
-- Dùng quick scan variants
-- `nikto_quick_scan` thay vì `nikto_full_scan`
-- `nmap_quick_scan` thay vì `nmap_aggressive_scan`
 
 ---
 
 ## 🔒 Security & Ethics
 
-⚠️ **QUAN TRỌNG:**
-- Chỉ quét hệ thống bạn có quyền
-- Không quét mạng công cộng
-- Tuân thủ luật pháp địa phương
-- Sử dụng cho mục đích hợp pháp
+⚠️ **IMPORTANT:**
+- Only scan systems you have explicit permission to test
+- Comply with local laws and regulations
+- Use for legitimate security testing only
 
 **Authorized Use Cases:**
 - ✅ Testing your own infrastructure
 - ✅ Authorized penetration testing
 - ✅ Security research (with permission)
-- ✅ Educational purposes (on own systems)
 - ✅ CTF competitions
 
-**Prohibited:**
-- ❌ Unauthorized network scanning
-- ❌ Attacking production systems
-- ❌ Scanning without permission
-- ❌ Malicious activities
+---
+
+## 📚 Tech Stack
+
+| Component | Technology |
+|-----------|------------|
+| Language | Python 3.8+ |
+| AI/LLM | Ollama (llama3.2:3b) |
+| Database | SQLite + SQLAlchemy |
+| Scanning | Nmap, Amass, BBOT, Shodan |
+| Data Format | JSON, XML |
 
 ---
 
-## 📈 Performance Tips
+## 🗺️ Roadmap
 
-### Optimize Scan Speed
-1. Use quick variants for initial recon
-2. Target specific ports instead of all
-3. Use parallel scanning when possible
-4. Schedule long scans during off-hours
-
-### Optimize Results Quality
-1. Use full scans for critical systems
-2. Combine multiple tools
-3. Verify findings manually
-4. Document everything
+- [ ] PostgreSQL support for production
+- [ ] SQLMap integration for SQL injection testing
+- [ ] ZAP integration for web app scanning
+- [ ] Nuclei integration for template-based scanning
+- [ ] Dashboard UI for visualization
+- [ ] Scheduled scanning
+- [ ] Slack/Teams notifications
 
 ---
 
-## 🎉 Summary
-
-### What was achieved:
-
-✅ **Nikto Integration Complete**
-- 10 new web scanning tools
-- Full integration with AI agent
-- Intelligent tool selection
-
-✅ **Enhanced Capabilities**
-- Network scanning (Nmap)
-- Web vulnerability scanning (Nikto)
-- Combined comprehensive assessments
-
-✅ **Professional Output**
-- All results in English
-- Structured reports
-- Risk assessments
-- Actionable recommendations
-
-✅ **Documentation**
-- Vietnamese guide (HUONG_DAN.md)
-- English guide (examples_usage.md)
-- Demo scenarios
-- This README
-
----
-
-## 📚 Next Steps
-
-1. **Install Nikto** (if not already)
-2. **Run demo scenarios** to familiarize yourself
-3. **Test on safe targets** (your own systems)
-4. **Read documentation** for advanced usage
-5. **Start scanning!** 🚀
-
----
-
-## 📞 Support Resources
-
-- **Nmap Documentation**: https://nmap.org/docs.html
-- **Nikto Documentation**: https://github.com/sullo/nikto/wiki
-- **Ollama Documentation**: https://ollama.ai/docs
-
----
-
-## 📝 License & Credits
-
-- **Nmap**: GPL v2 - Gordon Lyon
-- **Nikto**: GPL v2 - CIRT.net/Sullo
-- **Ollama**: MIT - Ollama Team
-
----
-
-**Version**: 2.0
+**Version**: 3.0
 **Status**: Production Ready ✅
-**Last Updated**: 2025
-
-**Chúc bạn scan thành công! 🎯🔒**
-# rutx
+**Last Updated**: November 2025

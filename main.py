@@ -1,0 +1,311 @@
+#!/usr/bin/env python3
+"""
+SNODE AI - Security Node Agent
+Main Terminal Interface
+"""
+
+import os
+import sys
+import json
+import requests
+from datetime import datetime
+
+# Add current directory for imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from config import OLLAMA_ENDPOINT, OLLAMA_LIST_ENDPOINT, MODEL_NAME
+from tools import ALL_TOOLS, get_all_tool_names
+
+
+# ANSI Color Codes
+class Colors:
+    HEADER = '\033[95m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    BOLD = '\033[1m'
+    DIM = '\033[2m'
+    RESET = '\033[0m'
+
+
+def clear_screen():
+    """Clear terminal screen"""
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+
+def get_terminal_width():
+    """Get terminal width"""
+    try:
+        return os.get_terminal_size().columns
+    except:
+        return 80
+
+
+def check_ollama_connection() -> tuple:
+    """Check if Ollama is running and get model info"""
+    try:
+        response = requests.get(OLLAMA_LIST_ENDPOINT, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            models = [m.get('name', '') for m in data.get('models', [])]
+            return True, models
+        return False, []
+    except:
+        return False, []
+
+
+def get_tool_categories():
+    """Categorize tools by type"""
+    categories = {
+        "Network Scanning": [],
+        "Subdomain Enum": [],
+        "Web Recon": [],
+        "Threat Intel": [],
+        "Utilities": []
+    }
+
+    for tool in ALL_TOOLS:
+        name = tool['function']['name']
+        if 'nmap' in name:
+            categories["Network Scanning"].append(name)
+        elif 'amass' in name:
+            categories["Subdomain Enum"].append(name)
+        elif 'bbot' in name:
+            categories["Web Recon"].append(name)
+        elif 'shodan' in name:
+            categories["Threat Intel"].append(name)
+        else:
+            categories["Utilities"].append(name)
+
+    return categories
+
+
+def print_banner():
+    """Print SNODE AI banner"""
+    width = get_terminal_width()
+
+    banner = f"""
+{Colors.CYAN}{Colors.BOLD}
+███████╗███╗   ██╗ ██████╗ ██████╗ ███████╗
+██╔════╝████╗  ██║██╔═══██╗██╔══██╗██╔════╝
+███████╗██╔██╗ ██║██║   ██║██║  ██║█████╗
+╚════██║██║╚██╗██║██║   ██║██║  ██║██╔══╝
+███████║██║ ╚████║╚██████╔╝██████╔╝███████╗
+╚══════╝╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚══════╝{Colors.RESET}
+{Colors.DIM}                                        AI{Colors.RESET}
+{Colors.YELLOW}═══════════════════════════════════════════{Colors.RESET}
+{Colors.GREEN}  Security Node - AI Penetration Testing{Colors.RESET}
+{Colors.YELLOW}═══════════════════════════════════════════{Colors.RESET}
+"""
+    print(banner)
+
+
+def print_system_info():
+    """Print system verification info"""
+    width = get_terminal_width()
+    col_width = width // 2 - 2
+
+    # Check Ollama
+    ollama_ok, models = check_ollama_connection()
+
+    # Get tools
+    tool_categories = get_tool_categories()
+    total_tools = len(get_all_tool_names())
+
+    print(f"\n{Colors.BOLD}{'─'*width}{Colors.RESET}")
+
+    # Left Column: Model & Tools | Right Column: Usage
+    left_lines = []
+    right_lines = []
+
+    # Left side - Model Info
+    left_lines.append(f"{Colors.CYAN}▸ MODEL{Colors.RESET}")
+    if ollama_ok:
+        left_lines.append(f"  {Colors.GREEN}✓{Colors.RESET} Ollama: {Colors.GREEN}Connected{Colors.RESET}")
+        left_lines.append(f"  {Colors.DIM}Active:{Colors.RESET} {MODEL_NAME}")
+        if models:
+            left_lines.append(f"  {Colors.DIM}Available:{Colors.RESET} {len(models)} models")
+    else:
+        left_lines.append(f"  {Colors.RED}✗{Colors.RESET} Ollama: {Colors.RED}Not Connected{Colors.RESET}")
+        left_lines.append(f"  {Colors.DIM}Run: ollama serve{Colors.RESET}")
+
+    left_lines.append("")
+    left_lines.append(f"{Colors.CYAN}▸ TOOLS ({total_tools}){Colors.RESET}")
+
+    for category, tools in tool_categories.items():
+        if tools:
+            left_lines.append(f"  {Colors.DIM}{category}:{Colors.RESET} {len(tools)}")
+
+    # Right side - Usage Info
+    right_lines.append(f"{Colors.CYAN}▸ USAGE{Colors.RESET}")
+    right_lines.append(f"  Enter natural language prompts")
+    right_lines.append(f"  to perform security scans.")
+    right_lines.append("")
+    right_lines.append(f"{Colors.CYAN}▸ EXAMPLES{Colors.RESET}")
+    right_lines.append(f"  {Colors.DIM}›{Colors.RESET} Scan ports on 192.168.1.1")
+    right_lines.append(f"  {Colors.DIM}›{Colors.RESET} Find subdomains of example.com")
+    right_lines.append(f"  {Colors.DIM}›{Colors.RESET} Check vulns on 10.0.0.1")
+    right_lines.append("")
+    right_lines.append(f"{Colors.CYAN}▸ COMMANDS{Colors.RESET}")
+    right_lines.append(f"  {Colors.DIM}help{Colors.RESET}   - Show help")
+    right_lines.append(f"  {Colors.DIM}tools{Colors.RESET}  - List all tools")
+    right_lines.append(f"  {Colors.DIM}clear{Colors.RESET}  - Clear screen")
+    right_lines.append(f"  {Colors.DIM}quit{Colors.RESET}   - Exit program")
+
+    # Print side by side
+    max_lines = max(len(left_lines), len(right_lines))
+
+    for i in range(max_lines):
+        left = left_lines[i] if i < len(left_lines) else ""
+        right = right_lines[i] if i < len(right_lines) else ""
+
+        # Strip ANSI codes for length calculation
+        import re
+        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+        left_clean = ansi_escape.sub('', left)
+        right_clean = ansi_escape.sub('', right)
+
+        padding = col_width - len(left_clean)
+        if padding < 0:
+            padding = 2
+
+        print(f"  {left}{' ' * padding}{Colors.DIM}│{Colors.RESET}  {right}")
+
+    print(f"{Colors.BOLD}{'─'*width}{Colors.RESET}")
+
+
+def print_phase_header(phase: int, title: str):
+    """Print phase header"""
+    icons = {1: "📦", 2: "⚙️", 3: "📊"}
+    print(f"\n{Colors.YELLOW}{'='*50}{Colors.RESET}")
+    print(f"{icons.get(phase, '▸')} {Colors.BOLD}PHASE {phase}: {title}{Colors.RESET}")
+    print(f"{Colors.YELLOW}{'='*50}{Colors.RESET}")
+
+
+def print_tool_list():
+    """Print all available tools"""
+    categories = get_tool_categories()
+
+    print(f"\n{Colors.CYAN}{Colors.BOLD}Available Security Tools{Colors.RESET}\n")
+
+    for category, tools in categories.items():
+        if tools:
+            print(f"{Colors.YELLOW}▸ {category}{Colors.RESET}")
+            for tool in sorted(tools):
+                print(f"  {Colors.DIM}•{Colors.RESET} {tool}")
+            print()
+
+
+def print_help():
+    """Print help information"""
+    print(f"""
+{Colors.CYAN}{Colors.BOLD}SNODE AI Help{Colors.RESET}
+
+{Colors.YELLOW}▸ How It Works{Colors.RESET}
+  SNODE AI uses a 3-phase system:
+
+  {Colors.GREEN}Phase 1:{Colors.RESET} Tool Selection (BlackBox)
+    - AI analyzes your request
+    - Selects appropriate tools automatically
+
+  {Colors.GREEN}Phase 2:{Colors.RESET} Execution & Storage
+    - Runs selected security tools
+    - Saves results to database
+
+  {Colors.GREEN}Phase 3:{Colors.RESET} Analysis & Report
+    - AI analyzes scan results
+    - Generates vulnerability report
+
+{Colors.YELLOW}▸ Example Prompts{Colors.RESET}
+  • "Scan all ports on 192.168.1.100"
+  • "Find subdomains of example.com"
+  • "Perform vulnerability scan on 10.0.0.1"
+  • "Get threat intel for suspicious IP 1.2.3.4"
+  • "Comprehensive security assessment of target.com"
+
+{Colors.YELLOW}▸ Tips{Colors.RESET}
+  • Be specific about targets (IP, domain, URL)
+  • Mention scan type if needed (quick, full, vuln)
+  • Results are saved for later analysis
+""")
+
+
+def main():
+    """Main entry point"""
+    clear_screen()
+    print_banner()
+    print_system_info()
+
+    # Import agent here to avoid circular imports
+    from agent import SNODEAgent
+
+    agent = SNODEAgent()
+
+    print(f"\n{Colors.GREEN}Ready. Enter your security objective.{Colors.RESET}\n")
+
+    while True:
+        try:
+            # Custom prompt
+            prompt = input(f"{Colors.CYAN}SNODE{Colors.RESET}{Colors.DIM}>{Colors.RESET} ").strip()
+
+            if not prompt:
+                continue
+
+            # Handle commands
+            cmd = prompt.lower()
+
+            if cmd in ['quit', 'exit', 'q']:
+                print(f"\n{Colors.YELLOW}Goodbye!{Colors.RESET}\n")
+                break
+
+            elif cmd == 'clear':
+                clear_screen()
+                print_banner()
+                print_system_info()
+                print(f"\n{Colors.GREEN}Ready.{Colors.RESET}\n")
+                continue
+
+            elif cmd == 'help':
+                print_help()
+                continue
+
+            elif cmd == 'tools':
+                print_tool_list()
+                continue
+
+            elif cmd == 'banner':
+                clear_screen()
+                print_banner()
+                continue
+
+            # Run the 3-phase scan
+            print(f"\n{Colors.DIM}Processing: {prompt[:50]}...{Colors.RESET}")
+
+            result = agent.run(prompt)
+
+            if result.get("success"):
+                print(f"\n{Colors.YELLOW}{'═'*60}{Colors.RESET}")
+                print(f"{Colors.BOLD}📋 FINAL REPORT{Colors.RESET}")
+                print(f"{Colors.YELLOW}{'═'*60}{Colors.RESET}")
+                print(result["phases"]["phase_3_analysis"])
+                print(f"\n{Colors.YELLOW}{'═'*60}{Colors.RESET}")
+                print(f"{Colors.DIM}Session: {result['session_id']} | Time: {result['elapsed_seconds']}s{Colors.RESET}")
+                print(f"{Colors.YELLOW}{'═'*60}{Colors.RESET}\n")
+            else:
+                print(f"\n{Colors.RED}Error: {result.get('error', 'Unknown error')}{Colors.RESET}")
+                if result.get('reasoning'):
+                    print(f"{Colors.DIM}{result['reasoning']}{Colors.RESET}")
+                print()
+
+        except KeyboardInterrupt:
+            print(f"\n\n{Colors.YELLOW}Interrupted. Type 'quit' to exit.{Colors.RESET}\n")
+            continue
+
+        except Exception as e:
+            print(f"\n{Colors.RED}Error: {e}{Colors.RESET}\n")
+
+
+if __name__ == "__main__":
+    main()
