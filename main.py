@@ -8,10 +8,26 @@ import os
 import sys
 import json
 import requests
+import time
 from datetime import datetime
 
 # Add current directory for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Fix terminal I/O blocking issues with long-running scans
+# Set stdout/stderr to line-buffered mode and handle non-blocking writes
+def _safe_print(*args, **kwargs):
+    """Print with retry logic for non-blocking I/O errors"""
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            print(*args, **kwargs)
+            sys.stdout.flush()
+            return
+        except BlockingIOError:
+            time.sleep(0.1)
+    # Last attempt without catching
+    print(*args, **kwargs)
 
 from config import OLLAMA_ENDPOINT, OLLAMA_LIST_ENDPOINT, MODEL_NAME
 from tools import ALL_TOOLS, get_all_tool_names
@@ -286,12 +302,17 @@ def main():
             result = agent.run(prompt)
 
             if result.get("success"):
+                # Get analysis from phase 3 or 4
+                phases = result.get("phases", {})
+                analysis = phases.get("phase_4_combined_analysis") or phases.get("phase_3_analysis", "No analysis available")
+                scan_type = "Subdomain (4-Phase)" if result.get("is_subdomain_scan") else "Standard (3-Phase)"
+
                 print(f"\n{Colors.YELLOW}{'═'*60}{Colors.RESET}")
                 print(f"{Colors.BOLD}📋 FINAL REPORT{Colors.RESET}")
                 print(f"{Colors.YELLOW}{'═'*60}{Colors.RESET}")
-                print(result["phases"]["phase_3_analysis"])
+                print(analysis)
                 print(f"\n{Colors.YELLOW}{'═'*60}{Colors.RESET}")
-                print(f"{Colors.DIM}Session: {result['session_id']} | Time: {result['elapsed_seconds']}s{Colors.RESET}")
+                print(f"{Colors.DIM}Session: {result['session_id']} | Type: {scan_type} | Time: {result['elapsed_seconds']}s{Colors.RESET}")
                 print(f"{Colors.YELLOW}{'═'*60}{Colors.RESET}\n")
             else:
                 print(f"\n{Colors.RED}Error: {result.get('error', 'Unknown error')}{Colors.RESET}")
@@ -300,11 +321,22 @@ def main():
                 print()
 
         except KeyboardInterrupt:
-            print(f"\n\n{Colors.YELLOW}Interrupted. Type 'quit' to exit.{Colors.RESET}\n")
+            _safe_print(f"\n\n{Colors.YELLOW}Interrupted. Type 'quit' to exit.{Colors.RESET}\n")
+            continue
+
+        except EOFError:
+            # Terminal input closed (can happen with I/O issues)
+            _safe_print(f"\n{Colors.YELLOW}Input stream closed. Exiting...{Colors.RESET}\n")
+            break
+
+        except BlockingIOError:
+            # Terminal buffer full - wait and retry
+            time.sleep(0.5)
+            _safe_print(f"\n{Colors.YELLOW}Terminal buffer busy. Please wait...{Colors.RESET}\n")
             continue
 
         except Exception as e:
-            print(f"\n{Colors.RED}Error: {e}{Colors.RESET}\n")
+            _safe_print(f"\n{Colors.RED}Error: {e}{Colors.RESET}\n")
 
 
 if __name__ == "__main__":

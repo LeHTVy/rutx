@@ -13,7 +13,7 @@ Active Tools:
 # Ollama AI Configuration
 OLLAMA_ENDPOINT = "http://localhost:11434/api/chat"
 OLLAMA_LIST_ENDPOINT = "http://localhost:11434/api/tags"
-MODEL_NAME = "gpt-oss:latest"  
+MODEL_NAME = "mathstral:latest"  
 
 # Timeout Settings (in seconds)
 TIMEOUT_NMAP = 1200  # 20 minutes

@@ -53,9 +53,10 @@ class SNODEAgent:
         self,
         messages: List[Dict],
         tools: List[Dict] = None,
-        timeout: int = None
+        timeout: int = None,
+        retry_without_tools: bool = True
     ) -> Dict[str, Any]:
-        """Call Ollama API"""
+        """Call Ollama API with retry logic"""
         if timeout is None:
             timeout = TIMEOUT_OLLAMA
 
@@ -76,8 +77,81 @@ class SNODEAgent:
             )
             response.raise_for_status()
             return response.json()
+        except requests.exceptions.HTTPError as e:
+            # If 500 error with tools, retry without tools (model may not support function calling)
+            if response.status_code == 500 and tools and retry_without_tools:
+                print(f"  ⚠️  Function calling failed, retrying with text-based selection...")
+                return self._call_ollama_text_fallback(messages, tools, timeout)
+            return {"error": str(e)}
         except requests.exceptions.RequestException as e:
             return {"error": str(e)}
+
+    def _call_ollama_text_fallback(
+        self,
+        messages: List[Dict],
+        tools: List[Dict],
+        timeout: int
+    ) -> Dict[str, Any]:
+        """Fallback: Ask LLM to select tools via text instead of function calling"""
+        # Build tool list as text
+        tool_list = "\n".join([
+            f"- {t['function']['name']}: {t['function'].get('description', '')[:100]}"
+            for t in tools
+        ])
+
+        # Modify system prompt to request JSON tool selection
+        fallback_prompt = f"""You are a security scanning assistant. Based on the user's request, select the appropriate tool(s).
+
+AVAILABLE TOOLS:
+{tool_list}
+
+RESPOND WITH JSON ONLY in this exact format:
+{{"tool_calls": [{{"function": {{"name": "tool_name", "arguments": {{"param": "value"}}}}}}]}}
+
+For port scanning, use: nmap_quick_scan, nmap_service_detection, or nmap_aggressive_scan
+For vulnerability scanning, use: nmap_vuln_scan
+For IP lookup, use: shodan_lookup or shodan_host
+For subdomain enumeration, use: amass_enum or bbot_subdomain_enum
+
+Select the most appropriate tool for the user's request."""
+
+        fallback_messages = [
+            {"role": "system", "content": fallback_prompt},
+            messages[-1]  # User message
+        ]
+
+        payload = {
+            "model": self.model,
+            "messages": fallback_messages,
+            "stream": False
+        }
+
+        try:
+            response = requests.post(
+                OLLAMA_ENDPOINT,
+                json=payload,
+                timeout=timeout
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            # Parse the text response as JSON
+            content = result.get("message", {}).get("content", "")
+
+            # Try to extract JSON from the response
+            import re
+            json_match = re.search(r'\{.*"tool_calls".*\}', content, re.DOTALL)
+            if json_match:
+                try:
+                    parsed = json.loads(json_match.group())
+                    # Convert to standard format
+                    result["message"]["tool_calls"] = parsed.get("tool_calls", [])
+                except json.JSONDecodeError:
+                    pass
+
+            return result
+        except Exception as e:
+            return {"error": f"Fallback failed: {str(e)}"}
 
     def _get_tool_list_string(self) -> str:
         """Get formatted list of available tools"""
@@ -98,6 +172,50 @@ class SNODEAgent:
         prompt_lower = user_prompt.lower()
         return any(keyword in prompt_lower for keyword in subdomain_keywords)
 
+    def _detect_port_scan(self, user_prompt: str) -> bool:
+        """Detect if user is requesting port scanning"""
+        port_keywords = [
+            'scan port', 'port scan', 'scan ports', 'open ports',
+            'check ports', 'port scanning', 'nmap', 'service detection'
+        ]
+        prompt_lower = user_prompt.lower()
+        return any(keyword in prompt_lower for keyword in port_keywords)
+
+    def _detect_vuln_scan(self, user_prompt: str) -> bool:
+        """Detect if user is requesting vulnerability scanning"""
+        vuln_keywords = [
+            'vuln', 'vulnerability', 'vulnerabilities', 'cve',
+            'exploit', 'security scan', 'check vuln', 'find vuln'
+        ]
+        prompt_lower = user_prompt.lower()
+        return any(keyword in prompt_lower for keyword in vuln_keywords)
+
+    def _detect_shodan_lookup(self, user_prompt: str) -> bool:
+        """Detect if user is requesting Shodan lookup"""
+        shodan_keywords = [
+            'shodan', 'threat intel', 'ip lookup', 'ip info',
+            'ip intelligence', 'host info', 'what is running on',
+            'osint', 'intelligence', 'enrich'
+        ]
+        prompt_lower = user_prompt.lower()
+        return any(keyword in prompt_lower for keyword in shodan_keywords)
+
+    def _detect_osint_enrichment(self, user_prompt: str) -> bool:
+        """Detect if user wants OSINT enrichment with their scan"""
+        osint_keywords = [
+            'osint', 'enrich', 'threat intel', 'intelligence',
+            'detailed', 'comprehensive', 'full recon', 'full scan'
+        ]
+        prompt_lower = user_prompt.lower()
+        return any(keyword in prompt_lower for keyword in osint_keywords)
+
+    def _extract_ip_from_prompt(self, user_prompt: str) -> Optional[str]:
+        """Extract IP address from user prompt"""
+        import re
+        ip_pattern = r'\b(?:\d{1,3}\.){3}\d{1,3}\b'
+        matches = re.findall(ip_pattern, user_prompt)
+        return matches[0] if matches else None
+
     def _extract_domain_from_prompt(self, user_prompt: str) -> Optional[str]:
         """Extract domain from user prompt"""
         import re
@@ -105,6 +223,13 @@ class SNODEAgent:
         domain_pattern = r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}'
         matches = re.findall(domain_pattern, user_prompt)
         return matches[0] if matches else None
+
+    def _extract_target_from_prompt(self, user_prompt: str) -> Optional[str]:
+        """Extract any target (IP or domain) from user prompt"""
+        ip = self._extract_ip_from_prompt(user_prompt)
+        if ip:
+            return ip
+        return self._extract_domain_from_prompt(user_prompt)
 
     def _get_subdomain_tools(self, domain: str) -> List[Dict]:
         """Get both amass and bbot tools for subdomain enumeration"""
@@ -119,12 +244,115 @@ class SNODEAgent:
             }
         ]
 
+    def _get_port_scan_tools(self, target: str, with_osint: bool = False) -> List[Dict]:
+        """Get nmap tools for port scanning, optionally with OSINT enrichment"""
+        tools = [
+            {
+                "name": "nmap_quick_scan",
+                "arguments": {"target": target}
+            }
+        ]
+        # Add Shodan lookup for OSINT enrichment (only for IP addresses)
+        if with_osint and self._is_ip_address(target):
+            tools.append({
+                "name": "shodan_lookup",
+                "arguments": {"ip": target}
+            })
+        return tools
+
+    def _is_ip_address(self, target: str) -> bool:
+        """Check if target is an IP address"""
+        import re
+        ip_pattern = r'^(?:\d{1,3}\.){3}\d{1,3}$'
+        return bool(re.match(ip_pattern, target))
+
+    def _parse_nmap_output(self, raw_output: str) -> Dict[str, Any]:
+        """Parse raw nmap output into structured data for LLM analysis"""
+        import re
+
+        result = {
+            "success": True,
+            "output": raw_output,
+            "hosts": [],
+            "open_ports": [],
+            "services": [],
+            "os_detection": None,
+            "vulnerabilities": []
+        }
+
+        lines = raw_output.splitlines()
+        current_host = None
+
+        for line in lines:
+            # Host detection
+            host_match = re.search(r'Nmap scan report for ([\w\.\-]+)(?: \((\d+\.\d+\.\d+\.\d+)\))?', line)
+            if host_match:
+                hostname = host_match.group(1)
+                ip = host_match.group(2) or hostname
+                current_host = {"hostname": hostname, "ip": ip}
+                result["hosts"].append(current_host)
+
+            # Open port detection
+            port_match = re.match(r'^(\d+)/(tcp|udp)\s+(\w+)\s+(.*)$', line)
+            if port_match:
+                port_info = {
+                    "port": int(port_match.group(1)),
+                    "protocol": port_match.group(2),
+                    "state": port_match.group(3),
+                    "service": port_match.group(4).strip()
+                }
+                result["open_ports"].append(port_info)
+                if port_info["state"] == "open":
+                    result["services"].append(f"{port_info['port']}/{port_info['protocol']} - {port_info['service']}")
+
+            # OS detection
+            if 'OS details:' in line or 'Running:' in line:
+                result["os_detection"] = line.strip()
+
+            # Vulnerability detection (from --script vuln)
+            if 'VULNERABLE' in line or 'CVE-' in line:
+                result["vulnerabilities"].append(line.strip())
+
+        # Build summary
+        open_count = len([p for p in result["open_ports"] if p["state"] == "open"])
+        result["open_ports_count"] = open_count
+        result["hosts_discovered"] = len(result["hosts"])
+        result["summary"] = f"Scan completed: {len(result['hosts'])} host(s), {open_count} open port(s)"
+
+        if result["vulnerabilities"]:
+            result["summary"] += f", {len(result['vulnerabilities'])} vulnerability indicator(s)"
+
+        return result
+
+    def _get_vuln_scan_tools(self, target: str, with_osint: bool = False) -> List[Dict]:
+        """Get tools for vulnerability scanning, optionally with OSINT enrichment"""
+        tools = [
+            {
+                "name": "nmap_vuln_scan",
+                "arguments": {"target": target}
+            }
+        ]
+        # Add Shodan for CVE enrichment if target is an IP
+        if with_osint and self._is_ip_address(target):
+            tools.append({
+                "name": "shodan_lookup",
+                "arguments": {"ip": target}
+            })
+        return tools
+
+    def _get_shodan_tools(self, target: str) -> List[Dict]:
+        """Get Shodan tools for IP lookup"""
+        return [
+            {
+                "name": "shodan_lookup",
+                "arguments": {"ip": target}
+            }
+        ]
+
     def phase_1_tool_selection(self, user_prompt: str) -> Tuple[List[Dict], str]:
         """
         Phase 1: BlackBox Tool Selection
-        LLM analyzes user request and selects appropriate tools
-
-        Special handling: If subdomain enumeration detected, auto-select amass + bbot
+        Uses keyword detection first, then falls back to LLM
 
         Returns:
             Tuple of (selected_tools, reasoning)
@@ -133,7 +361,7 @@ class SNODEAgent:
         print("📦 PHASE 1: TOOL SELECTION")
         print("="*60)
 
-        # Check for subdomain enumeration request
+        # 1. Check for subdomain enumeration request
         if self._detect_subdomain_scan(user_prompt):
             domain = self._extract_domain_from_prompt(user_prompt)
             if domain:
@@ -145,6 +373,46 @@ class SNODEAgent:
                 print(f"  ✓ Selected: bbot_subdomain_enum")
                 return selected_tools, reasoning
 
+        # 2. Check for vulnerability scan request (with optional OSINT enrichment)
+        if self._detect_vuln_scan(user_prompt):
+            target = self._extract_target_from_prompt(user_prompt)
+            if target:
+                with_osint = self._detect_osint_enrichment(user_prompt)
+                selected_tools = self._get_vuln_scan_tools(target, with_osint=with_osint)
+                reasoning = f"Vulnerability scan detected for {target}."
+                print(f"  🔍 Vulnerability scan detected for: {target}")
+                print(f"  ✓ Selected: nmap_vuln_scan")
+                if with_osint and self._is_ip_address(target):
+                    print(f"  ✓ Selected: shodan_lookup (CVE enrichment)")
+                    reasoning += " With Shodan CVE enrichment."
+                return selected_tools, reasoning
+
+        # 3. Check for port scan request (with optional OSINT enrichment)
+        if self._detect_port_scan(user_prompt):
+            target = self._extract_target_from_prompt(user_prompt)
+            if target:
+                with_osint = self._detect_osint_enrichment(user_prompt)
+                selected_tools = self._get_port_scan_tools(target, with_osint=with_osint)
+                reasoning = f"Port scan detected for {target}."
+                print(f"  🔍 Port scan detected for: {target}")
+                print(f"  ✓ Selected: nmap_quick_scan")
+                if with_osint and self._is_ip_address(target):
+                    print(f"  ✓ Selected: shodan_lookup (OSINT enrichment)")
+                    reasoning += " With Shodan OSINT enrichment."
+                return selected_tools, reasoning
+
+        # 4. Check for Shodan lookup request
+        if self._detect_shodan_lookup(user_prompt):
+            target = self._extract_ip_from_prompt(user_prompt)
+            if target:
+                selected_tools = self._get_shodan_tools(target)
+                reasoning = f"Shodan lookup detected for {target}."
+                print(f"  🔍 Shodan lookup detected for: {target}")
+                print(f"  ✓ Selected: shodan_lookup")
+                return selected_tools, reasoning
+
+        # 5. Fallback to LLM-based tool selection
+        print("  📡 Using LLM for tool selection...")
         system_prompt = get_phase1_prompt(self._get_tool_list_string())
 
         messages = [
@@ -204,7 +472,12 @@ class SNODEAgent:
                     try:
                         result = json.loads(result)
                     except:
-                        result = {"output": result}
+                        # Handle raw string output from nmap tools
+                        if result.startswith("Error:"):
+                            result = {"success": False, "error": result, "output": result}
+                        else:
+                            # Parse nmap output for structured data
+                            result = self._parse_nmap_output(result)
 
                 # Save to database if enabled
                 if ENABLE_DATABASE and result.get("success"):
@@ -274,13 +547,34 @@ class SNODEAgent:
                 "subdomains": r["result"].get("subdomains_found", 0)
             }
 
-            # Include port details if available
-            if r["result"].get("ports_detail"):
-                summary["ports_detail"] = r["result"]["ports_detail"][:10]
+            # Include port details if available (from nmap parsing)
+            if r["result"].get("open_ports"):
+                summary["ports_detail"] = r["result"]["open_ports"][:15]
+
+            # Include services detected
+            if r["result"].get("services"):
+                summary["services"] = r["result"]["services"][:15]
+
+            # Include vulnerabilities if found
+            if r["result"].get("vulnerabilities"):
+                summary["vulnerabilities"] = r["result"]["vulnerabilities"][:10]
 
             # Include subdomains if available
             if r["result"].get("subdomains"):
                 summary["subdomains_list"] = r["result"]["subdomains"][:20]
+
+            # Include Shodan data if available (OSINT enrichment)
+            if "shodan" in r["tool"].lower() and r["result"].get("data"):
+                shodan_data = r["result"]["data"]
+                summary["shodan_intel"] = {
+                    "organization": shodan_data.get("organization"),
+                    "isp": shodan_data.get("isp"),
+                    "country": shodan_data.get("country"),
+                    "ports": shodan_data.get("ports", [])[:20],
+                    "vulns": shodan_data.get("vulns", [])[:10],
+                    "threat_level": shodan_data.get("threat_level"),
+                    "threat_indicators": shodan_data.get("threat_indicators", [])
+                }
 
             results_summary.append(summary)
 
@@ -356,7 +650,8 @@ class SNODEAgent:
         bbot_set = set(combined_data["bbot_subdomains"])
         overlap = amass_set.intersection(bbot_set)
 
-        # Prepare summary for LLM
+        # Prepare summary for LLM (limit data to avoid 500 errors)
+        all_sorted = sorted(list(combined_data["all_subdomains"]))
         combined_summary = {
             "total_unique": len(combined_data["all_subdomains"]),
             "amass_count": len(amass_set),
@@ -364,12 +659,17 @@ class SNODEAgent:
             "overlap_count": len(overlap),
             "unique_to_amass": len(amass_set - bbot_set),
             "unique_to_bbot": len(bbot_set - amass_set),
-            "all_subdomains": sorted(list(combined_data["all_subdomains"]))[:100],  # Limit for LLM
-            "overlap_subdomains": sorted(list(overlap))[:50]
+            "sample_subdomains": all_sorted[:50],  # Reduced limit for LLM
+            "high_value_keywords": ["api", "admin", "dev", "staging", "test", "internal", "vpn", "mail"]
         }
+
+        # Find high-value targets
+        high_value = [s for s in all_sorted if any(kw in s.lower() for kw in combined_summary["high_value_keywords"])]
+        combined_summary["high_value_targets"] = high_value[:20]
 
         print(f"\n  📊 Total unique subdomains: {combined_summary['total_unique']}")
         print(f"  📊 Overlap (found by both): {combined_summary['overlap_count']}")
+        print(f"  📊 High-value targets found: {len(high_value)}")
 
         system_prompt = get_phase4_prompt(
             json.dumps(combined_summary, indent=2),
@@ -378,19 +678,86 @@ class SNODEAgent:
 
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": "Combine and analyze the subdomain enumeration results from both tools."}
+            {"role": "user", "content": "Analyze the subdomain discovery results."}
         ]
 
         print("\n🔍 Analyzing combined results...")
 
-        response = self._call_ollama(messages, timeout=TIMEOUT_OLLAMA)
+        response = self._call_ollama(messages, timeout=TIMEOUT_OLLAMA, retry_without_tools=False)
 
         if "error" in response:
-            return f"Analysis Error: {response['error']}"
+            # Fallback: Generate a basic report without LLM
+            print("  ⚠️  LLM analysis failed, generating basic report...")
+            return self._generate_basic_subdomain_report(combined_summary, all_sorted, high_value)
 
         analysis = response.get("message", {}).get("content", "No analysis generated")
 
         return analysis
+
+    def _generate_basic_subdomain_report(
+        self,
+        summary: Dict,
+        all_subdomains: List[str],
+        high_value: List[str]
+    ) -> str:
+        """Generate a basic subdomain report when LLM fails"""
+        # Categorize subdomains
+        categories = {
+            "api": [], "admin": [], "dev": [], "staging": [],
+            "mail": [], "vpn": [], "www": [], "other": []
+        }
+
+        for sub in all_subdomains:
+            sub_lower = sub.lower()
+            categorized = False
+            for cat in ["api", "admin", "dev", "staging", "mail", "vpn", "www"]:
+                if cat in sub_lower:
+                    categories[cat].append(sub)
+                    categorized = True
+                    break
+            if not categorized:
+                categories["other"].append(sub)
+
+        report = f"""## SUBDOMAIN DISCOVERY SUMMARY
+
+- **Total unique subdomains:** {summary['total_unique']}
+- **Found by Amass:** {summary['amass_count']}
+- **Found by BBOT:** {summary['bbot_count']}
+- **Overlap (found by both):** {summary['overlap_count']}
+- **Unique to Amass:** {summary['unique_to_amass']}
+- **Unique to BBOT:** {summary['unique_to_bbot']}
+
+## HIGH-VALUE TARGETS ({len(high_value)} found)
+
+{chr(10).join(['- ' + s for s in high_value[:15]]) if high_value else 'None identified'}
+
+## CATEGORIZED SUBDOMAINS
+
+### API Endpoints ({len(categories['api'])})
+{chr(10).join(['- ' + s for s in categories['api'][:10]]) if categories['api'] else 'None found'}
+
+### Admin Panels ({len(categories['admin'])})
+{chr(10).join(['- ' + s for s in categories['admin'][:10]]) if categories['admin'] else 'None found'}
+
+### Development/Staging ({len(categories['dev']) + len(categories['staging'])})
+{chr(10).join(['- ' + s for s in (categories['dev'] + categories['staging'])[:10]]) if (categories['dev'] or categories['staging']) else 'None found'}
+
+### Mail Services ({len(categories['mail'])})
+{chr(10).join(['- ' + s for s in categories['mail'][:10]]) if categories['mail'] else 'None found'}
+
+### VPN/Internal ({len(categories['vpn'])})
+{chr(10).join(['- ' + s for s in categories['vpn'][:10]]) if categories['vpn'] else 'None found'}
+
+## RECOMMENDATIONS
+
+1. **Priority targets for port scanning:** {', '.join(high_value[:5]) if high_value else 'Review all subdomains manually'}
+2. **Suggested next steps:** Run nmap_service_detection on high-value targets
+3. **Security concern:** Check for exposed admin panels and development environments
+
+---
+*Note: This is a basic report. LLM analysis was unavailable.*
+"""
+        return report
 
     def run(self, user_prompt: str) -> Dict[str, Any]:
         """

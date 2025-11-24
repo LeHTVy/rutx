@@ -19,7 +19,6 @@ import subprocess
 import json
 import os
 import time
-import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -28,31 +27,17 @@ def _run_subprocess_with_drain(cmd, timeout):
     """
     Run subprocess while draining stdout/stderr to prevent blocking.
     Returns (returncode, elapsed_time) - output is written to files by bbot.
+
+    Uses DEVNULL to completely suppress output and avoid terminal I/O issues.
     """
+    # Completely suppress stdout/stderr to avoid terminal I/O blocking
+    # BBOT writes its results to JSON files anyway
     process = subprocess.Popen(
         cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1  # Line buffered
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL
     )
-
-    # Drain output in background threads to prevent blocking
-    def drain_pipe(pipe):
-        try:
-            for _ in pipe:
-                pass  # Discard output (bbot writes to JSON files anyway)
-        except Exception:
-            pass
-        finally:
-            pipe.close()
-
-    stdout_thread = threading.Thread(target=drain_pipe, args=(process.stdout,))
-    stderr_thread = threading.Thread(target=drain_pipe, args=(process.stderr,))
-    stdout_thread.daemon = True
-    stderr_thread.daemon = True
-    stdout_thread.start()
-    stderr_thread.start()
 
     start_time = time.time()
     try:
@@ -63,10 +48,6 @@ def _run_subprocess_with_drain(cmd, timeout):
         raise
 
     elapsed = time.time() - start_time
-
-    # Wait for drain threads
-    stdout_thread.join(timeout=5)
-    stderr_thread.join(timeout=5)
 
     return process.returncode, elapsed
 
@@ -106,7 +87,11 @@ def bbot_scan(target, preset=None, modules=None, flags=None, output_dir=None, ti
         subdomains = []
         event_types = {}
 
-        for json_file in Path(output_dir).rglob("*.json"):
+        # BBOT creates output in nested directories with JSON/NDJSON files
+        files_to_check = list(Path(output_dir).rglob("*.json"))
+        files_to_check.extend(list(Path(output_dir).rglob("*.ndjson")))
+
+        for json_file in files_to_check:
             try:
                 with open(json_file, 'r') as f:
                     for line in f:
@@ -116,12 +101,30 @@ def bbot_scan(target, preset=None, modules=None, flags=None, output_dir=None, ti
                                 findings.append(entry)
                                 event_type = entry.get('type', 'unknown')
                                 event_types[event_type] = event_types.get(event_type, 0) + 1
-                                if event_type == 'DNS_NAME':
-                                    subdomains.append(entry.get('data', ''))
+                                if event_type in ('DNS_NAME', 'HOST'):
+                                    data = entry.get('data', '')
+                                    if isinstance(data, dict):
+                                        data = data.get('host', '') or data.get('dns_name', '')
+                                    if data and '.' in str(data):
+                                        subdomains.append(str(data))
                             except json.JSONDecodeError:
                                 continue
             except Exception:
                 continue
+
+        # Also check for subdomains.txt
+        for txt_file in Path(output_dir).rglob("subdomains.txt"):
+            try:
+                with open(txt_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and '.' in line:
+                            subdomains.append(line)
+            except Exception:
+                continue
+
+        # Deduplicate and sort subdomains
+        unique_subdomains = sorted(set(subdomains))
 
         return {
             "success": True,
@@ -131,11 +134,11 @@ def bbot_scan(target, preset=None, modules=None, flags=None, output_dir=None, ti
             "output_directory": output_dir,
             "elapsed_seconds": round(elapsed, 2),
             "findings_count": len(findings),
-            "subdomains_found": len(subdomains),
-            "subdomains": subdomains[:50],
+            "subdomains_found": len(unique_subdomains),
+            "subdomains": unique_subdomains[:100],  # Increased limit
             "event_types": event_types,
             "command": ' '.join(cmd),
-            "summary": f"BBOT scan: {len(findings)} events, {len(subdomains)} subdomains",
+            "summary": f"BBOT scan: {len(findings)} events, {len(unique_subdomains)} unique subdomains",
             "timestamp": datetime.now().isoformat()
         }
 
@@ -170,7 +173,12 @@ def bbot_subdomain_enum(target, passive=False, timeout=600):
         subdomains = []
         findings = []
 
-        for json_file in Path(output_dir).rglob("*.json"):
+        # BBOT creates output in: output_dir/scan_name/output.json
+        # Also check for output.ndjson and subdomains.txt
+        files_to_check = list(Path(output_dir).rglob("*.json"))
+        files_to_check.extend(list(Path(output_dir).rglob("*.ndjson")))
+
+        for json_file in files_to_check:
             try:
                 with open(json_file, 'r') as f:
                     for line in f:
@@ -178,12 +186,29 @@ def bbot_subdomain_enum(target, passive=False, timeout=600):
                             try:
                                 entry = json.loads(line.strip())
                                 findings.append(entry)
-                                if entry.get('type') == 'DNS_NAME':
+                                event_type = entry.get('type', '')
+                                # Capture DNS_NAME and also HOST events
+                                if event_type in ('DNS_NAME', 'HOST', 'OPEN_TCP_PORT'):
                                     data = entry.get('data', '')
-                                    if data:
-                                        subdomains.append(data)
+                                    if data and event_type in ('DNS_NAME', 'HOST'):
+                                        # Extract domain from data (may be dict or string)
+                                        if isinstance(data, dict):
+                                            data = data.get('host', '') or data.get('dns_name', '')
+                                        if data and '.' in str(data):
+                                            subdomains.append(str(data))
                             except json.JSONDecodeError:
                                 continue
+            except Exception:
+                continue
+
+        # Also check for subdomains.txt (BBOT may output this)
+        for txt_file in Path(output_dir).rglob("subdomains.txt"):
+            try:
+                with open(txt_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and '.' in line:
+                            subdomains.append(line)
             except Exception:
                 continue
 
