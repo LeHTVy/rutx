@@ -92,7 +92,7 @@ def get_local_network_info():
         return {"error": f"{type(ex).__name__}: {ex}"}
 
 
-def nmap_scan(target, options="", return_dict=True):
+def nmap_scan(target, options="", return_dict=True, timeout=600):
     """
     Run an Nmap scan on the specified target with optional parameters.
     Now includes XML output for database integration.
@@ -101,6 +101,7 @@ def nmap_scan(target, options="", return_dict=True):
         target: The target to scan (IP address, hostname, or IP range)
         options: Additional Nmap command line options (e.g., "-sS -p 80,443")
         return_dict: If True, return structured dict; if False, return raw stdout
+        timeout: Timeout in seconds (default: 600 = 10 minutes)
 
     Returns:
         dict: Structured scan result with output_xml path for database parsing
@@ -128,7 +129,7 @@ def nmap_scan(target, options="", return_dict=True):
             cmd_parts,
             capture_output=True,
             text=True,
-            timeout=600,  # Increased timeout for comprehensive scans
+            timeout=timeout,
             check=False
         )
         elapsed = time.time() - start_time
@@ -212,9 +213,10 @@ def nmap_scan(target, options="", return_dict=True):
         }
 
     except subprocess.TimeoutExpired:
+        timeout_mins = timeout // 60
         return {
             "success": False,
-            "error": "Nmap scan timed out after 10 minutes",
+            "error": f"Nmap scan timed out after {timeout_mins} minutes",
             "target": target
         }
     except FileNotFoundError:
@@ -315,6 +317,7 @@ def nmap_all_ports(target):
     """
     Scan all 65535 ports (comprehensive but slow).
     Equivalent to: nmap -p- target
+    Note: This can take 60+ minutes depending on target.
 
     Args:
         target: The target to scan
@@ -322,7 +325,7 @@ def nmap_all_ports(target):
     Returns:
         str: The output scanning all ports
     """
-    return nmap_scan(target, "-p-")
+    return nmap_scan(target, "-p-", timeout=3600)  # 60 minute timeout
 
 
 def nmap_top_ports(target, num_ports):
@@ -567,7 +570,7 @@ def nmap_comprehensive_scan(target):
     """
     Comprehensive scan: all ports, service detection, OS detection, scripts, traceroute.
     Equivalent to: nmap -p- -sV -sC -O --traceroute target
-    Note: This is VERY slow but extremely thorough.
+    Note: This is VERY slow (60+ minutes) but extremely thorough.
 
     Args:
         target: The target to scan
@@ -575,7 +578,7 @@ def nmap_comprehensive_scan(target):
     Returns:
         str: Comprehensive scan results
     """
-    return nmap_scan(target, "-p- -sV -sC -O --traceroute")
+    return nmap_scan(target, "-p- -sV -sC -O --traceroute", timeout=3600)  # 60 minute timeout
 
 
 def nmap_no_ping_scan(target, ports=""):

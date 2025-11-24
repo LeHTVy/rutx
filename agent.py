@@ -682,14 +682,23 @@ Select the most appropriate tool for the user's request."""
 
         self.scan_results = results
 
-        # Build and cache context for Phase 3
+        # Build and cache context for Phase 3 - only if there's successful data
         if ENABLE_DATABASE and self.context_builder and self.db_session_id:
-            try:
-                print("\n  🔄 Building enriched context...")
-                self.enriched_context = build_and_cache_context(self.db_session_id)
-                print(f"    ✅ Context cached with risk score: {self.enriched_context.get('summary', {}).get('risk_score', 0)}")
-            except Exception as e:
-                print(f"    ⚠️  Context build failed: {e}")
+            # Check if at least one scan was successful
+            has_success = any(r["result"].get("success", False) for r in results)
+            
+            if has_success:
+                try:
+                    print("\n  🔄 Building enriched context...")
+                    self.enriched_context = build_and_cache_context(self.db_session_id)
+                    risk_score = self.enriched_context.get('summary', {}).get('risk_score', 0)
+                    risk_level = self.enriched_context.get('summary', {}).get('risk_level', 'UNKNOWN')
+                    print(f"    ✅ Context cached | Risk: {risk_level} ({risk_score}/100)")
+                except Exception as e:
+                    print(f"    ⚠️  Context build failed: {e}")
+                    self.enriched_context = None
+            else:
+                print("\n  ⚠️  All scans failed - no context to build")
                 self.enriched_context = None
 
         return results
@@ -751,6 +760,7 @@ Select the most appropriate tool for the user's request."""
             summary = {
                 "tool": r["tool"],
                 "success": r["result"].get("success", False),
+                "target": r["result"].get("target") or r["args"].get("target") or r["args"].get("domain") or r["args"].get("ip"),
                 "summary": r["result"].get("summary", ""),
                 "findings": r["result"].get("findings_count", 0),
                 "hosts": r["result"].get("hosts_discovered", 0),
