@@ -304,7 +304,7 @@ def main():
             if result.get("success"):
                 # Get analysis from phase 3 or 4
                 phases = result.get("phases", {})
-                analysis = phases.get("phase_4_combined_analysis") or phases.get("phase_3_analysis", "No analysis available")
+                analysis = phases.get("phase_4_report") or phases.get("phase_3_analysis", "No analysis available")
                 scan_type = "Subdomain (4-Phase)" if result.get("is_subdomain_scan") else "Standard (3-Phase)"
 
                 print(f"\n{Colors.YELLOW}{'═'*60}{Colors.RESET}")
