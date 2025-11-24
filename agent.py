@@ -267,27 +267,104 @@ Select the most appropriate tool for the user's request."""
             return ip
         return self._extract_domain_from_prompt(user_prompt)
 
-    def _get_subdomain_tools(self, domain: str) -> List[Dict]:
-        """Get both amass and bbot tools for subdomain enumeration"""
-        return [
-            {
+    def _get_subdomain_tools(self, domain: str, user_prompt: str = "") -> List[Dict]:
+        """Get amass and bbot tools for subdomain enumeration with keyword detection"""
+        prompt_lower = user_prompt.lower()
+        
+        # Detect Amass mode based on keywords
+        amass_passive = True  # Default to passive for safety
+        amass_brute = False
+        use_amass_intel = False
+        
+        if "intel" in prompt_lower or "intelligence" in prompt_lower or "whois" in prompt_lower:
+            use_amass_intel = True
+        elif "brute" in prompt_lower or "brute force" in prompt_lower or "bruteforce" in prompt_lower:
+            amass_brute = True
+            amass_passive = False
+        elif "active" in prompt_lower and "subdomain" in prompt_lower:
+            amass_passive = False
+        # If "passive" is explicitly mentioned, keep passive=True (already default)
+        
+        # Detect BBOT mode based on keywords
+        bbot_passive = False  # Default to active
+        use_bbot_web = False
+        use_bbot_quick = False
+        
+        if "web scan" in prompt_lower or "web recon" in prompt_lower:
+            use_bbot_web = True
+        elif "quick" in prompt_lower and "bbot" in prompt_lower:
+            use_bbot_quick = True
+        elif "passive" in prompt_lower and "bbot" in prompt_lower:
+            bbot_passive = True
+        
+        tools = []
+        
+        # Add Amass tool
+        if use_amass_intel:
+            tools.append({
+                "name": "amass_intel",
+                "arguments": {"domain": domain, "whois": True, "timeout": 1800}
+            })
+        else:
+            tools.append({
                 "name": "amass_enum",
-                "arguments": {"domain": domain, "passive": True, "timeout": 1800}
-            },
-            {
-                "name": "bbot_subdomain_enum",
+                "arguments": {
+                    "domain": domain,
+                    "passive": amass_passive,
+                    "brute": amass_brute,
+                    "timeout": 1800
+                }
+            })
+        
+        # Add BBOT tool
+        if use_bbot_web:
+            tools.append({
+                "name": "bbot_web_scan",
                 "arguments": {"target": domain, "timeout": 1800}
-            }
-        ]
+            })
+        elif use_bbot_quick:
+            tools.append({
+                "name": "bbot_quick_scan",
+                "arguments": {"target": domain, "timeout": 1800}
+            })
+        else:
+            tools.append({
+                "name": "bbot_subdomain_enum",
+                "arguments": {"target": domain, "passive": bbot_passive, "timeout": 1800}
+            })
+        
+        return tools
 
-    def _get_port_scan_tools(self, target: str, with_osint: bool = False) -> List[Dict]:
-        """Get nmap tools for port scanning, optionally with OSINT enrichment"""
+    def _get_port_scan_tools(self, target: str, user_prompt: str = "", with_osint: bool = False) -> List[Dict]:
+        """Get nmap tools for port scanning with keyword detection, optionally with OSINT enrichment"""
+        prompt_lower = user_prompt.lower()
+        
+        # Detect nmap scan type based on keywords
+        nmap_tool = "nmap_quick_scan"  # Default
+        
+        if "comprehensive" in prompt_lower or "complete" in prompt_lower:
+            nmap_tool = "nmap_comprehensive_scan"
+        elif "aggressive" in prompt_lower:
+            nmap_tool = "nmap_aggressive_scan"
+        elif "stealth" in prompt_lower or "stealthy" in prompt_lower or "syn" in prompt_lower:
+            nmap_tool = "nmap_stealth_scan"
+        elif "service" in prompt_lower or "version" in prompt_lower:
+            nmap_tool = "nmap_service_detection"
+        elif "full" in prompt_lower or "all ports" in prompt_lower or "all port" in prompt_lower:
+            nmap_tool = "nmap_all_ports"
+        elif "fast" in prompt_lower and "scan" in prompt_lower:
+            nmap_tool = "nmap_fast_scan"
+        elif "quick" in prompt_lower or "rapid" in prompt_lower:
+            nmap_tool = "nmap_quick_scan"
+        # Default already set to nmap_quick_scan
+        
         tools = [
             {
-                "name": "nmap_quick_scan",
+                "name": nmap_tool,
                 "arguments": {"target": target}
             }
         ]
+        
         # Add Shodan lookup for OSINT enrichment (only for IP addresses)
         if with_osint and self._is_ip_address(target):
             tools.append({
@@ -418,11 +495,17 @@ Select the most appropriate tool for the user's request."""
             domain = self._extract_domain_from_prompt(user_prompt)
             if domain:
                 self.is_subdomain_scan = True
-                selected_tools = self._get_subdomain_tools(domain)
-                reasoning = f"Subdomain enumeration detected. Using both Amass and BBOT for comprehensive coverage on {domain}."
+                selected_tools = self._get_subdomain_tools(domain, user_prompt)
+                reasoning = f"Subdomain enumeration detected. Using Amass and BBOT for comprehensive coverage on {domain}."
                 print(f"  🔍 Subdomain scan detected for: {domain}")
-                print(f"  ✓ Selected: amass_enum (passive mode)")
-                print(f"  ✓ Selected: bbot_subdomain_enum")
+                for tool in selected_tools:
+                    tool_name = tool['name']
+                    mode_info = ""
+                    if 'passive' in tool.get('arguments', {}):
+                        mode_info = f" ({'passive' if tool['arguments']['passive'] else 'active'} mode)"
+                    elif 'brute' in tool.get('arguments', {}) and tool['arguments']['brute']:
+                        mode_info = " (brute force mode)"
+                    print(f"  ✓ Selected: {tool_name}{mode_info}")
                 return selected_tools, reasoning
 
         # 2. Check for vulnerability scan request (with optional OSINT enrichment)
@@ -444,10 +527,12 @@ Select the most appropriate tool for the user's request."""
             target = self._extract_target_from_prompt(user_prompt)
             if target:
                 with_osint = self._detect_osint_enrichment(user_prompt)
-                selected_tools = self._get_port_scan_tools(target, with_osint=with_osint)
+                selected_tools = self._get_port_scan_tools(target, user_prompt, with_osint=with_osint)
                 reasoning = f"Port scan detected for {target}."
                 print(f"  🔍 Port scan detected for: {target}")
-                print(f"  ✓ Selected: nmap_quick_scan")
+                for tool in selected_tools:
+                    if 'nmap' in tool['name']:
+                        print(f"  ✓ Selected: {tool['name']}")
                 if with_osint and self._is_ip_address(target):
                     print(f"  ✓ Selected: shodan_lookup (OSINT enrichment)")
                     reasoning += " With Shodan OSINT enrichment."
@@ -609,6 +694,38 @@ Select the most appropriate tool for the user's request."""
 
         return results
 
+
+    def _detect_scan_type(self, scan_results: List[Dict]) -> str:
+        """Detect scan type based on tools used in scan results"""
+        tools_used = [r["tool"] for r in scan_results]
+        
+        # Check for subdomain tools
+        subdomain_tools = ["amass_enum", "amass_intel", "bbot_subdomain_enum", "bbot_web_scan"]
+        if any(tool in tools_used for tool in subdomain_tools):
+            return "subdomain"
+        
+        # Check for vulnerability scan
+        if "nmap_vuln_scan" in tools_used:
+            return "vuln_scan"
+        
+        # Check for Shodan/OSINT
+        shodan_tools = ["shodan_lookup", "shodan_host", "shodan_search"]
+        if any(tool in tools_used for tool in shodan_tools):
+            # If ONLY shodan, it's osint, otherwise it's enrichment
+            nmap_tools = [t for t in tools_used if "nmap" in t]
+            if not nmap_tools:
+                return "osint"
+        
+        # Check for port scan tools
+        port_scan_tools = ["nmap_quick_scan", "nmap_fast_scan", "nmap_port_scan", 
+                          "nmap_all_ports", "nmap_service_detection", "nmap_aggressive_scan",
+                          "nmap_stealth_scan", "nmap_comprehensive_scan"]
+        if any(tool in tools_used for tool in port_scan_tools):
+            return "port_scan"
+        
+        # Default to generic
+        return "generic"
+
     def phase_3_analysis(self, scan_results: List[Dict]) -> str:
         """
         Phase 3: Intelligence Analysis
@@ -697,9 +814,14 @@ Select the most appropriate tool for the user's request."""
             except:
                 db_context = {"note": "Database query unavailable"}
 
+        # Detect scan type for appropriate report format
+        scan_type = self._detect_scan_type(scan_results)
+        print(f"  📋 Report format: {scan_type}")
+
         system_prompt = get_phase3_prompt(
             json.dumps(results_summary, indent=2),
-            json.dumps(db_context, indent=2)
+            json.dumps(db_context, indent=2),
+            scan_type=scan_type
         )
 
         messages = [
@@ -787,6 +909,57 @@ Select the most appropriate tool for the user's request."""
 
         # Prepare summary for LLM (limit data to avoid 500 errors)
         all_sorted = sorted(list(combined_data["all_subdomains"]))
+        
+        # Pre-categorize subdomains for better LLM output
+        categories = {
+            "www": [],
+            "api": [],
+            "mail": [],
+            "dev": [],
+            "staging": [],
+            "admin": [],
+            "vpn": [],
+            "internal": [],
+            "test": [],
+            "other": []
+        }
+        
+        for subdomain in all_sorted:
+            sub_lower = subdomain.lower()
+            categorized = False
+            
+            # Categorize based on keywords
+            if "www" in sub_lower or "web" in sub_lower or "portal" in sub_lower:
+                categories["www"].append(subdomain)
+                categorized = True
+            elif "api" in sub_lower or "rest" in sub_lower or "graphql" in sub_lower:
+                categories["api"].append(subdomain)
+                categorized = True
+            elif "mail" in sub_lower or "smtp" in sub_lower or "mx" in sub_lower or "imap" in sub_lower:
+                categories["mail"].append(subdomain)
+                categorized = True
+            elif "dev" in sub_lower and "staging" not in sub_lower:
+                categories["dev"].append(subdomain)
+                categorized = True
+            elif "staging" in sub_lower or "stage" in sub_lower or "uat" in sub_lower:
+                categories["staging"].append(subdomain)
+                categorized = True
+            elif "admin" in sub_lower or "administrator" in sub_lower:
+                categories["admin"].append(subdomain)
+                categorized = True
+            elif "vpn" in sub_lower:
+                categories["vpn"].append(subdomain)
+                categorized = True
+            elif "internal" in sub_lower or "intranet" in sub_lower:
+                categories["internal"].append(subdomain)
+                categorized = True
+            elif "test" in sub_lower:
+                categories["test"].append(subdomain)
+                categorized = True
+            
+            if not categorized:
+                categories["other"].append(subdomain)
+        
         combined_summary = {
             "total_unique": len(combined_data["all_subdomains"]),
             "amass_count": len(amass_set),
@@ -794,13 +967,39 @@ Select the most appropriate tool for the user's request."""
             "overlap_count": len(overlap),
             "unique_to_amass": len(amass_set - bbot_set),
             "unique_to_bbot": len(bbot_set - amass_set),
-            "sample_subdomains": all_sorted[:50],  # Reduced limit for LLM
-            "high_value_keywords": ["api", "admin", "dev", "staging", "test", "internal", "vpn", "mail"]
+            "sample_subdomains": all_sorted[:50],  # Keep sample for reference
+            "high_value_keywords": ["api", "admin", "dev", "staging", "test", "internal", "vpn", "mail"],
+            # Add categorized lists (limit each category to prevent overwhelming LLM)
+            "categorized": {
+                "www": categories["www"][:20],
+                "api": categories["api"][:20],
+                "mail": categories["mail"][:20],
+                "dev": categories["dev"][:20],
+                "staging": categories["staging"][:20],
+                "admin": categories["admin"][:20],
+                "vpn": categories["vpn"][:20],
+                "internal": categories["internal"][:20],
+                "test": categories["test"][:20],
+                "other": categories["other"][:30]
+            },
+            "category_counts": {
+                "www": len(categories["www"]),
+                "api": len(categories["api"]),
+                "mail": len(categories["mail"]),
+                "dev": len(categories["dev"]),
+                "staging": len(categories["staging"]),
+                "admin": len(categories["admin"]),
+                "vpn": len(categories["vpn"]),
+                "internal": len(categories["internal"]),
+                "test": len(categories["test"]),
+                "other": len(categories["other"])
+            }
         }
 
         # Find high-value targets
         high_value = [s for s in all_sorted if any(kw in s.lower() for kw in combined_summary["high_value_keywords"])]
         combined_summary["high_value_targets"] = high_value[:20]
+
 
         print(f"\n  📊 Total unique subdomains: {combined_summary['total_unique']}")
         print(f"  📊 Overlap (found by both): {combined_summary['overlap_count']}")
