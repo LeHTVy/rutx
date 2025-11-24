@@ -74,9 +74,8 @@ def bbot_scan(target, preset=None, modules=None, flags=None, output_dir=None, ti
         else:
             cmd.extend(["-f", "safe"])
 
-        cmd.extend(["-o", output_dir])
-        cmd.append("-y")
-        cmd.append("--json")
+        # BBOT exports JSON and other outputs by default
+        cmd.extend(["-o", output_dir, "-y"])
 
         print(f"  Running: {' '.join(cmd)}")
 
@@ -87,11 +86,20 @@ def bbot_scan(target, preset=None, modules=None, flags=None, output_dir=None, ti
         subdomains = []
         event_types = {}
 
+        # Normalize target for filtering (e.g., "snode.com" -> ".snode.com")
+        target_lower = target.lower().strip()
+        target_suffix = f".{target_lower}" if not target_lower.startswith('.') else target_lower
+
         # BBOT creates output in nested directories with JSON/NDJSON files
         files_to_check = list(Path(output_dir).rglob("*.json"))
         files_to_check.extend(list(Path(output_dir).rglob("*.ndjson")))
 
+        # Track first JSON file for database integration
+        json_output_file = None
+
         for json_file in files_to_check:
+            if json_output_file is None:
+                json_output_file = str(json_file)
             try:
                 with open(json_file, 'r') as f:
                     for line in f:
@@ -105,8 +113,11 @@ def bbot_scan(target, preset=None, modules=None, flags=None, output_dir=None, ti
                                     data = entry.get('data', '')
                                     if isinstance(data, dict):
                                         data = data.get('host', '') or data.get('dns_name', '')
-                                    if data and '.' in str(data):
-                                        subdomains.append(str(data))
+                                    if data:
+                                        data_str = str(data).lower().strip()
+                                        # Only include if it's the target or a subdomain of target
+                                        if data_str == target_lower or data_str.endswith(target_suffix):
+                                            subdomains.append(str(data))
                             except json.JSONDecodeError:
                                 continue
             except Exception:
@@ -118,8 +129,11 @@ def bbot_scan(target, preset=None, modules=None, flags=None, output_dir=None, ti
                 with open(txt_file, 'r') as f:
                     for line in f:
                         line = line.strip()
-                        if line and '.' in line:
-                            subdomains.append(line)
+                        if line:
+                            line_lower = line.lower()
+                            # Only include if it's the target or a subdomain of target
+                            if line_lower == target_lower or line_lower.endswith(target_suffix):
+                                subdomains.append(line)
             except Exception:
                 continue
 
@@ -132,6 +146,7 @@ def bbot_scan(target, preset=None, modules=None, flags=None, output_dir=None, ti
             "target": target,
             "preset": preset,
             "output_directory": output_dir,
+            "json_output_file": json_output_file,  # For database integration
             "elapsed_seconds": round(elapsed, 2),
             "findings_count": len(findings),
             "subdomains_found": len(unique_subdomains),
@@ -158,12 +173,11 @@ def bbot_subdomain_enum(target, passive=False, timeout=600):
         output_dir = f"/tmp/bbot_subdomain_{safe_target}_{timestamp}"
         os.makedirs(output_dir, exist_ok=True)
 
+        # BBOT exports JSON and subdomains.txt by default
         cmd = ["bbot", "-t", target, "-p", "subdomain-enum"]
         if passive:
             cmd.extend(["-rf", "passive"])
-        cmd.extend(["-o", output_dir])
-        cmd.append("-y")
-        cmd.append("--json")
+        cmd.extend(["-o", output_dir, "-y"])
 
         print(f"  Running: {' '.join(cmd)}")
 
@@ -173,12 +187,21 @@ def bbot_subdomain_enum(target, passive=False, timeout=600):
         subdomains = []
         findings = []
 
+        # Normalize target for filtering (e.g., "snode.com" -> ".snode.com")
+        target_lower = target.lower().strip()
+        target_suffix = f".{target_lower}" if not target_lower.startswith('.') else target_lower
+
         # BBOT creates output in: output_dir/scan_name/output.json
         # Also check for output.ndjson and subdomains.txt
         files_to_check = list(Path(output_dir).rglob("*.json"))
         files_to_check.extend(list(Path(output_dir).rglob("*.ndjson")))
 
+        # Track first JSON file for database integration
+        json_output_file = None
+
         for json_file in files_to_check:
+            if json_output_file is None:
+                json_output_file = str(json_file)
             try:
                 with open(json_file, 'r') as f:
                     for line in f:
@@ -187,32 +210,37 @@ def bbot_subdomain_enum(target, passive=False, timeout=600):
                                 entry = json.loads(line.strip())
                                 findings.append(entry)
                                 event_type = entry.get('type', '')
-                                # Capture DNS_NAME and also HOST events
-                                if event_type in ('DNS_NAME', 'HOST', 'OPEN_TCP_PORT'):
+                                # Capture DNS_NAME and HOST events that are in-scope
+                                if event_type in ('DNS_NAME', 'HOST'):
                                     data = entry.get('data', '')
-                                    if data and event_type in ('DNS_NAME', 'HOST'):
-                                        # Extract domain from data (may be dict or string)
-                                        if isinstance(data, dict):
-                                            data = data.get('host', '') or data.get('dns_name', '')
-                                        if data and '.' in str(data):
+                                    # Extract domain from data (may be dict or string)
+                                    if isinstance(data, dict):
+                                        data = data.get('host', '') or data.get('dns_name', '')
+                                    if data:
+                                        data_str = str(data).lower().strip()
+                                        # Only include if it's the target or a subdomain of target
+                                        if data_str == target_lower or data_str.endswith(target_suffix):
                                             subdomains.append(str(data))
                             except json.JSONDecodeError:
                                 continue
             except Exception:
                 continue
 
-        # Also check for subdomains.txt (BBOT may output this)
+        # Also check for subdomains.txt (BBOT may output this - already filtered by BBOT)
         for txt_file in Path(output_dir).rglob("subdomains.txt"):
             try:
                 with open(txt_file, 'r') as f:
                     for line in f:
                         line = line.strip()
-                        if line and '.' in line:
-                            subdomains.append(line)
+                        if line:
+                            line_lower = line.lower()
+                            # Only include if it's the target or a subdomain of target
+                            if line_lower == target_lower or line_lower.endswith(target_suffix):
+                                subdomains.append(line)
             except Exception:
                 continue
 
-        subdomains = list(set(subdomains))
+        subdomains = sorted(set(subdomains))
 
         return {
             "success": True,
@@ -223,6 +251,7 @@ def bbot_subdomain_enum(target, passive=False, timeout=600):
             "subdomains": subdomains,
             "findings_count": len(findings),
             "output_directory": output_dir,
+            "json_output_file": json_output_file,  # For database integration
             "elapsed_seconds": round(elapsed, 2),
             "command": ' '.join(cmd),
             "summary": f"BBOT subdomain-enum: {len(subdomains)} subdomains for {target}",
@@ -245,10 +274,8 @@ def bbot_web_scan(target, timeout=600):
         output_dir = f"/tmp/bbot_web_{safe_target}_{timestamp}"
         os.makedirs(output_dir, exist_ok=True)
 
-        cmd = ["bbot", "-t", target, "-p", "web-basic"]
-        cmd.extend(["-o", output_dir])
-        cmd.append("-y")
-        cmd.append("--json")
+        # BBOT exports JSON and other outputs by default
+        cmd = ["bbot", "-t", target, "-p", "web-basic", "-o", output_dir, "-y"]
 
         print(f"  Running: {' '.join(cmd)}")
 
@@ -258,8 +285,11 @@ def bbot_web_scan(target, timeout=600):
         findings = []
         technologies = []
         urls = []
+        json_output_file = None
 
         for json_file in Path(output_dir).rglob("*.json"):
+            if json_output_file is None:
+                json_output_file = str(json_file)
             try:
                 with open(json_file, 'r') as f:
                     for line in f:
@@ -285,6 +315,7 @@ def bbot_web_scan(target, timeout=600):
             "technologies": technologies[:20],
             "urls_found": len(urls),
             "output_directory": output_dir,
+            "json_output_file": json_output_file,  # For database integration
             "elapsed_seconds": round(elapsed, 2),
             "command": ' '.join(cmd),
             "summary": f"BBOT web-basic: {len(findings)} events, {len(technologies)} technologies",
@@ -307,10 +338,8 @@ def bbot_quick_scan(target, timeout=300):
         output_dir = f"/tmp/bbot_quick_{safe_target}_{timestamp}"
         os.makedirs(output_dir, exist_ok=True)
 
-        cmd = ["bbot", "-t", target, "-f", "safe", "--fast-mode"]
-        cmd.extend(["-o", output_dir])
-        cmd.append("-y")
-        cmd.append("--json")
+        # BBOT exports JSON and other outputs by default
+        cmd = ["bbot", "-t", target, "-f", "safe", "--fast-mode", "-o", output_dir, "-y"]
 
         print(f"  Running: {' '.join(cmd)}")
 
@@ -319,8 +348,11 @@ def bbot_quick_scan(target, timeout=300):
 
         findings = []
         event_types = {}
+        json_output_file = None
 
         for json_file in Path(output_dir).rglob("*.json"):
+            if json_output_file is None:
+                json_output_file = str(json_file)
             try:
                 with open(json_file, 'r') as f:
                     for line in f:
@@ -343,6 +375,7 @@ def bbot_quick_scan(target, timeout=300):
             "findings_count": len(findings),
             "event_types": event_types,
             "output_directory": output_dir,
+            "json_output_file": json_output_file,  # For database integration
             "elapsed_seconds": round(elapsed, 2),
             "command": ' '.join(cmd),
             "summary": f"BBOT quick scan: {len(findings)} events",

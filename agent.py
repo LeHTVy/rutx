@@ -1,10 +1,11 @@
 """
 SNODE AI - Security Node Agent
-3-Phase Iteration System for Penetration Testing
+4-Phase Iteration System for Penetration Testing
 
-Phase 1: Tool Selection (BlackBox) - LLM chooses appropriate tools
-Phase 2: Execution & Storage - Run tools and save results to database
-Phase 3: Analysis & Report - Analyze vulnerabilities and generate report
+Phase 1: Tool Selection (LLM) - Intelligent tool selection based on user request
+Phase 2: Execution & Persistence - Atomic: Tools -> Parse -> Save -> Enrich
+Phase 3: Intelligence Analysis - LLM with enriched DB context
+Phase 4: Report Generation - LLM formats for target audience
 """
 
 import json
@@ -24,21 +25,32 @@ from config import (
     ENABLE_DATABASE
 )
 from tools import ALL_TOOLS, execute_tool, get_all_tool_names
-from database import save_scan_result, get_llm_context, query_database
+from database import (
+    save_scan_result, get_llm_context, query_database,
+    # Enhanced persistence imports
+    ScanSessionManager, ToolResultPersister, LLMContextBuilder,
+    persist_tool_results, build_and_cache_context, get_cached_context
+)
 from prompts import get_phase1_prompt, get_phase3_prompt, get_phase4_prompt
 
 
 class IterationPhase:
     """Enumeration for iteration phases"""
-    TOOL_SELECTION = 1
-    EXECUTION = 2
-    ANALYSIS = 3
-    COMBINE_ANALYSIS = 4  # For subdomain scans with multiple tools
+    TOOL_SELECTION = 1      # Phase 1: LLM selects tools
+    EXECUTION = 2           # Phase 2: Execute & Persist (Atomic)
+    ANALYSIS = 3            # Phase 3: LLM Intelligence Analysis
+    REPORT_GENERATION = 4   # Phase 4: LLM Report Generation
 
 
 class SNODEAgent:
     """
-    SNODE AI Agent - 3-Phase Security Scanning System
+    SNODE AI Agent - 4-Phase Security Scanning System
+
+    Flow:
+        Phase 1: Tool Selection (LLM) -> selected_tools
+        Phase 2: Execution & Persistence (Atomic: Tools -> Parse -> Save -> Enrich)
+        Phase 3: Intelligence Analysis (LLM with enriched DB context)
+        Phase 4: Report Generation (LLM formats for audience)
     """
 
     def __init__(self, model: str = None):
@@ -48,6 +60,18 @@ class SNODEAgent:
         self.scan_results = []
         self.current_phase = IterationPhase.TOOL_SELECTION
         self.is_subdomain_scan = False  # Track if this is a subdomain enumeration scan
+
+        # Enhanced persistence (4-phase flow)
+        self.db_session_id = None  # Database ScanSession ID
+        self.session_manager = None
+        self.persister = None
+        self.context_builder = None
+
+        if ENABLE_DATABASE:
+            try:
+                self.session_manager = ScanSessionManager()
+            except Exception as e:
+                print(f"  Warning: Could not initialize session manager: {e}")
 
     def _call_ollama(
         self,
@@ -161,6 +185,18 @@ Select the most appropriate tool for the user's request."""
             desc = tool['function'].get('description', '')[:80]
             lines.append(f"  - {name}: {desc}")
         return "\n".join(lines)
+
+    def _detect_session_type(self, user_prompt: str) -> str:
+        """Detect the type of scan session for categorization."""
+        if self._detect_subdomain_scan(user_prompt):
+            return "subdomain_enum"
+        elif self._detect_vuln_scan(user_prompt):
+            return "vuln_scan"
+        elif self._detect_port_scan(user_prompt):
+            return "port_scan"
+        elif self._detect_shodan_lookup(user_prompt):
+            return "osint"
+        return "general"
 
     def _detect_subdomain_scan(self, user_prompt: str) -> bool:
         """Detect if user is requesting subdomain enumeration"""
@@ -351,8 +387,8 @@ Select the most appropriate tool for the user's request."""
 
     def phase_1_tool_selection(self, user_prompt: str) -> Tuple[List[Dict], str]:
         """
-        Phase 1: BlackBox Tool Selection
-        Uses keyword detection first, then falls back to LLM
+        Phase 1: Tool Selection (LLM/Keyword)
+        Creates scan session, uses keyword detection first, then falls back to LLM
 
         Returns:
             Tuple of (selected_tools, reasoning)
@@ -360,6 +396,22 @@ Select the most appropriate tool for the user's request."""
         print("\n" + "="*60)
         print("📦 PHASE 1: TOOL SELECTION")
         print("="*60)
+
+        # Create scan session in database
+        target = self._extract_target_from_prompt(user_prompt)
+        if ENABLE_DATABASE and self.session_manager:
+            try:
+                session = self.session_manager.create_session(
+                    user_prompt=user_prompt,
+                    target=target or "unknown",
+                    session_type=self._detect_session_type(user_prompt)
+                )
+                self.db_session_id = session.id
+                self.persister = ToolResultPersister(session_id=session.id)
+                self.context_builder = LLMContextBuilder(session_id=session.id)
+                print(f"  📝 Created session: {session.id[:8]}...")
+            except Exception as e:
+                print(f"  ⚠️  Session creation failed: {e}")
 
         # 1. Check for subdomain enumeration request
         if self._detect_subdomain_scan(user_prompt):
@@ -445,15 +497,22 @@ Select the most appropriate tool for the user's request."""
 
     def phase_2_execution(self, selected_tools: List[Dict]) -> List[Dict]:
         """
-        Phase 2: Execute Tools & Store Results
-        Run each selected tool and save to database
+        Phase 2: Execute Tools & Atomic Persistence
+        Run each selected tool, parse output, save to tool-specific models, enrich
 
         Returns:
             List of execution results
         """
         print("\n" + "="*60)
-        print("⚙️  PHASE 2: EXECUTION & STORAGE")
+        print("⚙️  PHASE 2: EXECUTION & PERSISTENCE")
         print("="*60)
+
+        # Update session phase
+        if self.session_manager and self.db_session_id:
+            try:
+                self.session_manager.update_phase(self.db_session_id, 2, selected_tools)
+            except Exception:
+                pass
 
         results = []
 
@@ -479,8 +538,23 @@ Select the most appropriate tool for the user's request."""
                             # Parse nmap output for structured data
                             result = self._parse_nmap_output(result)
 
-                # Save to database if enabled
+                # Add tool name to result for persistence
+                if "tool" not in result:
+                    result["tool"] = tool_name
+
+                # ATOMIC PERSISTENCE: Save to tool-specific models
                 if ENABLE_DATABASE and result.get("success"):
+                    # Save to enhanced tool-specific tables
+                    if self.persister:
+                        try:
+                            model = self.persister.save_tool_result(tool_name, result)
+                            if model:
+                                result["db_model_id"] = model.id
+                                print(f"    💾 Persisted to {type(model).__name__}: {model.id[:8]}...")
+                        except Exception as e:
+                            print(f"    ⚠️  Enhanced persistence failed: {e}")
+
+                    # Also save to legacy tables (backward compatibility)
                     output_file = (
                         result.get("output_xml") or
                         result.get("output_json") or
@@ -489,16 +563,18 @@ Select the most appropriate tool for the user's request."""
 
                     if output_file:
                         target = tool_args.get("target") or tool_args.get("domain") or tool_args.get("ip", "unknown")
-                        db_result = save_scan_result(
-                            tool=tool_name.split("_")[0],  # Extract tool name
-                            target=target,
-                            output_file=output_file,
-                            scan_profile=tool_name,
-                            elapsed_seconds=result.get("elapsed_seconds", 0),
-                            session_id=self.session_id
-                        )
-                        result["database"] = db_result
-                        print(f"    💾 Saved to database: {db_result.get('scan_id', 'N/A')}")
+                        try:
+                            db_result = save_scan_result(
+                                tool=tool_name.split("_")[0],
+                                target=target,
+                                output_file=output_file,
+                                scan_profile=tool_name,
+                                elapsed_seconds=result.get("elapsed_seconds", 0),
+                                session_id=self.session_id
+                            )
+                            result["legacy_db"] = db_result
+                        except Exception:
+                            pass  # Legacy save is optional
 
                 results.append({
                     "tool": tool_name,
@@ -516,23 +592,41 @@ Select the most appropriate tool for the user's request."""
                 results.append({
                     "tool": tool_name,
                     "args": tool_args,
-                    "result": {"error": str(e)}
+                    "result": {"success": False, "error": str(e)}
                 })
 
         self.scan_results = results
+
+        # Build and cache context for Phase 3
+        if ENABLE_DATABASE and self.context_builder and self.db_session_id:
+            try:
+                print("\n  🔄 Building enriched context...")
+                self.enriched_context = build_and_cache_context(self.db_session_id)
+                print(f"    ✅ Context cached with risk score: {self.enriched_context.get('summary', {}).get('risk_score', 0)}")
+            except Exception as e:
+                print(f"    ⚠️  Context build failed: {e}")
+                self.enriched_context = None
+
         return results
 
     def phase_3_analysis(self, scan_results: List[Dict]) -> str:
         """
-        Phase 3: Analyze & Generate Report
-        LLM analyzes results and generates vulnerability report
+        Phase 3: Intelligence Analysis
+        LLM analyzes results with enriched DB context and generates vulnerability report
 
         Returns:
             Analysis report string
         """
         print("\n" + "="*60)
-        print("📊 PHASE 3: ANALYSIS & REPORT")
+        print("📊 PHASE 3: INTELLIGENCE ANALYSIS")
         print("="*60)
+
+        # Update session phase
+        if self.session_manager and self.db_session_id:
+            try:
+                self.session_manager.update_phase(self.db_session_id, 3)
+            except Exception:
+                pass
 
         # Prepare scan results for LLM
         results_summary = []
@@ -578,9 +672,26 @@ Select the most appropriate tool for the user's request."""
 
             results_summary.append(summary)
 
-        # Get database context if available
+        # Get enriched context from Phase 2 caching OR build fresh
+        enriched_context = getattr(self, 'enriched_context', None)
+        if not enriched_context and ENABLE_DATABASE and self.db_session_id:
+            try:
+                enriched_context = get_cached_context(self.db_session_id)
+            except Exception:
+                enriched_context = None
+
+        # Build combined context for LLM
         db_context = {}
-        if ENABLE_DATABASE:
+        if enriched_context:
+            db_context = {
+                "enriched_summary": enriched_context.get("summary", {}),
+                "threat_intel": enriched_context.get("threat_intel", {}),
+                "subdomain_data": enriched_context.get("subdomain_data", {}),
+                "risk_score": enriched_context.get("summary", {}).get("risk_score", 0),
+                "risk_level": enriched_context.get("summary", {}).get("risk_level", "UNKNOWN")
+            }
+            print(f"  📊 Using enriched context (Risk: {db_context.get('risk_level', 'N/A')})")
+        elif ENABLE_DATABASE:
             try:
                 db_context = query_database("stats")
             except:
@@ -596,7 +707,7 @@ Select the most appropriate tool for the user's request."""
             {"role": "user", "content": "Analyze the scan results and provide a comprehensive security report."}
         ]
 
-        print("\n🔍 Analyzing results...")
+        print("\n🔍 Analyzing results with enriched context...")
 
         # Use config timeout (TIMEOUT_OLLAMA) for LLM analysis
         response = self._call_ollama(messages, timeout=TIMEOUT_OLLAMA)
@@ -606,19 +717,43 @@ Select the most appropriate tool for the user's request."""
 
         analysis = response.get("message", {}).get("content", "No analysis generated")
 
+        # Handle invalid LLM responses
+        invalid_responses = ["", "None", "No analysis generated", "null", "N/A"]
+        if not analysis or analysis.strip() in invalid_responses:
+            analysis = self._generate_basic_analysis_report(scan_results)
+
+        # Store analysis results in session
+        if self.session_manager and self.db_session_id and enriched_context:
+            try:
+                self.session_manager.set_analysis_results(
+                    self.db_session_id,
+                    {"analysis": analysis[:5000]},  # Truncate for storage
+                    enriched_context.get("summary", {}).get("risk_score", 0),
+                    enriched_context.get("summary", {}).get("risk_level", "UNKNOWN")
+                )
+            except Exception:
+                pass
+
         return analysis
 
-    def phase_4_combine_analysis(self, scan_results: List[Dict]) -> str:
+    def phase_4_report_generation(self, scan_results: List[Dict]) -> str:
         """
-        Phase 4: Combine & Analyze Multi-Tool Results
-        Used for subdomain scans with Amass + BBOT
+        Phase 4: Report Generation
+        LLM formats analysis for target audience (combines multi-tool results)
 
         Returns:
             Combined analysis report string
         """
         print("\n" + "="*60)
-        print("🔄 PHASE 4: COMBINING RESULTS & ANALYSIS")
+        print("📝 PHASE 4: REPORT GENERATION")
         print("="*60)
+
+        # Update session phase
+        if self.session_manager and self.db_session_id:
+            try:
+                self.session_manager.update_phase(self.db_session_id, 4)
+            except Exception:
+                pass
 
         # Collect all subdomains from both tools
         combined_data = {
@@ -687,11 +822,18 @@ Select the most appropriate tool for the user's request."""
 
         if "error" in response:
             # Fallback: Generate a basic report without LLM
-            print("  ⚠️  LLM analysis failed, generating basic report...")
+            print(f"  ⚠️ LLM error, generating fallback report...")
             return self._generate_basic_subdomain_report(combined_summary, all_sorted, high_value)
 
-        analysis = response.get("message", {}).get("content", "No analysis generated")
+        analysis = response.get("message", {}).get("content", "")
 
+        # If LLM returned empty, None, or invalid response, use fallback
+        invalid_responses = ["", "None", "No analysis generated", "null", "N/A"]
+        if not analysis or analysis.strip() in invalid_responses:
+            print(f"  ⚠️ Invalid LLM response, generating fallback report...")
+            return self._generate_basic_subdomain_report(combined_summary, all_sorted, high_value)
+
+        print(f"  ✅ Analysis complete ({len(analysis)} chars)")
         return analysis
 
     def _generate_basic_subdomain_report(
@@ -759,6 +901,60 @@ Select the most appropriate tool for the user's request."""
 """
         return report
 
+    def _generate_basic_analysis_report(self, scan_results: List[Dict]) -> str:
+        """Generate a basic analysis report when LLM fails (for non-subdomain scans)"""
+        report_parts = ["## SCAN ANALYSIS SUMMARY\n"]
+
+        for r in scan_results:
+            tool_name = r["tool"]
+            result = r["result"]
+            success = result.get("success", False)
+
+            report_parts.append(f"\n### {tool_name}")
+            report_parts.append(f"- **Status:** {'✅ Success' if success else '❌ Failed'}")
+
+            if success:
+                # Summary
+                if result.get("summary"):
+                    report_parts.append(f"- **Summary:** {result['summary']}")
+
+                # Target info
+                target = result.get("target") or result.get("domain") or result.get("ip")
+                if target:
+                    report_parts.append(f"- **Target:** {target}")
+
+                # Open ports
+                if result.get("open_ports"):
+                    ports = result["open_ports"][:10]
+                    port_list = [f"{p['port']}/{p['protocol']} ({p.get('service', 'unknown')})" for p in ports]
+                    report_parts.append(f"- **Open Ports:** {', '.join(port_list)}")
+
+                # Hosts discovered
+                if result.get("hosts_discovered"):
+                    report_parts.append(f"- **Hosts Discovered:** {result['hosts_discovered']}")
+
+                # Subdomains found
+                if result.get("subdomains_found"):
+                    report_parts.append(f"- **Subdomains Found:** {result['subdomains_found']}")
+
+                # Vulnerabilities
+                if result.get("vulnerabilities"):
+                    vulns = result["vulnerabilities"][:5]
+                    report_parts.append(f"- **Vulnerabilities:** {len(vulns)} detected")
+                    for v in vulns:
+                        if isinstance(v, dict):
+                            report_parts.append(f"  - {v.get('name', v)}")
+                        else:
+                            report_parts.append(f"  - {v}")
+            else:
+                error = result.get("error", "Unknown error")
+                report_parts.append(f"- **Error:** {error}")
+
+        report_parts.append("\n---")
+        report_parts.append("*Note: This is a basic report. LLM analysis was unavailable.*")
+
+        return "\n".join(report_parts)
+
     def run(self, user_prompt: str) -> Dict[str, Any]:
         """
         Execute full scan cycle (3-phase or 4-phase for subdomain scans)
@@ -787,38 +983,55 @@ Select the most appropriate tool for the user's request."""
         self.current_phase = IterationPhase.EXECUTION
         execution_results = self.phase_2_execution(selected_tools)
 
-        # Phase 3 or Phase 4 based on scan type
+        # Phase 3: Intelligence Analysis
+        self.current_phase = IterationPhase.ANALYSIS
+        analysis_report = self.phase_3_analysis(execution_results)
+
+        # Phase 4: Report Generation (for subdomain scans with multiple tools)
         if self.is_subdomain_scan:
-            # Phase 4: Combined analysis for subdomain scans (Amass + BBOT)
-            self.current_phase = IterationPhase.COMBINE_ANALYSIS
-            analysis_report = self.phase_4_combine_analysis(execution_results)
-            phase_key = "phase_4_combined_analysis"
-        else:
-            # Phase 3: Standard analysis
-            self.current_phase = IterationPhase.ANALYSIS
-            analysis_report = self.phase_3_analysis(execution_results)
-            phase_key = "phase_3_analysis"
+            self.current_phase = IterationPhase.REPORT_GENERATION
+            analysis_report = self.phase_4_report_generation(execution_results)
 
         elapsed = (datetime.now() - start_time).total_seconds()
+
+        # Get enriched context summary if available
+        enriched_summary = {}
+        if hasattr(self, 'enriched_context') and self.enriched_context:
+            enriched_summary = self.enriched_context.get("summary", {})
+
+        # Build phases dict explicitly to avoid any variable key issues
+        phases = {
+            "phase_1_tools": selected_tools,
+            "phase_2_results": [
+                {
+                    "tool": r["tool"],
+                    "success": r["result"].get("success", False),
+                    "summary": r["result"].get("summary", ""),
+                    "db_model_id": r["result"].get("db_model_id")
+                }
+                for r in execution_results
+            ],
+            "phase_3_analysis": None,
+            "phase_4_report": None
+        }
+
+        # Set the appropriate phase result
+        if self.is_subdomain_scan:
+            phases["phase_4_report"] = analysis_report
+        else:
+            phases["phase_3_analysis"] = analysis_report
 
         result = {
             "success": True,
             "session_id": self.session_id,
+            "db_session_id": self.db_session_id,
             "user_prompt": user_prompt,
             "elapsed_seconds": round(elapsed, 2),
             "is_subdomain_scan": self.is_subdomain_scan,
-            "phases": {
-                "phase_1_tools": selected_tools,
-                "phase_2_results": [
-                    {
-                        "tool": r["tool"],
-                        "success": r["result"].get("success", False),
-                        "summary": r["result"].get("summary", "")
-                    }
-                    for r in execution_results
-                ],
-                phase_key: analysis_report
-            }
+            "risk_score": enriched_summary.get("risk_score", 0),
+            "risk_level": enriched_summary.get("risk_level", "N/A"),
+            "phases": phases,
+            "enriched_summary": enriched_summary
         }
 
         return result
@@ -827,7 +1040,26 @@ Select the most appropriate tool for the user's request."""
 def _get_analysis_from_result(result: Dict) -> str:
     """Extract analysis report from result (handles both phase 3 and 4)"""
     phases = result.get("phases", {})
-    return phases.get("phase_4_combined_analysis") or phases.get("phase_3_analysis", "No analysis available")
+
+    # Try phase 4 first, then phase 3
+    report = phases.get("phase_4_report") or phases.get("phase_3_analysis")
+
+    # Handle edge cases where report might be invalid
+    invalid_values = [None, "", "None", "null", "N/A", "No analysis generated"]
+    if report is None or (isinstance(report, str) and report.strip() in invalid_values):
+        # Try to build a minimal report from execution results
+        phase2_results = phases.get("phase_2_results", [])
+        if phase2_results:
+            lines = ["## Scan Execution Summary\n"]
+            for r in phase2_results:
+                tool = r.get("tool", "Unknown")
+                success = "✓" if r.get("success") else "✗"
+                summary = r.get("summary", "No summary")
+                lines.append(f"- **{tool}**: {success} {summary}")
+            return "\n".join(lines)
+        return "No analysis available. Please check scan execution results."
+
+    return str(report)
 
 
 def main():
@@ -836,7 +1068,9 @@ def main():
 
     print("\n" + "="*60)
     print("  SNODE AI - Security Node Agent")
-    print("  3/4-Phase Penetration Testing System")
+    print("  4-Phase Penetration Testing System")
+    print("  Phase 1: Tool Selection | Phase 2: Execution & Persistence")
+    print("  Phase 3: Intelligence Analysis | Phase 4: Report Generation")
     print("="*60)
 
     if len(sys.argv) > 1:
@@ -864,10 +1098,14 @@ def main():
                 print("\n" + "="*60)
                 print("📋 FINAL REPORT")
                 print("="*60)
-                print(_get_analysis_from_result(result))
+                final_report = _get_analysis_from_result(result)
+                print(final_report)
                 print("\n" + "="*60)
-                scan_type = "Subdomain Scan (4-Phase)" if result.get("is_subdomain_scan") else "Standard Scan (3-Phase)"
-                print(f"Session: {result['session_id']} | Type: {scan_type} | Time: {result['elapsed_seconds']}s")
+                scan_type = "Subdomain Scan (4-Phase)" if result.get("is_subdomain_scan") else "Standard Scan"
+                risk_info = f"Risk: {result.get('risk_level', 'N/A')} ({result.get('risk_score', 0)}/100)"
+                print(f"Session: {result['session_id']} | Type: {scan_type} | {risk_info} | Time: {result['elapsed_seconds']}s")
+                if result.get('db_session_id'):
+                    print(f"DB Session: {result['db_session_id'][:8]}...")
                 print("="*60 + "\n")
 
             except KeyboardInterrupt:

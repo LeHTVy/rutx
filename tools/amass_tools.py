@@ -84,8 +84,9 @@ def _run_subprocess_with_output(cmd, timeout):
 def amass_enum(domain, passive=False, brute=False, timeout=600):
     """
     Perform subdomain enumeration using Amass enum subcommand.
+    Uses stdout parsing for reliable subdomain extraction.
 
-    Correct commands:
+    Commands:
       amass enum -d example.com
       amass enum -passive -d example.com
       amass enum -brute -d example.com
@@ -100,7 +101,15 @@ def amass_enum(domain, passive=False, brute=False, timeout=600):
         dict: Structured result with subdomains found
     """
     try:
-        # Build command
+        # Generate output file path for saving results
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_domain = domain.replace('.', '_').replace('/', '_')
+        output_dir = "/tmp/amass_scans"
+        os.makedirs(output_dir, exist_ok=True)
+        output_file = os.path.join(output_dir, f"amass_{safe_domain}_{timestamp}.txt")
+
+        # Build command - note: -json flag has issues in some amass versions
+        # So we parse stdout instead which is more reliable
         cmd = ["amass", "enum", "-d", domain]
 
         if passive:
@@ -108,32 +117,42 @@ def amass_enum(domain, passive=False, brute=False, timeout=600):
         elif brute:
             cmd.append("-brute")
 
-        # Add verbose for more output
-        cmd.append("-v")
-
         print(f"  Running: {' '.join(cmd)}")
 
         # Use non-blocking subprocess execution
         stdout, elapsed = _run_subprocess_with_output(cmd, timeout)
 
-        # Parse output - Amass outputs one subdomain per line
+        # Parse stdout - Amass outputs one subdomain per line
         subdomains = []
         if stdout:
             for line in stdout.strip().split('\n'):
                 line = line.strip()
-                if line and domain in line:
-                    # Extract the subdomain (may have additional info)
-                    parts = line.split()
-                    for part in parts:
-                        if domain in part and '.' in part:
-                            subdomains.append(part)
-                            break
+                # Skip empty lines and error messages
+                if not line or line.startswith('Error') or line.startswith('Failed'):
+                    continue
+                # Check if line contains the domain (is a valid subdomain)
+                if domain in line and '.' in line:
+                    # Handle case where line might have extra info
+                    # Usually it's just the subdomain
+                    if ' ' not in line:
+                        subdomains.append(line)
                     else:
-                        # Just use the line if it looks like a domain
-                        if '.' in line and ' ' not in line:
-                            subdomains.append(line)
+                        # Extract subdomain from line with spaces
+                        parts = line.split()
+                        for part in parts:
+                            if domain in part and '.' in part:
+                                subdomains.append(part)
+                                break
 
-        subdomains = list(set(subdomains))  # Remove duplicates
+        subdomains = sorted(set(subdomains))  # Remove duplicates and sort
+
+        # Save subdomains to file for database integration
+        if subdomains:
+            try:
+                with open(output_file, 'w') as f:
+                    f.write('\n'.join(subdomains))
+            except Exception:
+                pass
 
         return {
             "success": True,
@@ -142,6 +161,7 @@ def amass_enum(domain, passive=False, brute=False, timeout=600):
             "mode": "passive" if passive else ("brute" if brute else "active"),
             "subdomains_found": len(subdomains),
             "subdomains": subdomains,
+            "json_output_file": output_file if os.path.exists(output_file) else None,
             "elapsed_seconds": round(elapsed, 2),
             "command": ' '.join(cmd),
             "summary": f"Amass enum found {len(subdomains)} subdomains for {domain}",

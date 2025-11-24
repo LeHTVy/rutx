@@ -8,6 +8,8 @@ import subprocess
 import shlex
 import socket
 import re
+import os
+from datetime import datetime
 
 
 def get_local_network_info():
@@ -90,18 +92,30 @@ def get_local_network_info():
         return {"error": f"{type(ex).__name__}: {ex}"}
 
 
-def nmap_scan(target, options=""):
+def nmap_scan(target, options="", return_dict=True):
     """
     Run an Nmap scan on the specified target with optional parameters.
+    Now includes XML output for database integration.
 
     Args:
         target: The target to scan (IP address, hostname, or IP range)
         options: Additional Nmap command line options (e.g., "-sS -p 80,443")
+        return_dict: If True, return structured dict; if False, return raw stdout
 
     Returns:
-        str: The output of the Nmap scan
+        dict: Structured scan result with output_xml path for database parsing
     """
-    cmd_parts = ["nmap"]
+    import time
+
+    # Generate output file paths
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_target = re.sub(r'[^\w\-.]', '_', target)
+    output_dir = "/tmp/nmap_scans"
+    os.makedirs(output_dir, exist_ok=True)
+
+    xml_output = os.path.join(output_dir, f"nmap_{safe_target}_{timestamp}.xml")
+
+    cmd_parts = ["nmap", "-oX", xml_output]
 
     if options:
         cmd_parts.extend(shlex.split(options))
@@ -109,6 +123,7 @@ def nmap_scan(target, options=""):
     cmd_parts.append(target)
 
     try:
+        start_time = time.time()
         result = subprocess.run(
             cmd_parts,
             capture_output=True,
@@ -116,18 +131,104 @@ def nmap_scan(target, options=""):
             timeout=600,  # Increased timeout for comprehensive scans
             check=False
         )
+        elapsed = time.time() - start_time
 
         if result.returncode != 0:
-            return f"Error: Nmap returned non-zero exit code {result.returncode}\nStderr: {result.stderr}\nStdout: {result.stdout}"
+            return {
+                "success": False,
+                "error": f"Nmap returned exit code {result.returncode}",
+                "stderr": result.stderr,
+                "stdout": result.stdout,
+                "target": target
+            }
 
-        return result.stdout
+        # Parse stdout for quick summary
+        stdout = result.stdout
+        open_ports = []
+        hosts = []
+        host_up = False
+
+        for line in stdout.splitlines():
+            # Extract host info from "Nmap scan report for ..."
+            host_match = re.search(r'Nmap scan report for ([\w\.\-]+)(?: \((\d+\.\d+\.\d+\.\d+)\))?', line)
+            if host_match:
+                hostname = host_match.group(1)
+                ip = host_match.group(2) or hostname
+                hosts.append({"hostname": hostname, "ip": ip})
+
+            # Check if host is up
+            if 'Host is up' in line:
+                host_up = True
+
+            # Extract port info - handles variable whitespace
+            # Format: "22/tcp   open  ssh" or "443/tcp open  https"
+            port_match = re.match(r'^(\d+)/(tcp|udp)\s+(\w+)\s*(.*)?$', line)
+            if port_match:
+                open_ports.append({
+                    "port": int(port_match.group(1)),
+                    "protocol": port_match.group(2),
+                    "state": port_match.group(3),
+                    "service": (port_match.group(4) or "").strip()
+                })
+
+        # Count open, filtered, and closed ports
+        open_count = len([p for p in open_ports if p["state"] == "open"])
+        filtered_count = len([p for p in open_ports if p["state"] == "filtered"])
+        closed_count = len([p for p in open_ports if p["state"] == "closed"])
+
+        # If no hosts found but host was up, add the target as a host
+        if not hosts and host_up:
+            hosts.append({"hostname": target, "ip": target})
+
+        # Build informative summary
+        summary_parts = [f"{len(hosts)} host(s)"]
+        if open_count > 0:
+            summary_parts.append(f"{open_count} open")
+        if filtered_count > 0:
+            summary_parts.append(f"{filtered_count} filtered")
+        if closed_count > 0:
+            summary_parts.append(f"{closed_count} closed")
+
+        if not open_ports and host_up:
+            summary_parts.append("(host up, all scanned ports filtered/closed)")
+
+        return {
+            "success": True,
+            "tool": "nmap_scan",
+            "target": target,
+            "output_xml": xml_output,  # CRITICAL: For database parsing
+            "output": stdout,
+            "elapsed_seconds": round(elapsed, 2),
+            "hosts_discovered": len(hosts),
+            "hosts": hosts,
+            "host_up": host_up,
+            "open_ports_count": open_count,
+            "filtered_ports_count": filtered_count,
+            "closed_ports_count": closed_count,
+            "open_ports": open_ports,
+            "command": ' '.join(cmd_parts),
+            "summary": f"Nmap scan: {', '.join(summary_parts)}",
+            "timestamp": datetime.now().isoformat()
+        }
 
     except subprocess.TimeoutExpired:
-        return "Error: Nmap scan timed out after 10 minutes"
+        return {
+            "success": False,
+            "error": "Nmap scan timed out after 10 minutes",
+            "target": target
+        }
     except FileNotFoundError:
-        return "Error: nmap command not found. Please install nmap first."
+        return {
+            "success": False,
+            "error": "nmap command not found. Please install nmap first.",
+            "target": target
+        }
     except Exception as ex:
-        return f"Error: {type(ex).__name__}: {ex}"
+        return {
+            "success": False,
+            "error": f"{type(ex).__name__}: {ex}",
+            "target": target
+        }
 
 
 # ============================================================================
@@ -165,29 +266,31 @@ def nmap_list_scan(target):
 def nmap_quick_scan(target):
     """
     Perform a quick TCP scan on the most common 100 ports.
-    Equivalent to: nmap -T4 -F target
+    Uses -Pn to skip host discovery (treats host as online even if it blocks ping).
+    Equivalent to: nmap -Pn -T4 -F target
 
     Args:
         target: The target to scan
 
     Returns:
-        str: The output of the quick scan
+        dict: Structured scan result with open ports and services
     """
-    return nmap_scan(target, "-T4 -F")
+    return nmap_scan(target, "-Pn -T4 -F")
 
 
 def nmap_fast_scan(target):
     """
     Fast scan - scan fewer ports than default.
-    Equivalent to: nmap -F target
+    Uses -Pn to skip host discovery (treats host as online even if it blocks ping).
+    Equivalent to: nmap -Pn -F target
 
     Args:
         target: The target to scan
 
     Returns:
-        str: The output of the fast scan
+        dict: Structured scan result with open ports and services
     """
-    return nmap_scan(target, "-F")
+    return nmap_scan(target, "-Pn -F")
 
 
 # ============================================================================
@@ -244,16 +347,17 @@ def nmap_top_ports(target, num_ports):
 def nmap_service_detection(target, ports=""):
     """
     Perform service version detection on the target.
-    Equivalent to: nmap -sV target
+    Uses -Pn to skip host discovery (treats host as online).
+    Equivalent to: nmap -Pn -sV target
 
     Args:
         target: The target to scan
         ports: Optional port specification (if not provided, scans default ports)
 
     Returns:
-        str: The output with service detection results
+        dict: Structured scan result with services detected
     """
-    options = "-sV"
+    options = "-Pn -sV"
     if ports:
         options += f" -p {ports}"
     return nmap_scan(target, options)
@@ -299,16 +403,17 @@ def nmap_os_detection(target):
 def nmap_aggressive_scan(target):
     """
     Aggressive scan: OS detection, version detection, script scanning, and traceroute.
-    Equivalent to: nmap -A target
+    Uses -Pn to skip host discovery (treats host as online).
+    Equivalent to: nmap -Pn -A target
     Note: This is comprehensive but slower and more detectable.
 
     Args:
         target: The target to scan
 
     Returns:
-        str: Comprehensive scan results
+        dict: Comprehensive structured scan results
     """
-    return nmap_scan(target, "-A")
+    return nmap_scan(target, "-Pn -A")
 
 
 # ============================================================================
@@ -397,44 +502,47 @@ def nmap_script_scan(target, script, ports=""):
 def nmap_default_scripts(target):
     """
     Run default NSE scripts (safe, useful, and fast).
-    Equivalent to: nmap -sC target or nmap --script=default target
+    Uses -Pn to skip host discovery (treats host as online).
+    Equivalent to: nmap -Pn -sC target or nmap -Pn --script=default target
 
     Args:
         target: The target to scan
 
     Returns:
-        str: Results from default scripts
+        dict: Structured results from default scripts
     """
-    return nmap_scan(target, "-sC")
+    return nmap_scan(target, "-Pn -sC")
 
 
 def nmap_vuln_scan(target):
     """
     Scan for common vulnerabilities using NSE vuln scripts.
-    Equivalent to: nmap --script vuln target
+    Uses -Pn to skip host discovery (treats host as online).
+    Equivalent to: nmap -Pn --script vuln target
 
     Args:
         target: The target to scan
 
     Returns:
-        str: Vulnerability scan results
+        dict: Structured scan result with vulnerabilities detected
     """
-    return nmap_scan(target, "--script vuln")
+    return nmap_scan(target, "-Pn --script vuln")
 
 
 def nmap_web_scan(target, ports="80,443,8080,8443"):
     """
     Scan for web services and gather information.
-    Equivalent to: nmap --script http-enum,http-title,http-headers target
+    Uses -Pn to skip host discovery (treats host as online).
+    Equivalent to: nmap -Pn --script http-enum,http-title,http-headers target
 
     Args:
         target: The target to scan
         ports: Web ports to scan (default: 80,443,8080,8443)
 
     Returns:
-        str: Web service information
+        dict: Web service information
     """
-    return nmap_scan(target, f"-p {ports} --script http-enum,http-title,http-headers,http-methods")
+    return nmap_scan(target, f"-Pn -p {ports} --script http-enum,http-title,http-headers,http-methods")
 
 
 # ============================================================================
