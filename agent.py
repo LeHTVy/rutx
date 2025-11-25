@@ -258,9 +258,34 @@ Select the most appropriate tool for the user's request."""
         matches = re.findall(ip_pattern, user_prompt)
         return matches[0] if matches else None
 
+    def _extract_target_from_prompt(self, user_prompt: str) -> Optional[str]:
+        """Extract target (IP or domain) from user prompt"""
+        # Try IP first
+        ip = self._extract_ip_from_prompt(user_prompt)
+        if ip:
+            return ip
+
+        # Try domain
+        domain = self._extract_domain_from_prompt(user_prompt)
+        if domain:
+            return domain
+
+        return None
+
     def _extract_domain_from_prompt(self, user_prompt: str) -> Optional[str]:
         """Extract domain from user prompt"""
         import re
+        # Match domain patterns (e.g., example.com, sub.example.com)
+        domain_pattern = r'\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}\b'
+        matches = re.findall(domain_pattern, user_prompt)
+        return matches[0] if matches else None
+
+    def _get_subdomain_tools(self, domain: str, user_prompt: str = "") -> List[Dict]:
+        """Get subdomain enumeration tools with keyword detection"""
+        prompt_lower = user_prompt.lower()
+
+        # Detect Amass mode based on keywords
+        amass_passive = True  # Default to passive
         amass_brute = False
         use_amass_intel = False
         
