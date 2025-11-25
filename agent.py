@@ -1163,6 +1163,9 @@ Select the most appropriate tool for the user's request."""
         """
         start_time = datetime.now()
 
+        # Reset scan type flags for new scan to prevent state leakage
+        self.is_subdomain_scan = False
+
         # Phase 1: Tool Selection
         self.current_phase = IterationPhase.TOOL_SELECTION
         selected_tools, reasoning = self.phase_1_tool_selection(user_prompt)
@@ -1183,8 +1186,10 @@ Select the most appropriate tool for the user's request."""
         self.current_phase = IterationPhase.ANALYSIS
         analysis_report = self.phase_3_analysis(execution_results)
 
-        # Phase 4: Report Generation (for subdomain scans with multiple tools)
-        if self.is_subdomain_scan:
+        # Phase 4: Report Generation (ONLY for actual subdomain enumeration scans)
+        # Detect scan type based on tools used, not the flag (which may be stale)
+        scan_type = self._detect_scan_type(execution_results)
+        if scan_type == "subdomain":
             self.current_phase = IterationPhase.REPORT_GENERATION
             analysis_report = self.phase_4_report_generation(execution_results)
 
