@@ -392,22 +392,41 @@ def nmap_os_detection(target):
     """
     Attempt to detect the operating system of the target.
     Equivalent to: nmap -O target
-    Note: May require administrator/root privileges.
+    Note: Requires administrator/root privileges.
 
     Args:
         target: The target to scan
 
     Returns:
-        str: The output with OS detection results
+        dict: OS detection results (or basic scan if not admin)
     """
-    return nmap_scan(target, "-O")
+    # Check if running as admin/root
+    try:
+        import sys
+        if sys.platform == 'win32':
+            import ctypes
+            is_admin = ctypes.windll.shell32.IsUserAnAdmin()
+        else:
+            import os as os_module
+            is_admin = os_module.geteuid() == 0
+    except:
+        is_admin = False
+    
+    if is_admin:
+        print(f"    🔓 Admin mode: OS detection enabled")
+        return nmap_scan(target, "-O")
+    else:
+        print(f"    🔒 User mode: OS detection requires root/admin privileges")
+        print(f"    💡 Tip: Run with sudo/admin for OS detection")
+        print(f"    ℹ️  Running basic port scan instead...")
+        return nmap_scan(target, "-Pn -sV")
 
 
 def nmap_aggressive_scan(target):
     """
     Aggressive scan: OS detection, version detection, script scanning, and traceroute.
     Uses -Pn to skip host discovery (treats host as online).
-    Equivalent to: nmap -Pn -A target
+    Equivalent to: nmap -Pn -A target (admin) or nmap -Pn -sV -sC (user)
     Note: This is comprehensive but slower and more detectable.
 
     Args:
@@ -416,7 +435,27 @@ def nmap_aggressive_scan(target):
     Returns:
         dict: Comprehensive structured scan results
     """
-    return nmap_scan(target, "-Pn -A")
+    # Check if running as admin/root
+    try:
+        import sys
+        if sys.platform == 'win32':
+            import ctypes
+            is_admin = ctypes.windll.shell32.IsUserAnAdmin()
+        else:
+            import os as os_module
+            is_admin = os_module.geteuid() == 0
+    except:
+        is_admin = False
+    
+    if is_admin:
+        # Full aggressive scan with OS detection
+        print(f"    🔓 Admin mode: Full aggressive scan (-A)")
+        return nmap_scan(target, "-Pn -A")
+    else:
+        # Aggressive scan without OS detection (no root required)
+        print(f"    🔒 User mode: Aggressive scan without OS detection")
+        print(f"    💡 Tip: Run with sudo/admin for full -A scan")
+        return nmap_scan(target, "-Pn -sV -sC")
 
 
 # ============================================================================
@@ -426,17 +465,38 @@ def nmap_aggressive_scan(target):
 def nmap_stealth_scan(target, ports=""):
     """
     Stealth SYN scan (half-open scan).
-    Equivalent to: nmap -sS target
-    Note: Requires administrator/root privileges.
+    Equivalent to: nmap -sS target (admin) or nmap -sT target (user)
+    Note: SYN scan requires administrator/root privileges.
 
     Args:
         target: The target to scan
         ports: Optional port specification
 
     Returns:
-        str: Stealth scan results
+        dict: Stealth scan results (or TCP connect scan if not admin)
     """
-    options = "-sS"
+    # Check if running as admin/root
+    try:
+        import sys
+        if sys.platform == 'win32':
+            import ctypes
+            is_admin = ctypes.windll.shell32.IsUserAnAdmin()
+        else:
+            import os as os_module
+            is_admin = os_module.geteuid() == 0
+    except:
+        is_admin = False
+    
+    if is_admin:
+        # SYN scan (stealthy)
+        print(f"    🔓 Admin mode: SYN scan (-sS)")
+        options = "-sS"
+    else:
+        # TCP Connect scan (fallback for non-root)
+        print(f"    🔒 User mode: TCP Connect scan (-sT) instead of SYN")
+        print(f"    💡 Tip: Run with sudo/admin for stealth SYN scan")
+        options = "-sT"
+    
     if ports:
         options += f" -p {ports}"
     return nmap_scan(target, options)

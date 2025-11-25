@@ -1,0 +1,22 @@
+# Core Dependencies
+requests>=2.31.0
+sqlalchemy>=2.0.0
+
+# Optional: Environment variable management
+# python-dotenv>=1.0.0
+
+# Note: These are external security tools that must be installed separately:
+# - nmap: https://nmap.org/download.html
+# - amass: https://github.com/owasp-amass/amass
+# - bbot: https://github.com/blacklanternsecurity/bbot
+#
+# Install on Debian/Ubuntu:
+#   sudo apt update
+#   sudo apt install nmap
+#   go install -v github.com/owasp-amass/amass/v4/...@master
+#   pipx install bbot
+#
+# Install on Windows:
+#   Download nmap from https://nmap.org/download.html
+#   Download amass from https://github.com/owasp-amass/amass/releases
+#   pip install bbot
