@@ -578,7 +578,21 @@ def nmap_comprehensive_scan(target):
     Returns:
         str: Comprehensive scan results
     """
-    return nmap_scan(target, "-p- -sV -sC -O --traceroute", timeout=3600)  # 60 minute timeout
+    # Try full comprehensive scan first (requires root/admin for -O)
+    result = nmap_scan(target, "-p- -sV -sC -O --traceroute", timeout=3600)
+    
+    # Check if it failed (likely due to privileges or timeout)
+    if not result.get("success") and "exit code" in str(result.get("error", "")).lower():
+        print(f"    ⚠️  Privileged scan failed, retrying without OS detection...")
+        # Retry without -O (OS detection) which requires root
+        result = nmap_scan(target, "-p- -sV -sC --traceroute", timeout=3600)
+        
+        if not result.get("success"):
+            print(f"    ⚠️  Scan failed again, retrying with basic service detection...")
+            # Retry with just service detection (safest)
+            result = nmap_scan(target, "-p- -sV", timeout=3600)
+            
+    return result
 
 
 def nmap_no_ping_scan(target, ports=""):

@@ -209,6 +209,11 @@ Select the most appropriate tool for the user's request."""
             'discover subdomains', 'subdomain discovery', 'recon domain'
         ]
         prompt_lower = user_prompt.lower()
+        
+        # Avoid false positives if user is asking for port scan on subdomains
+        if "port" in prompt_lower or "nmap" in prompt_lower:
+            return False
+            
         return any(keyword in prompt_lower for keyword in subdomain_keywords)
 
     def _detect_port_scan(self, user_prompt: str) -> bool:
@@ -1158,7 +1163,7 @@ Select the most appropriate tool for the user's request."""
             "overlap_count": len(overlap),
             "unique_to_amass": len(amass_set - bbot_set),
             "unique_to_bbot": len(bbot_set - amass_set),
-            "sample_subdomains": all_sorted[:50],  # Keep sample for reference
+            "sample_subdomains": all_sorted[:200],  # Keep larger sample for reference
             "high_value_keywords": ["api", "admin", "dev", "staging", "test", "internal", "vpn", "mail"],
             # Add categorized lists (full lists for complete reporting)
             "categorized": {

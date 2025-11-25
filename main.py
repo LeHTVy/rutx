@@ -253,6 +253,7 @@ def print_help():
   • clear     - Clear the screen
   • tools     - List all available scanning tools
   • history   - Show command history (last 20 commands)
+  • sudo      - Restart as Administrator (Windows UAC)
   • banner    - Show the SNODE banner
   • quit/exit - Exit the program
 
@@ -280,6 +281,7 @@ def main():
     # Import agent here to avoid circular imports
     from agent import SNODEAgent
     from utils import create_input_handler
+    from utils.admin_check import is_admin, restart_as_admin
 
     agent = SNODEAgent()
 
@@ -289,7 +291,13 @@ def main():
         history_file=".snode_history"
     )
 
+    # Check admin status
+    admin_status = f"{Colors.RED}ADMIN MODE{Colors.RESET}" if is_admin() else f"{Colors.DIM}User Mode (Limited){Colors.RESET}"
+    
     print(f"\n{Colors.GREEN}Ready. Enter your security objective.{Colors.RESET}")
+    print(f"Status: {admin_status}")
+    if not is_admin():
+        print(f"{Colors.DIM}Tip: Type 'sudo' to restart with admin privileges for full scanning capabilities{Colors.RESET}")
     print(f"{Colors.DIM}Tip: Use ↑/↓ arrow keys to navigate command history{Colors.RESET}\n")
 
     while True:
@@ -336,6 +344,14 @@ def main():
                     print()
                 else:
                     print(f"\n{Colors.DIM}No command history yet{Colors.RESET}\n")
+                continue
+
+            elif cmd == 'sudo' or cmd == 'admin':
+                if is_admin():
+                    print(f"\n{Colors.GREEN}Already running as Administrator.{Colors.RESET}\n")
+                else:
+                    print(f"\n{Colors.YELLOW}Requesting elevation...{Colors.RESET}")
+                    restart_as_admin()
                 continue
 
             # Run the 3-phase scan
