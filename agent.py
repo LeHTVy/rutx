@@ -62,6 +62,7 @@ class SNODEAgent:
         self.current_phase = IterationPhase.TOOL_SELECTION
         self.is_subdomain_scan = False  # Track if this is a subdomain enumeration scan
         self.high_value_targets = set()  # Track high-value subdomains for smart scan prioritization
+        self.critical_targets = set()  # Track CRITICAL targets (api, admin, dev) for comprehensive scans
 
         # Enhanced persistence (4-phase flow)
         self.db_session_id = None  # Database ScanSession ID
@@ -349,18 +350,26 @@ Select the most appropriate tool for the user's request."""
         return tools
 
     def _get_port_scan_tools(self, target: str, user_prompt: str = "", with_osint: bool = False) -> List[Dict]:
-        """Get nmap tools with automatic comprehensive scan for high-value targets"""
+        """Get nmap tools with automatic comprehensive scan for critical/high-value targets"""
         prompt_lower = user_prompt.lower()
-        
-        # Check if target is a high-value subdomain from previous scan
+
+        # Check if target is critical (api, admin, dev) - these get COMPREHENSIVE scans always
+        is_critical = target.lower() in {t.lower() for t in self.critical_targets}
+
+        # Check if target is high-value (staging, test, mail, vpn, internal)
         is_high_value = target.lower() in {t.lower() for t in self.high_value_targets}
-        
-        # Auto-upgrade to comprehensive scan for high-value targets
+
+        # CRITICAL TARGETS: Auto-upgrade to comprehensive scan + Shodan (always)
         # Unless user explicitly requests quick/fast scan
-        if is_high_value and "quick" not in prompt_lower and "fast" not in prompt_lower:
+        if is_critical and "quick" not in prompt_lower and "fast" not in prompt_lower:
             nmap_tool = "nmap_comprehensive_scan"
             auto_shodan = True
-            print(f"  🎯 High-value target detected: {target} → Using comprehensive scan")
+            print(f"  🚨 CRITICAL target detected: {target} → Comprehensive scan + Shodan")
+        # HIGH-VALUE TARGETS: Auto-upgrade to comprehensive scan
+        elif is_high_value and "quick" not in prompt_lower and "fast" not in prompt_lower:
+            nmap_tool = "nmap_comprehensive_scan"
+            auto_shodan = True
+            print(f"  🎯 High-value target detected: {target} → Comprehensive scan")
         else:
             # Detect nmap scan type based on keywords
             nmap_tool = "nmap_quick_scan"  # Default
@@ -390,14 +399,15 @@ Select the most appropriate tool for the user's request."""
             }
         ]
         
-        # Auto-add Shodan for public IPs or if explicitly requested
+        # Auto-add Shodan for public IPs, critical targets, or if explicitly requested
         # Skip Shodan for internal/private IPs to save API quota
         should_add_shodan = (
             with_osint or  # Explicitly requested
-            auto_shodan or  # Comprehensive/aggressive scans or high-value targets
+            auto_shodan or  # Comprehensive/aggressive scans, critical/high-value targets
             (self._is_ip_address(target) and self._is_public_ip(target))  # Public IP auto-enrichment
         )
-        
+
+        # Add Shodan if target is a public IP (for direct lookups)
         if should_add_shodan and self._is_ip_address(target) and self._is_public_ip(target):
             tools.append({
                 "name": "shodan_lookup",
@@ -405,6 +415,15 @@ Select the most appropriate tool for the user's request."""
             })
             if not with_osint and auto_shodan:
                 print(f"  🔍 Auto-enabling Shodan for threat intelligence")
+
+        # For critical domain targets (not IPs), add Shodan search by hostname
+        # This provides threat intel even for domains that need to be resolved
+        elif should_add_shodan and is_critical and not self._is_ip_address(target):
+            tools.append({
+                "name": "shodan_search",
+                "arguments": {"query": f"hostname:{target}"}
+            })
+            print(f"  🔍 Auto-enabling Shodan search for critical domain: {target}")
         
         return tools
 
@@ -521,6 +540,16 @@ Select the most appropriate tool for the user's request."""
             }
         ]
 
+    def _detect_context_reference(self, user_prompt: str) -> bool:
+        """Detect if user is referencing previous scan results"""
+        reference_keywords = [
+            'these', 'those', 'them', 'the list', 'above', 'previous',
+            'from the scan', 'from that scan', 'the subdomains', 'the targets',
+            'high-value', 'high value', 'that list'
+        ]
+        prompt_lower = user_prompt.lower()
+        return any(keyword in prompt_lower for keyword in reference_keywords)
+
     def phase_1_tool_selection(self, user_prompt: str) -> Tuple[List[Dict], str]:
         """
         Phase 1: Tool Selection (LLM/Keyword)
@@ -532,6 +561,73 @@ Select the most appropriate tool for the user's request."""
         print("\n" + "="*60)
         print("📦 PHASE 1: TOOL SELECTION")
         print("="*60)
+
+        # Check if user is referencing previous scan results
+        if self._detect_context_reference(user_prompt):
+            # Combine critical and high-value targets
+            all_priority_targets = list(self.critical_targets.union(self.high_value_targets))
+
+            # Check if we have targets from previous subdomain scan
+            if all_priority_targets and self._detect_port_scan(user_prompt):
+                print(f"  🔗 Context reference detected - using {len(all_priority_targets)} priority targets from previous scan")
+                selected_tools = []
+                reasoning = f"Port scanning {len(all_priority_targets)} priority subdomains from previous enumeration."
+
+                # Generate port scan tools for each priority target
+                # Process critical targets first, then high-value
+                critical_list = sorted(list(self.critical_targets))[:5]  # Top 5 critical
+                high_value_list = sorted(list(self.high_value_targets))[:5]  # Top 5 high-value
+                combined_targets = critical_list + high_value_list
+
+                for target in combined_targets:
+                    scan_tools = self._get_port_scan_tools(target, user_prompt, with_osint=False)
+                    # Take only the nmap tool, not Shodan for batch scans
+                    nmap_tool = next((t for t in scan_tools if 'nmap' in t['name']), None)
+                    if nmap_tool:
+                        selected_tools.append(nmap_tool)
+
+                if selected_tools:
+                    print(f"  ✓ Selected: Port scan for {len(selected_tools)} targets")
+                    for i, tool in enumerate(selected_tools[:3], 1):
+                        print(f"    {i}. {tool['arguments']['target']} ({tool['name']})")
+                    if len(selected_tools) > 3:
+                        print(f"    ... and {len(selected_tools) - 3} more")
+                    return selected_tools, reasoning
+
+            # If no priority targets but we have scan_results, try to extract subdomains from previous scan
+            elif len(self.scan_results) > 0 and self._detect_port_scan(user_prompt):
+                # Try to recover subdomains from previous scan results
+                recovered_subdomains = []
+                for scan_result in self.scan_results:
+                    if scan_result.get("result", {}).get("subdomains"):
+                        recovered_subdomains.extend(scan_result["result"]["subdomains"])
+
+                if recovered_subdomains:
+                    # Use first 10 subdomains as targets
+                    targets_to_scan = sorted(set(recovered_subdomains))[:10]
+                    print(f"  🔗 Context reference detected - recovered {len(targets_to_scan)} subdomains from interrupted scan")
+                    selected_tools = []
+                    reasoning = f"Port scanning {len(targets_to_scan)} subdomains recovered from previous scan."
+
+                    for target in targets_to_scan:
+                        scan_tools = self._get_port_scan_tools(target, user_prompt, with_osint=False)
+                        nmap_tool = next((t for t in scan_tools if 'nmap' in t['name']), None)
+                        if nmap_tool:
+                            selected_tools.append(nmap_tool)
+
+                    if selected_tools:
+                        print(f"  ✓ Selected: Port scan for {len(selected_tools)} targets")
+                        for i, tool in enumerate(selected_tools[:3], 1):
+                            print(f"    {i}. {tool['arguments']['target']} ({tool['name']})")
+                        if len(selected_tools) > 3:
+                            print(f"    ... and {len(selected_tools) - 3} more")
+                        return selected_tools, reasoning
+                else:
+                    print("  ⚠️  Context reference detected but no usable targets from previous scan")
+                    print("  💡 Tip: The previous scan was interrupted. Try running a complete subdomain scan first")
+            else:
+                print("  ⚠️  Context reference detected but no previous scan results available")
+                print("  💡 Tip: Try running a subdomain scan first, then reference 'those subdomains'")
 
         # Create scan session in database
         target = self._extract_target_from_prompt(user_prompt)
@@ -1001,39 +1097,57 @@ Select the most appropriate tool for the user's request."""
             "other": []
         }
         
+        # Helper function for keyword matching with word boundaries
+        def matches_keyword(subdomain: str, keywords: list) -> bool:
+            """Check if subdomain matches keywords with word boundaries"""
+            import re
+            sub_lower = subdomain.lower()
+            # Extract the subdomain part before the domain (e.g., "dev" from "dev.example.com")
+            subdomain_part = sub_lower.split('.')[0]
+
+            for keyword in keywords:
+                # Check if keyword appears as a word boundary (start, end, or separated by hyphens/underscores)
+                pattern = r'(^|[-_])' + re.escape(keyword) + r'([-_]|$)'
+                if re.search(pattern, subdomain_part):
+                    return True
+                # Also check if subdomain starts with keyword
+                if subdomain_part.startswith(keyword):
+                    return True
+            return False
+
         for subdomain in all_sorted:
             sub_lower = subdomain.lower()
             categorized = False
-            
-            # Categorize based on keywords
-            if "www" in sub_lower or "web" in sub_lower or "portal" in sub_lower:
+
+            # Categorize based on keywords with word boundaries
+            if matches_keyword(subdomain, ["www", "web", "portal"]):
                 categories["www"].append(subdomain)
                 categorized = True
-            elif "api" in sub_lower or "rest" in sub_lower or "graphql" in sub_lower:
+            elif matches_keyword(subdomain, ["api", "rest", "graphql"]):
                 categories["api"].append(subdomain)
                 categorized = True
-            elif "mail" in sub_lower or "smtp" in sub_lower or "mx" in sub_lower or "imap" in sub_lower:
+            elif matches_keyword(subdomain, ["mail", "smtp", "mx", "imap", "pop", "pop3"]):
                 categories["mail"].append(subdomain)
                 categorized = True
-            elif "dev" in sub_lower and "staging" not in sub_lower:
+            elif matches_keyword(subdomain, ["dev", "develop", "development"]) and "staging" not in sub_lower:
                 categories["dev"].append(subdomain)
                 categorized = True
-            elif "staging" in sub_lower or "stage" in sub_lower or "uat" in sub_lower:
+            elif matches_keyword(subdomain, ["staging", "stage", "uat", "preprod"]):
                 categories["staging"].append(subdomain)
                 categorized = True
-            elif "admin" in sub_lower or "administrator" in sub_lower:
+            elif matches_keyword(subdomain, ["admin", "administrator", "management"]):
                 categories["admin"].append(subdomain)
                 categorized = True
-            elif "vpn" in sub_lower:
+            elif matches_keyword(subdomain, ["vpn", "remote"]):
                 categories["vpn"].append(subdomain)
                 categorized = True
-            elif "internal" in sub_lower or "intranet" in sub_lower:
+            elif matches_keyword(subdomain, ["internal", "intranet", "corp", "backend"]):
                 categories["internal"].append(subdomain)
                 categorized = True
-            elif "test" in sub_lower:
+            elif matches_keyword(subdomain, ["test", "testing", "qa"]):
                 categories["test"].append(subdomain)
                 categorized = True
-            
+
             if not categorized:
                 categories["other"].append(subdomain)
         
@@ -1046,18 +1160,18 @@ Select the most appropriate tool for the user's request."""
             "unique_to_bbot": len(bbot_set - amass_set),
             "sample_subdomains": all_sorted[:50],  # Keep sample for reference
             "high_value_keywords": ["api", "admin", "dev", "staging", "test", "internal", "vpn", "mail"],
-            # Add categorized lists (limit each category to prevent overwhelming LLM)
+            # Add categorized lists (full lists for complete reporting)
             "categorized": {
-                "www": categories["www"][:20],
-                "api": categories["api"][:20],
-                "mail": categories["mail"][:20],
-                "dev": categories["dev"][:20],
-                "staging": categories["staging"][:20],
-                "admin": categories["admin"][:20],
-                "vpn": categories["vpn"][:20],
-                "internal": categories["internal"][:20],
-                "test": categories["test"][:20],
-                "other": categories["other"][:30]
+                "www": categories["www"],
+                "api": categories["api"],
+                "mail": categories["mail"],
+                "dev": categories["dev"],
+                "staging": categories["staging"],
+                "admin": categories["admin"],
+                "vpn": categories["vpn"],
+                "internal": categories["internal"],
+                "test": categories["test"],
+                "other": categories["other"]  # Full list - no truncation
             },
             "category_counts": {
                 "www": len(categories["www"]),
@@ -1073,18 +1187,38 @@ Select the most appropriate tool for the user's request."""
             }
         }
 
-        # Find high-value targets
-        high_value = [s for s in all_sorted if any(kw in s.lower() for kw in combined_summary["high_value_keywords"])]
-        combined_summary["high_value_targets"] = high_value[:20]
+        # Find high-value targets and separate CRITICAL from high-value
+        # Use the pre-categorized data to ensure accuracy
+        critical_targets = (
+            categories["api"] +      # api.*, rest.*, graphql.*
+            categories["admin"] +    # admin.*, administrator.*
+            categories["dev"]        # dev.* (but not staging)
+        )
 
-        # Store high-value targets for smart scan prioritization
-        self.high_value_targets = set(high_value)
-        if high_value:
-            print(f"  🎯 Identified {len(high_value)} high-value targets for prioritization")
+        high_value_targets = (
+            categories["staging"] +  # staging.*, stage.*, uat.*
+            categories["test"] +     # test.*
+            categories["mail"] +     # mail.*, smtp.*, mx.*, imap.*
+            categories["vpn"] +      # vpn.*
+            categories["internal"]   # internal.*, intranet.*
+        )
+
+        combined_summary["critical_targets"] = critical_targets
+        combined_summary["high_value_targets"] = high_value_targets
+
+        # Store targets for smart scan prioritization
+        self.critical_targets = set(critical_targets)
+        self.high_value_targets = set(high_value_targets)
+
+        if critical_targets:
+            print(f"  🚨 Identified {len(critical_targets)} CRITICAL targets (comprehensive scan + Shodan)")
+            print(f"     {', '.join(sorted(critical_targets)[:5])}{' ...' if len(critical_targets) > 5 else ''}")
+        if high_value_targets:
+            print(f"  🎯 Identified {len(high_value_targets)} high-value targets (comprehensive scan)")
+            print(f"     {', '.join(sorted(high_value_targets)[:5])}{' ...' if len(high_value_targets) > 5 else ''}")
 
         print(f"\n  📊 Total unique subdomains: {combined_summary['total_unique']}")
         print(f"  📊 Overlap (found by both): {combined_summary['overlap_count']}")
-        print(f"  📊 High-value targets found: {len(high_value)}")
 
         system_prompt = get_phase4_prompt(
             json.dumps(combined_summary, indent=2),
@@ -1096,25 +1230,189 @@ Select the most appropriate tool for the user's request."""
             {"role": "user", "content": "Analyze the subdomain discovery results."}
         ]
 
-        print("\n🔍 Analyzing combined results...")
+        print("\n🔍 Generating comprehensive report...")
 
+        # HYBRID APPROACH:
+        # 1. Generate programmatic categorized lists (accurate, complete, no truncation)
+        # 2. Use LLM for security analysis and intelligent recommendations
+
+        # Get LLM analysis for security insights
+        print("  🤖 LLM analyzing security implications...")
         response = self._call_ollama(messages, timeout=TIMEOUT_OLLAMA, retry_without_tools=False)
 
-        if "error" in response:
-            # Fallback: Generate a basic report without LLM
-            print(f"  ⚠️ LLM error, generating fallback report...")
-            return self._generate_basic_subdomain_report(combined_summary, all_sorted, high_value)
+        llm_analysis = ""
+        llm_recommendations = ""
 
-        analysis = response.get("message", {}).get("content", "")
+        if "error" not in response:
+            full_analysis = response.get("message", {}).get("content", "")
+            if full_analysis and full_analysis.strip() not in ["", "None", "null", "N/A"]:
+                # Extract security analysis and recommendations sections from LLM output
+                import re
 
-        # If LLM returned empty, None, or invalid response, use fallback
-        invalid_responses = ["", "None", "No analysis generated", "null", "N/A"]
-        if not analysis or analysis.strip() in invalid_responses:
-            print(f"  ⚠️ Invalid LLM response, generating fallback report...")
-            return self._generate_basic_subdomain_report(combined_summary, all_sorted, high_value)
+                # Try to extract SECURITY ANALYSIS section
+                security_match = re.search(r'## SECURITY ANALYSIS\s*(.*?)(?=##|\Z)', full_analysis, re.DOTALL | re.IGNORECASE)
+                if security_match:
+                    llm_analysis = security_match.group(1).strip()
 
-        print(f"  ✅ Analysis complete ({len(analysis)} chars)")
-        return analysis
+                # Try to extract RECOMMENDATIONS section
+                rec_match = re.search(r'## RECOMMENDATIONS\s*(.*?)(?=##|\Z)', full_analysis, re.DOTALL | re.IGNORECASE)
+                if rec_match:
+                    llm_recommendations = rec_match.group(1).strip()
+
+        # Generate complete report with programmatic lists + LLM insights
+        print(f"  ✅ Report generated ({combined_summary['total_unique']} subdomains)")
+        return self._generate_subdomain_report_text(combined_summary, llm_analysis, llm_recommendations)
+
+    def _generate_subdomain_report_text(self, combined_summary: Dict, llm_analysis: str = "", llm_recommendations: str = "") -> str:
+        """Generate formatted subdomain report from categorized data with optional LLM insights"""
+        lines = []
+
+        # Header
+        lines.append("## SUBDOMAIN DISCOVERY SUMMARY")
+        lines.append(f"- Total unique subdomains: {combined_summary['total_unique']}")
+        lines.append(f"- Found by Amass: {combined_summary['amass_count']}")
+        lines.append(f"- Found by BBOT: {combined_summary['bbot_count']}")
+        lines.append(f"- Overlap (found by both): {combined_summary['overlap_count']}")
+        lines.append("")
+
+        # Critical Targets
+        critical = combined_summary.get('critical_targets', [])
+        lines.append("## CRITICAL TARGETS (api, admin, dev)")
+        if critical:
+            lines.append("*These will receive COMPREHENSIVE scans + Shodan automatically*")
+            for target in sorted(critical):
+                lines.append(f"- {target}")
+        else:
+            lines.append("- None found")
+        lines.append("")
+
+        # High-Value Targets
+        high_value = combined_summary.get('high_value_targets', [])
+        lines.append("## HIGH-VALUE TARGETS (staging, test, mail, vpn, internal)")
+        if high_value:
+            lines.append("*These will receive COMPREHENSIVE scans*")
+            for target in sorted(high_value):
+                lines.append(f"- {target}")
+        else:
+            lines.append("- None found")
+        lines.append("")
+
+        # Categorized Subdomains
+        lines.append("## CATEGORIZED SUBDOMAINS")
+        lines.append("")
+
+        categorized = combined_summary.get('categorized', {})
+        category_counts = combined_summary.get('category_counts', {})
+
+        # Web Services
+        lines.append(f"### Web Services (www, web, portal) - {category_counts.get('www', 0)}")
+        if categorized.get('www'):
+            for sub in sorted(categorized['www']):
+                lines.append(f"- {sub}")
+        else:
+            lines.append("- None found")
+        lines.append("")
+
+        # API Endpoints
+        lines.append(f"### API Endpoints (api, rest, graphql) - {category_counts.get('api', 0)}")
+        if categorized.get('api'):
+            for sub in sorted(categorized['api']):
+                lines.append(f"- {sub}")
+        else:
+            lines.append("- None found")
+        lines.append("")
+
+        # Mail/Communication
+        lines.append(f"### Mail/Communication (mail, smtp, mx) - {category_counts.get('mail', 0)}")
+        if categorized.get('mail'):
+            for sub in sorted(categorized['mail']):
+                lines.append(f"- {sub}")
+        else:
+            lines.append("- None found")
+        lines.append("")
+
+        # Development/Staging/Test combined
+        dev_staging_test = (categorized.get('dev', []) +
+                           categorized.get('staging', []) +
+                           categorized.get('test', []))
+        total_dst = (category_counts.get('dev', 0) +
+                    category_counts.get('staging', 0) +
+                    category_counts.get('test', 0))
+        lines.append(f"### Development/Staging/Test (dev, staging, test, uat) - {total_dst}")
+        if dev_staging_test:
+            for sub in sorted(set(dev_staging_test)):
+                lines.append(f"- {sub}")
+        else:
+            lines.append("- None found")
+        lines.append("")
+
+        # Admin/Management
+        lines.append(f"### Admin/Management (admin) - {category_counts.get('admin', 0)}")
+        if categorized.get('admin'):
+            for sub in sorted(categorized['admin']):
+                lines.append(f"- {sub}")
+        else:
+            lines.append("- None found")
+        lines.append("")
+
+        # VPN/Internal combined
+        vpn_internal = categorized.get('vpn', []) + categorized.get('internal', [])
+        total_vi = category_counts.get('vpn', 0) + category_counts.get('internal', 0)
+        lines.append(f"### VPN/Internal (vpn, internal) - {total_vi}")
+        if vpn_internal:
+            for sub in sorted(set(vpn_internal)):
+                lines.append(f"- {sub}")
+        else:
+            lines.append("- None found")
+        lines.append("")
+
+        # Other - ALL items
+        lines.append(f"### Other - {category_counts.get('other', 0)}")
+        if categorized.get('other'):
+            for sub in sorted(categorized['other']):
+                lines.append(f"- {sub}")
+        else:
+            lines.append("- None found")
+        lines.append("")
+
+        # Security Analysis - use LLM insights if available, otherwise use basic analysis
+        lines.append("## SECURITY ANALYSIS")
+
+        if llm_analysis:
+            # Use LLM-generated security analysis
+            lines.append(llm_analysis)
+        else:
+            # Fallback to basic programmatic analysis
+            if critical:
+                lines.append(f"- **CRITICAL**: {len(critical)} critical targets identified requiring immediate attention")
+            if high_value:
+                lines.append(f"- **HIGH-VALUE**: {len(high_value)} high-value targets identified for comprehensive scanning")
+            if dev_staging_test:
+                lines.append("- **WARNING**: Exposed development/staging/test environments detected")
+            if categorized.get('admin'):
+                lines.append("- **WARNING**: Admin panels discovered - ensure proper authentication")
+
+        lines.append("")
+
+        # Recommendations - use LLM insights if available, otherwise use basic recommendations
+        lines.append("## RECOMMENDATIONS")
+
+        if llm_recommendations:
+            # Use LLM-generated recommendations
+            lines.append(llm_recommendations)
+        else:
+            # Fallback to basic programmatic recommendations
+            lines.append("1. **CRITICAL targets** will automatically receive:")
+            lines.append("   - Comprehensive port scans (all 65535 ports + service detection + OS detection)")
+            lines.append("   - Shodan threat intelligence enrichment")
+            lines.append("2. **HIGH-VALUE targets** will automatically receive:")
+            lines.append("   - Comprehensive port scans")
+            lines.append("3. Next Steps:")
+            lines.append("   - Use 'Port scan those subdomains' to begin automated scanning")
+            lines.append("   - Review and secure exposed development/staging environments")
+            lines.append("   - Implement strong authentication on admin panels")
+
+        return "\n".join(lines)
 
     def _generate_basic_subdomain_report(
         self,
@@ -1122,64 +1420,9 @@ Select the most appropriate tool for the user's request."""
         all_subdomains: List[str],
         high_value: List[str]
     ) -> str:
-        """Generate a basic subdomain report when LLM fails"""
-        # Categorize subdomains
-        categories = {
-            "api": [], "admin": [], "dev": [], "staging": [],
-            "mail": [], "vpn": [], "www": [], "other": []
-        }
-
-        for sub in all_subdomains:
-            sub_lower = sub.lower()
-            categorized = False
-            for cat in ["api", "admin", "dev", "staging", "mail", "vpn", "www"]:
-                if cat in sub_lower:
-                    categories[cat].append(sub)
-                    categorized = True
-                    break
-            if not categorized:
-                categories["other"].append(sub)
-
-        report = f"""## SUBDOMAIN DISCOVERY SUMMARY
-
-- **Total unique subdomains:** {summary['total_unique']}
-- **Found by Amass:** {summary['amass_count']}
-- **Found by BBOT:** {summary['bbot_count']}
-- **Overlap (found by both):** {summary['overlap_count']}
-- **Unique to Amass:** {summary['unique_to_amass']}
-- **Unique to BBOT:** {summary['unique_to_bbot']}
-
-## HIGH-VALUE TARGETS ({len(high_value)} found)
-
-{chr(10).join(['- ' + s for s in high_value[:15]]) if high_value else 'None identified'}
-
-## CATEGORIZED SUBDOMAINS
-
-### API Endpoints ({len(categories['api'])})
-{chr(10).join(['- ' + s for s in categories['api'][:10]]) if categories['api'] else 'None found'}
-
-### Admin Panels ({len(categories['admin'])})
-{chr(10).join(['- ' + s for s in categories['admin'][:10]]) if categories['admin'] else 'None found'}
-
-### Development/Staging ({len(categories['dev']) + len(categories['staging'])})
-{chr(10).join(['- ' + s for s in (categories['dev'] + categories['staging'])[:10]]) if (categories['dev'] or categories['staging']) else 'None found'}
-
-### Mail Services ({len(categories['mail'])})
-{chr(10).join(['- ' + s for s in categories['mail'][:10]]) if categories['mail'] else 'None found'}
-
-### VPN/Internal ({len(categories['vpn'])})
-{chr(10).join(['- ' + s for s in categories['vpn'][:10]]) if categories['vpn'] else 'None found'}
-
-## RECOMMENDATIONS
-
-1. **Priority targets for port scanning:** {', '.join(high_value[:5]) if high_value else 'Review all subdomains manually'}
-2. **Suggested next steps:** Run nmap_service_detection on high-value targets
-3. **Security concern:** Check for exposed admin panels and development environments
-
----
-*Note: This is a basic report. LLM analysis was unavailable.*
-"""
-        return report
+        """Generate a basic subdomain report when LLM fails (legacy fallback)"""
+        # Use the new comprehensive report generator
+        return self._generate_subdomain_report_text(summary)
 
     def _generate_basic_analysis_report(self, scan_results: List[Dict]) -> str:
         """Generate a basic analysis report when LLM fails (for non-subdomain scans)"""

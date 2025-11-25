@@ -296,7 +296,10 @@ def get_phase4_prompt(combined_results: str, tool_count: int) -> str:
 PHASE 4: COMBINED SUBDOMAIN ANALYSIS
 
 You have received results from {tool_count} subdomain enumeration tools (Amass + BBOT).
-Your task is to analyze the pre-categorized subdomain data and provide insights.
+
+**YOUR TASK**: Generate ONLY the SECURITY ANALYSIS and RECOMMENDATIONS sections.
+The categorized subdomain lists will be generated programmatically for accuracy.
+Focus on providing intelligent security insights based on the discovered subdomains.
 
 COMBINED SCAN RESULTS:
 {combined_results}
@@ -304,57 +307,39 @@ COMBINED SCAN RESULTS:
 NOTE: The results include:
 - "categorized": Pre-categorized subdomains by type (www, api, mail, dev, staging, admin, vpn, internal, test, other)
 - "category_counts": Total count for each category
-- "high_value_targets": Subdomains flagged for investigation
+- "critical_targets": CRITICAL subdomains (api, admin, dev) that get comprehensive scans + Shodan
+- "high_value_targets": High-value subdomains (staging, test, mail, vpn, internal) that get comprehensive scans
 
 ANALYSIS REQUIREMENTS:
-1. Use the provided categorized data and counts
-2. Highlight the most critical findings from high-value targets
-3. Provide specific recommendations based on what was found
-4. Identify security concerns (exposed dev/staging, admin panels, etc.)
-5. **CRITICAL**: Each subdomain should appear in ONLY ONE category - do NOT duplicate subdomains
+1. Analyze the critical_targets and high_value_targets lists
+2. Review the categorized subdomains and their counts
+3. Identify specific security concerns based on what was discovered
+4. Provide actionable, specific recommendations
+5. Consider the context: which subdomains pose the highest risk?
 
-OUTPUT FORMAT:
-
-## SUBDOMAIN DISCOVERY SUMMARY
-- Total unique subdomains: [use total_unique from data]
-- Found by Amass: [use amass_count]
-- Found by BBOT: [use bbot_count]
-- Overlap (found by both): [use overlap_count]
-
-## HIGH-VALUE TARGETS
-[List the subdomains from high_value_targets that warrant further investigation]
-
-## CATEGORIZED SUBDOMAINS
-
-**NOTE: Each subdomain appears in only ONE category below. Do NOT repeat subdomains.**
-
-### Web Services (www, web, portal) - [use category_counts.www]
-[List subdomains from categorized.www - if empty, state "None found"]
-
-### API Endpoints (api, rest, graphql) - [use category_counts.api]
-[List subdomains from categorized.api - if empty, state "None found"]
-
-### Mail/Communication (mail, smtp, mx) - [use category_counts.mail]
-[List subdomains from categorized.mail - if empty, state "None found"]
-
-### Development/Staging (dev, staging, test, uat) - [use category_counts.dev + category_counts.staging + category_counts.test]
-[List ONLY subdomains from categorized.dev, categorized.staging, categorized.test that contain keywords like 'dev', 'staging', 'test', 'uat' - if empty, state "None found"]
-
-### Admin/Management (admin) - [use category_counts.admin]
-[List subdomains from categorized.admin - if empty, state "None found"]
-
-### VPN/Internal (vpn, internal) - [use category_counts.vpn + category_counts.internal]
-[List subdomains from categorized.vpn, categorized.internal - if empty, state "None found"]
-
-### Other - [use category_counts.other]
-[List first 30 subdomains from categorized.other that do NOT match any of the above categories - if empty, state "None found"]
+OUTPUT FORMAT - Generate ONLY these two sections:
 
 ## SECURITY ANALYSIS
-[Identify potential security concerns based on discovered subdomains]
+[Provide detailed security analysis including:]
+- Assessment of critical targets found (reference specific subdomains)
+- Risk evaluation of high-value targets
+- Specific concerns about exposed infrastructure (dev/staging/admin panels)
+- Analysis of attack surface based on subdomain categories
+- Any anomalies or particularly concerning findings
 
 ## RECOMMENDATIONS
-1. [Priority targets for port scanning]
-2. [Suggested next steps - vulnerability scan, web app testing, etc.]
-3. [Security concerns to address]
+[Provide specific, actionable recommendations:]
+1. Immediate actions (0-24h) - Critical issues to address now
+2. Short-term actions (1-7d) - Important security improvements
+3. Long-term improvements (1-30d) - Strategic security enhancements
+4. Specific scanning priorities - Which subdomains to investigate first
+5. Remediation steps - How to secure exposed infrastructure
+
+GUIDELINES:
+- Be specific - reference actual subdomain names when discussing risks
+- Prioritize by severity - Critical > High > Medium > Low
+- Provide context - explain WHY each finding is concerning
+- Give actionable steps - tell them HOW to remediate, not just WHAT to fix
+- Consider the full picture - analyze patterns across all categories
 """
 
