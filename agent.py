@@ -588,6 +588,7 @@ Select the most appropriate tool for the user's request."""
 
         results = []
 
+
         for i, tool in enumerate(selected_tools, 1):
             tool_name = tool["name"]
             tool_args = tool["arguments"]
@@ -613,6 +614,10 @@ Select the most appropriate tool for the user's request."""
                 # Add tool name to result for persistence
                 if "tool" not in result:
                     result["tool"] = tool_name
+
+                # Display the actual command that was executed
+                if result.get("command"):
+                    print(f"    Running: {result['command']}")
 
                 # ATOMIC PERSISTENCE: Save to tool-specific models
                 if ENABLE_DATABASE and result.get("success"):
