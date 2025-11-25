@@ -57,6 +57,7 @@ class SNODEAgent:
         self.model = model or MODEL_NAME
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.conversation_history = []
+        self.max_history_size = 3  # Store last 3 scan results for context
         self.scan_results = []
         self.current_phase = IterationPhase.TOOL_SELECTION
         self.is_subdomain_scan = False  # Track if this is a subdomain enumeration scan
@@ -212,7 +213,11 @@ Select the most appropriate tool for the user's request."""
         """Detect if user is requesting port scanning"""
         port_keywords = [
             'scan port', 'port scan', 'scan ports', 'open ports',
-            'check ports', 'port scanning', 'nmap', 'service detection'
+            'check ports', 'port scanning', 'nmap', 'service detection',
+            # Natural language security assessment terms
+            'security assessment', 'security scan', 'thorough', 'comprehensive',
+            'check everything', 'full scan', 'complete scan', 'assess',
+            'penetration test', 'pentest', 'security audit', 'scan target'
         ]
         prompt_lower = user_prompt.lower()
         return any(keyword in prompt_lower for keyword in port_keywords)
@@ -255,24 +260,6 @@ Select the most appropriate tool for the user's request."""
     def _extract_domain_from_prompt(self, user_prompt: str) -> Optional[str]:
         """Extract domain from user prompt"""
         import re
-        # Match common domain patterns
-        domain_pattern = r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}'
-        matches = re.findall(domain_pattern, user_prompt)
-        return matches[0] if matches else None
-
-    def _extract_target_from_prompt(self, user_prompt: str) -> Optional[str]:
-        """Extract any target (IP or domain) from user prompt"""
-        ip = self._extract_ip_from_prompt(user_prompt)
-        if ip:
-            return ip
-        return self._extract_domain_from_prompt(user_prompt)
-
-    def _get_subdomain_tools(self, domain: str, user_prompt: str = "") -> List[Dict]:
-        """Get amass and bbot tools for subdomain enumeration with keyword detection"""
-        prompt_lower = user_prompt.lower()
-        
-        # Detect Amass mode based on keywords
-        amass_passive = True  # Default to passive for safety
         amass_brute = False
         use_amass_intel = False
         
