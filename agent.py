@@ -328,11 +328,14 @@ Select the most appropriate tool for the user's request."""
         
         # Detect nmap scan type based on keywords
         nmap_tool = "nmap_quick_scan"  # Default
+        auto_shodan = False  # Auto-enable Shodan for certain scan types
         
         if "comprehensive" in prompt_lower or "complete" in prompt_lower:
             nmap_tool = "nmap_comprehensive_scan"
+            auto_shodan = True  # Comprehensive scans get Shodan automatically
         elif "aggressive" in prompt_lower:
             nmap_tool = "nmap_aggressive_scan"
+            auto_shodan = True  # Aggressive scans get Shodan automatically
         elif "stealth" in prompt_lower or "stealthy" in prompt_lower or "syn" in prompt_lower:
             nmap_tool = "nmap_stealth_scan"
         elif "service" in prompt_lower or "version" in prompt_lower:
@@ -352,12 +355,22 @@ Select the most appropriate tool for the user's request."""
             }
         ]
         
-        # Add Shodan lookup for OSINT enrichment (only for IP addresses)
-        if with_osint and self._is_ip_address(target):
+        # Auto-add Shodan for public IPs or if explicitly requested
+        # Skip Shodan for internal/private IPs to save API quota
+        should_add_shodan = (
+            with_osint or  # Explicitly requested
+            auto_shodan or  # Comprehensive/aggressive scans
+            (self._is_ip_address(target) and self._is_public_ip(target))  # Public IP auto-enrichment
+        )
+        
+        if should_add_shodan and self._is_ip_address(target) and self._is_public_ip(target):
             tools.append({
                 "name": "shodan_lookup",
                 "arguments": {"ip": target}
             })
+            if not with_osint and auto_shodan:
+                print(f"  🔍 Auto-enabling Shodan for threat intelligence")
+        
         return tools
 
     def _is_ip_address(self, target: str) -> bool:
@@ -365,6 +378,25 @@ Select the most appropriate tool for the user's request."""
         import re
         ip_pattern = r'^(?:\d{1,3}\.){3}\d{1,3}$'
         return bool(re.match(ip_pattern, target))
+
+    def _is_public_ip(self, ip: str) -> bool:
+        """Check if an IP address is public (external) vs private (internal)"""
+        if not self._is_ip_address(ip):
+            return False
+        
+        import ipaddress
+        try:
+            ip_obj = ipaddress.ip_address(ip)
+            # Check if it's a private, loopback, link-local, or reserved IP
+            return not (
+                ip_obj.is_private or 
+                ip_obj.is_loopback or 
+                ip_obj.is_link_local or 
+                ip_obj.is_reserved or
+                ip_obj.is_multicast
+            )
+        except:
+            return False
 
     def _parse_nmap_output(self, raw_output: str) -> Dict[str, Any]:
         """Parse raw nmap output into structured data for LLM analysis"""
@@ -425,19 +457,24 @@ Select the most appropriate tool for the user's request."""
         return result
 
     def _get_vuln_scan_tools(self, target: str, with_osint: bool = False) -> List[Dict]:
-        """Get tools for vulnerability scanning, optionally with OSINT enrichment"""
+        """Get tools for vulnerability scanning with automatic Shodan enrichment for public IPs"""
         tools = [
             {
                 "name": "nmap_vuln_scan",
                 "arguments": {"target": target}
             }
         ]
-        # Add Shodan for CVE enrichment if target is an IP
-        if with_osint and self._is_ip_address(target):
+        
+        # ALWAYS add Shodan for vulnerability scans on public IPs (CVE enrichment)
+        # Vulnerability scans benefit most from threat intelligence data
+        if self._is_ip_address(target) and self._is_public_ip(target):
             tools.append({
                 "name": "shodan_lookup",
                 "arguments": {"ip": target}
             })
+            if not with_osint:
+                print(f"  🔍 Auto-enabling Shodan for CVE enrichment")
+        
         return tools
 
     def _get_shodan_tools(self, target: str) -> List[Dict]:
