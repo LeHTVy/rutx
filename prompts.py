@@ -311,6 +311,7 @@ ANALYSIS REQUIREMENTS:
 2. Highlight the most critical findings from high-value targets
 3. Provide specific recommendations based on what was found
 4. Identify security concerns (exposed dev/staging, admin panels, etc.)
+5. **CRITICAL**: Each subdomain should appear in ONLY ONE category - do NOT duplicate subdomains
 
 OUTPUT FORMAT:
 
@@ -325,6 +326,8 @@ OUTPUT FORMAT:
 
 ## CATEGORIZED SUBDOMAINS
 
+**NOTE: Each subdomain appears in only ONE category below. Do NOT repeat subdomains.**
+
 ### Web Services (www, web, portal) - [use category_counts.www]
 [List subdomains from categorized.www - if empty, state "None found"]
 
@@ -335,7 +338,7 @@ OUTPUT FORMAT:
 [List subdomains from categorized.mail - if empty, state "None found"]
 
 ### Development/Staging (dev, staging, test, uat) - [use category_counts.dev + category_counts.staging + category_counts.test]
-[List subdomains from categorized.dev, categorized.staging, categorized.test - if empty, state "None found"]
+[List ONLY subdomains from categorized.dev, categorized.staging, categorized.test that contain keywords like 'dev', 'staging', 'test', 'uat' - if empty, state "None found"]
 
 ### Admin/Management (admin) - [use category_counts.admin]
 [List subdomains from categorized.admin - if empty, state "None found"]
@@ -344,7 +347,7 @@ OUTPUT FORMAT:
 [List subdomains from categorized.vpn, categorized.internal - if empty, state "None found"]
 
 ### Other - [use category_counts.other]
-[List first 10 subdomains from categorized.other - if empty, state "None found"]
+[List first 30 subdomains from categorized.other that do NOT match any of the above categories - if empty, state "None found"]
 
 ## SECURITY ANALYSIS
 [Identify potential security concerns based on discovered subdomains]
