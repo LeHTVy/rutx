@@ -578,21 +578,33 @@ def nmap_comprehensive_scan(target):
     Returns:
         str: Comprehensive scan results
     """
-    # Try full comprehensive scan first (requires root/admin for -O)
-    result = nmap_scan(target, "-p- -sV -sC -O --traceroute", timeout=3600)
+    # Check if running as admin to determine scan options
+    try:
+        import ctypes
+        is_admin = ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        is_admin = False
     
-    # Check if it failed (likely due to privileges or timeout)
-    if not result.get("success") and "exit code" in str(result.get("error", "")).lower():
-        print(f"    ⚠️  Privileged scan failed, retrying without OS detection...")
-        # Retry without -O (OS detection) which requires root
-        result = nmap_scan(target, "-p- -sV -sC --traceroute", timeout=3600)
-        
-        if not result.get("success"):
-            print(f"    ⚠️  Scan failed again, retrying with basic service detection...")
-            # Retry with just service detection (safest)
-            result = nmap_scan(target, "-p- -sV", timeout=3600)
-            
-    return result
+    if is_admin:
+        # Full comprehensive scan with all features (requires admin)
+        # -p-: All ports
+        # -sV: Service version detection
+        # -sC: Default scripts
+        # -O: OS detection (requires admin)
+        # --traceroute: Trace route to target
+        options = "-p- -sV -sC -O --traceroute"
+        print(f"    🔓 Admin mode: Full comprehensive scan (all ports + OS detection)")
+    else:
+        # Non-privileged comprehensive scan
+        # -p-: All ports
+        # -sV: Service version detection
+        # -Pn: Skip host discovery (treat as online)
+        # Note: Skipping -sC scripts and -O OS detection which may require privileges
+        options = "-Pn -p- -sV"
+        print(f"    🔒 User mode: Comprehensive scan (all ports, no OS detection)")
+        print(f"    💡 Tip: Run as Administrator for OS detection and NSE scripts")
+    
+    return nmap_scan(target, options, timeout=3600)
 
 
 def nmap_no_ping_scan(target, ports=""):
