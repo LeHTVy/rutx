@@ -248,10 +248,25 @@ def print_help():
   • "Scan 192.168.1.1" → "check vulnerabilities on that target"
   • Use keywords: "those", "them", "the list", "previous scan"
 
+{Colors.YELLOW}▸ Commands{Colors.RESET}
+  • help      - Show this help message
+  • clear     - Clear the screen
+  • tools     - List all available scanning tools
+  • history   - Show command history (last 20 commands)
+  • banner    - Show the SNODE banner
+  • quit/exit - Exit the program
+
+{Colors.YELLOW}▸ Keyboard Shortcuts{Colors.RESET}
+  • ↑ / ↓     - Navigate command history
+  • ← / →     - Move cursor left/right
+  • Ctrl+C    - Interrupt current operation
+  • Tab       - Auto-complete (when available)
+
 {Colors.YELLOW}▸ Tips{Colors.RESET}
   • Be specific about targets (IP, domain, URL)
   • Mention scan type if needed (quick, full, vuln)
   • Results are saved for later analysis
+  • Use ↑/↓ arrows to recall previous commands
   • Reference previous scans using "those", "them", "the list"
 """)
 
@@ -264,15 +279,23 @@ def main():
 
     # Import agent here to avoid circular imports
     from agent import SNODEAgent
+    from utils import create_input_handler
 
     agent = SNODEAgent()
 
-    print(f"\n{Colors.GREEN}Ready. Enter your security objective.{Colors.RESET}\n")
+    # Create interactive input handler with history support
+    input_handler = create_input_handler(
+        prompt=f"{Colors.CYAN}SNODE{Colors.RESET}{Colors.DIM}>{Colors.RESET} ",
+        history_file=".snode_history"
+    )
+
+    print(f"\n{Colors.GREEN}Ready. Enter your security objective.{Colors.RESET}")
+    print(f"{Colors.DIM}Tip: Use ↑/↓ arrow keys to navigate command history{Colors.RESET}\n")
 
     while True:
         try:
-            # Custom prompt
-            prompt = input(f"{Colors.CYAN}SNODE{Colors.RESET}{Colors.DIM}>{Colors.RESET} ").strip()
+            # Get input with history support
+            prompt = input_handler.input().strip()
 
             if not prompt:
                 continue
@@ -302,6 +325,17 @@ def main():
             elif cmd == 'banner':
                 clear_screen()
                 print_banner()
+                continue
+
+            elif cmd == 'history':
+                history = input_handler.get_history()
+                if history:
+                    print(f"\n{Colors.YELLOW}Command History:{Colors.RESET}")
+                    for i, cmd in enumerate(history[-20:], 1):  # Show last 20
+                        print(f"  {i}. {cmd}")
+                    print()
+                else:
+                    print(f"\n{Colors.DIM}No command history yet{Colors.RESET}\n")
                 continue
 
             # Run the 3-phase scan

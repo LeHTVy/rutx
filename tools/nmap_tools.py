@@ -768,6 +768,23 @@ NMAP_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "nmap_comprehensive_scan",
+            "description": "Most comprehensive scan available: ALL 65535 ports + service detection + OS detection + default scripts + traceroute. Use for critical/high-value targets requiring complete assessment. Very slow (30+ minutes).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "description": "IP address or hostname"
+                    }
+                },
+                "required": ["target"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "nmap_vuln_scan",
             "description": "Scan for vulnerabilities using NSE scripts. Use for: 'check vulnerabilities', 'find security issues', 'vuln scan', 'security audit'.",
             "parameters": {
