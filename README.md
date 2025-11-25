@@ -166,43 +166,308 @@ rutx/
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Installation Guide
 
-### 1. Install Dependencies
+### System Requirements
+
+- **Python**: 3.8+ (3.12+ recommended for Linux)
+- **OS**: Windows 10/11 or Linux (Debian/Ubuntu)
+- **Memory**: 4GB RAM minimum
+- **Disk**: 500MB for tools + database
+
+---
+
+## 📦 Installation
+
+### Linux (Debian/Ubuntu)
+
+#### 1. Install System Dependencies
 
 ```bash
-# Python dependencies
-pip install sqlalchemy shodan requests
+# Update package list
+sudo apt update
 
-# Scanning tools
-sudo apt install nmap amass
+# Install Python and essential tools
+sudo apt install python3 python3-pip python3-venv nmap pipx
 
-# BBOT
+# Install Amass (Go required)
+sudo apt install golang-go
+go install -v github.com/owasp-amass/amass/v4/...@master
+
+# Add Go bin to PATH
+echo 'export PATH=$PATH:$HOME/go/bin' >> ~/.bashrc
+source ~/.bashrc
+```
+
+#### 2. Install BBOT
+
+```bash
+# Install with pipx (recommended)
 pipx install bbot
 
-# Ollama
-curl https://ollama.ai/install.sh | sh
-ollama pull llama3.2:3b
+# Make bbot available to sudo
+sudo ln -s ~/.local/bin/bbot /usr/local/bin/bbot
+
+# Verify installation
+bbot --version
 ```
 
-### 2. Initialize Database
+#### 3. Install Python Dependencies
 
-```python
-from database import init_database
-
-# Creates tables in data/pentest.db
-db = init_database()
+**Option A: Using pip (system-wide)**
+```bash
+cd ~/wireless/rutx
+sudo pip3 install -r requirements.txt --break-system-packages
 ```
 
-### 3. Run the Agent
+**Option B: Using virtual environment (recommended)**
+```bash
+cd ~/wireless/rutx
+
+# Create venv
+python3 -m venv venv
+
+# Activate venv
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# When running with sudo, use full path:
+sudo ./venv/bin/python main.py
+```
+
+#### 4. Install Ollama (AI Engine)
 
 ```bash
-# Interactive mode
-python intelligent_agent.py
+# Install Ollama
+curl https://ollama.ai/install.sh | sh
 
-# Enter prompt:
-> Perform comprehensive security scan on snode.com
+# Pull the AI model
+ollama pull llama3.2:3b
+
+# Verify it's running
+ollama list
 ```
+
+#### 5. Configure Shodan API (Optional)
+
+```bash
+# Edit config.py and add your API key
+nano config.py
+
+# Add this line:
+SHODAN_API_KEY = "your-api-key-here"
+```
+
+---
+
+### Windows
+
+#### 1. Install Python
+
+Download and install Python 3.12+ from [python.org](https://www.python.org/downloads/)
+
+✅ Check "Add Python to PATH" during installation
+
+#### 2. Install Scanning Tools
+
+**Nmap:**
+- Download from [nmap.org](https://nmap.org/download.html)
+- Run installer as Administrator
+- Verify: `nmap --version`
+
+**Amass:**
+- Download from [GitHub Releases](https://github.com/owasp-amass/amass/releases)
+- Extract to `C:\Tools\amass\`
+- Add to PATH: `C:\Tools\amass\`
+
+**BBOT:**
+```powershell
+pip install bbot
+```
+
+#### 3. Install Python Dependencies
+
+```powershell
+cd E:\Wireless
+pip install -r requirements.txt
+```
+
+#### 4. Install Ollama
+
+- Download from [ollama.ai](https://ollama.ai/download/windows)
+- Run installer
+- Open PowerShell and run:
+  ```powershell
+  ollama pull llama3.2:3b
+  ```
+
+---
+
+## 🔐 Running Modes: Admin vs User
+
+### Feature Comparison
+
+| Feature | 🔓 Admin Mode | 🔒 User Mode |
+|---------|--------------|--------------|
+| **Port Scanning** | All 65535 ports | All 65535 ports |
+| **Service Detection** | ✅ Full (-sV) | ✅ Full (-sV) |
+| **OS Detection** | ✅ Yes (-O) | ❌ No (skipped) |
+| **NSE Scripts** | ✅ All scripts (-sC) | ⚠️ Limited |
+| **SYN Scan** | ✅ Stealth (-sS) | ⚠️ TCP Connect (-sT) |
+| **Vulnerability Scan** | ✅ Full vuln scripts | ⚠️ Basic detection |
+
+### Linux: How to Run
+
+**User Mode (Limited Features):**
+```bash
+python3 main.py
+```
+
+**Admin Mode (Full Features):**
+```bash
+sudo python3 main.py
+# or with venv:
+sudo ./venv/bin/python main.py
+```
+
+**In-App Elevation:**
+```
+SNODE> sudo
+💡 Please restart with sudo:
+   sudo python3 main.py
+```
+
+### Windows: How to Run
+
+**User Mode:**
+```powershell
+python main.py
+```
+
+**Admin Mode:**
+1. Right-click **PowerShell** → Run as Administrator
+2. Navigate to project:
+   ```powershell
+   cd E:\Wireless
+   python main.py
+   ```
+
+**In-App Elevation:**
+```
+SNODE> sudo
+🚀 Attempting to elevate privileges...
+# UAC prompt will appear
+```
+
+---
+
+## 🎯 Quick Start Examples
+
+### Example 1: Subdomain Enumeration (Any Mode)
+
+```
+SNODE> Find subdomains of example.com
+```
+
+Output:
+```
+📦 PHASE 1: TOOL SELECTION
+  ✓ Selected: amass_enum (passive mode)
+  ✓ Selected: bbot_subdomain_enum (active mode)
+
+⚙️  PHASE 2: EXECUTION
+  [1/2] Running: amass_enum
+    📥 Found: 45 subdomains
+  [2/2] Running: bbot_subdomain_enum
+    📥 Found: 67 subdomains
+
+📝 PHASE 4: REPORT GENERATION
+  🚨 CRITICAL targets: api.example.com, admin.example.com
+  🎯 High-value targets: dev.example.com, staging.example.com
+```
+
+### Example 2: Port Scan with Smart Prioritization
+
+```
+SNODE> Port scan those subdomains
+```
+
+**User Mode Output:**
+```
+🔒 User mode: Comprehensive scan (all ports, no OS detection)
+💡 Tip: Run as Administrator for OS detection
+```
+
+**Admin Mode Output:**
+```
+🔓 Admin mode: Full comprehensive scan (all ports + OS detection)
+```
+
+### Example 3: Vulnerability Scan (Requires Admin)
+
+```
+SNODE> Run vulnerability scan on 192.168.1.100
+```
+
+**User Mode:**
+```
+🔒 User mode: Basic vulnerability detection
+💡 Tip: Run with sudo/admin for full vuln scripts
+```
+
+**Admin Mode:**
+```
+🔓 Admin mode: Full vulnerability scan with NSE scripts
+🔍 Auto-enabling Shodan for CVE enrichment
+```
+
+---
+
+## 🛠️ Advanced Configuration
+
+### Enable Database Persistence
+
+```python
+# config.py
+ENABLE_DATABASE = True
+AUTO_PARSE_RESULTS = True
+DATABASE_URL = "sqlite:///data/pentest.db"
+```
+
+### Configure Timeouts
+
+```python
+# config.py
+TIMEOUT_NMAP = 3600    # 60 minutes for comprehensive scans
+TIMEOUT_AMASS = 1800   # 30 minutes
+TIMEOUT_BBOT = 1800    # 30 minutes
+TIMEOUT_OLLAMA = 300   # 5 minutes for AI analysis
+```
+
+### Shodan API Setup
+
+1. Get free API key from [shodan.io](https://account.shodan.io/)
+2. Edit `config.py`:
+   ```python
+   SHODAN_API_KEY = "your-key-here"
+   ```
+
+---
+
+## 🎨 Interactive Commands
+
+| Command | Description |
+|---------|-------------|
+| `help` | Show help menu |
+| `tools` | List all available tools |
+| `sudo` | Restart with admin privileges |
+| `history` | Show command history |
+| `clear` | Clear screen |
+| `quit` | Exit SNODE |
+
+---
 
 ---
 
