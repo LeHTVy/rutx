@@ -61,6 +61,7 @@ class SNODEAgent:
         self.scan_results = []
         self.current_phase = IterationPhase.TOOL_SELECTION
         self.is_subdomain_scan = False  # Track if this is a subdomain enumeration scan
+        self.high_value_targets = set()  # Track high-value subdomains for smart scan prioritization
 
         # Enhanced persistence (4-phase flow)
         self.db_session_id = None  # Database ScanSession ID
@@ -323,30 +324,39 @@ Select the most appropriate tool for the user's request."""
         return tools
 
     def _get_port_scan_tools(self, target: str, user_prompt: str = "", with_osint: bool = False) -> List[Dict]:
-        """Get nmap tools for port scanning with keyword detection, optionally with OSINT enrichment"""
+        """Get nmap tools with automatic comprehensive scan for high-value targets"""
         prompt_lower = user_prompt.lower()
         
-        # Detect nmap scan type based on keywords
-        nmap_tool = "nmap_quick_scan"  # Default
-        auto_shodan = False  # Auto-enable Shodan for certain scan types
+        # Check if target is a high-value subdomain from previous scan
+        is_high_value = target.lower() in {t.lower() for t in self.high_value_targets}
         
-        if "comprehensive" in prompt_lower or "complete" in prompt_lower:
+        # Auto-upgrade to comprehensive scan for high-value targets
+        # Unless user explicitly requests quick/fast scan
+        if is_high_value and "quick" not in prompt_lower and "fast" not in prompt_lower:
             nmap_tool = "nmap_comprehensive_scan"
-            auto_shodan = True  # Comprehensive scans get Shodan automatically
-        elif "aggressive" in prompt_lower:
-            nmap_tool = "nmap_aggressive_scan"
-            auto_shodan = True  # Aggressive scans get Shodan automatically
-        elif "stealth" in prompt_lower or "stealthy" in prompt_lower or "syn" in prompt_lower:
-            nmap_tool = "nmap_stealth_scan"
-        elif "service" in prompt_lower or "version" in prompt_lower:
-            nmap_tool = "nmap_service_detection"
-        elif "full" in prompt_lower or "all ports" in prompt_lower or "all port" in prompt_lower:
-            nmap_tool = "nmap_all_ports"
-        elif "fast" in prompt_lower and "scan" in prompt_lower:
-            nmap_tool = "nmap_fast_scan"
-        elif "quick" in prompt_lower or "rapid" in prompt_lower:
-            nmap_tool = "nmap_quick_scan"
-        # Default already set to nmap_quick_scan
+            auto_shodan = True
+            print(f"  🎯 High-value target detected: {target} → Using comprehensive scan")
+        else:
+            # Detect nmap scan type based on keywords
+            nmap_tool = "nmap_quick_scan"  # Default
+            auto_shodan = False  # Auto-enable Shodan for certain scan types
+            
+            if "comprehensive" in prompt_lower or "complete" in prompt_lower:
+                nmap_tool = "nmap_comprehensive_scan"
+                auto_shodan = True  # Comprehensive scans get Shodan automatically
+            elif "aggressive" in prompt_lower:
+                nmap_tool = "nmap_aggressive_scan"
+                auto_shodan = True  # Aggressive scans get Shodan automatically
+            elif "stealth" in prompt_lower or "stealthy" in prompt_lower or "syn" in prompt_lower:
+                nmap_tool = "nmap_stealth_scan"
+            elif "service" in prompt_lower or "version" in prompt_lower:
+                nmap_tool = "nmap_service_detection"
+            elif "full" in prompt_lower or "all ports" in prompt_lower or "all port" in prompt_lower:
+                nmap_tool = "nmap_all_ports"
+            elif "fast" in prompt_lower and "scan" in prompt_lower:
+                nmap_tool = "nmap_fast_scan"
+            elif "quick" in prompt_lower or "rapid" in prompt_lower:
+                nmap_tool = "nmap_quick_scan"
         
         tools = [
             {
@@ -359,7 +369,7 @@ Select the most appropriate tool for the user's request."""
         # Skip Shodan for internal/private IPs to save API quota
         should_add_shodan = (
             with_osint or  # Explicitly requested
-            auto_shodan or  # Comprehensive/aggressive scans
+            auto_shodan or  # Comprehensive/aggressive scans or high-value targets
             (self._is_ip_address(target) and self._is_public_ip(target))  # Public IP auto-enrichment
         )
         
@@ -516,6 +526,9 @@ Select the most appropriate tool for the user's request."""
 
         # 1. Check for subdomain enumeration request
         if self._detect_subdomain_scan(user_prompt):
+            # Clear previous high-value targets for fresh subdomain scan
+            self.high_value_targets.clear()
+            
             domain = self._extract_domain_from_prompt(user_prompt)
             if domain:
                 self.is_subdomain_scan = True
@@ -1039,6 +1052,10 @@ Select the most appropriate tool for the user's request."""
         high_value = [s for s in all_sorted if any(kw in s.lower() for kw in combined_summary["high_value_keywords"])]
         combined_summary["high_value_targets"] = high_value[:20]
 
+        # Store high-value targets for smart scan prioritization
+        self.high_value_targets = set(high_value)
+        if high_value:
+            print(f"  🎯 Identified {len(high_value)} high-value targets for prioritization")
 
         print(f"\n  📊 Total unique subdomains: {combined_summary['total_unique']}")
         print(f"  📊 Overlap (found by both): {combined_summary['overlap_count']}")
