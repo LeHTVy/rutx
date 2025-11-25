@@ -158,11 +158,12 @@ def print_system_info():
     right_lines.append(f"{Colors.CYAN}▸ USAGE{Colors.RESET}")
     right_lines.append(f"  Enter natural language prompts")
     right_lines.append(f"  to perform security scans.")
+    right_lines.append(f"  {Colors.GREEN}NEW:{Colors.RESET} Reference previous scans!")
     right_lines.append("")
     right_lines.append(f"{Colors.CYAN}▸ EXAMPLES{Colors.RESET}")
-    right_lines.append(f"  {Colors.DIM}›{Colors.RESET} Scan ports on 192.168.1.1")
     right_lines.append(f"  {Colors.DIM}›{Colors.RESET} Find subdomains of example.com")
-    right_lines.append(f"  {Colors.DIM}›{Colors.RESET} Check vulns on 10.0.0.1")
+    right_lines.append(f"  {Colors.DIM}›{Colors.RESET} Port scan those subdomains")
+    right_lines.append(f"  {Colors.DIM}›{Colors.RESET} Security assessment of 10.0.0.1")
     right_lines.append("")
     right_lines.append(f"{Colors.CYAN}▸ COMMANDS{Colors.RESET}")
     right_lines.append(f"  {Colors.DIM}help{Colors.RESET}   - Show help")
@@ -241,10 +242,17 @@ def print_help():
   • "Get threat intel for suspicious IP 1.2.3.4"
   • "Comprehensive security assessment of target.com"
 
+{Colors.YELLOW}▸ Conversational Context (NEW){Colors.RESET}
+  Reference previous scan results:
+  • "Find subdomains of example.com" → "port scan those subdomains"
+  • "Scan 192.168.1.1" → "check vulnerabilities on that target"
+  • Use keywords: "those", "them", "the list", "previous scan"
+
 {Colors.YELLOW}▸ Tips{Colors.RESET}
   • Be specific about targets (IP, domain, URL)
   • Mention scan type if needed (quick, full, vuln)
   • Results are saved for later analysis
+  • Reference previous scans using "those", "them", "the list"
 """)
 
 
