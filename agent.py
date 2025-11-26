@@ -1087,6 +1087,28 @@ Select the most appropriate tool for the user's request."""
                     "threat_indicators": shodan_data.get("threat_indicators", [])
                 }
 
+            # Include Masscan data if available
+            if "masscan" in r["tool"].lower():
+                masscan_result = r["result"]
+                summary["masscan_data"] = {
+                    "targets": masscan_result.get("targets", []),
+                    "resolved_targets": masscan_result.get("resolved_targets", []),
+                    "hostname_to_ip": masscan_result.get("hostname_to_ip", {}),
+                    "results": masscan_result.get("results", {}),
+                    "ports_scanned": masscan_result.get("ports_scanned"),
+                    "command": masscan_result.get("command"),
+                    "scan_rate": masscan_result.get("scan_rate"),
+                    "targets_with_ports": masscan_result.get("targets_with_open_ports", 0),
+                    "total_open_ports": masscan_result.get("total_open_ports", 0)
+                }
+                # Override target to show first target or resolved IP
+                if masscan_result.get("targets"):
+                    targets = masscan_result["targets"]
+                    if isinstance(targets, list) and targets:
+                        summary["target"] = targets[0]
+                    elif isinstance(targets, str):
+                        summary["target"] = targets
+
             results_summary.append(summary)
 
         # Get enriched context from Phase 2 caching OR build fresh
