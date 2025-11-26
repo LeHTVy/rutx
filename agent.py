@@ -787,10 +787,15 @@ Select the most appropriate tool for the user's request."""
                 selected_tools = self._get_masscan_tools(target, ports, user_prompt)
                 reasoning = f"Masscan scan detected for {target}."
                 print(f"  🔍 Masscan scan detected for: {target}")
+                print(f"  ✓ Selected: {selected_tools[0]['name']}")
+                
+                # Show actual command that will be executed
                 if ports:
-                    print(f"  ✓ Selected: {selected_tools[0]['name']} on ports {ports}")
+                    print(f"     → Command: masscan {target} -p {ports} --rate 1000")
                 else:
-                    print(f"  ✓ Selected: {selected_tools[0]['name']}")
+                    default_ports = "80,443,8080,8443,22,3389"
+                    print(f"     → Command: masscan {target} -p {default_ports} --rate 1000")
+                
                 return selected_tools, reasoning
 
         # 4. Check for port scan request (with optional OSINT enrichment)
@@ -804,24 +809,6 @@ Select the most appropriate tool for the user's request."""
                 for tool in selected_tools:
                     if 'nmap' in tool['name']:
                         print(f"  ✓ Selected: {tool['name']}")
-                if with_osint and self._is_ip_address(target):
-                    print(f"  ✓ Selected: shodan_lookup (OSINT enrichment)")
-                    reasoning += " With Shodan OSINT enrichment."
-                return selected_tools, reasoning
-
-        # 5. Check for Shodan lookup request
-        if self._detect_shodan_lookup(user_prompt):
-            target = self._extract_ip_from_prompt(user_prompt)
-            if target:
-                selected_tools = self._get_shodan_tools(target)
-                reasoning = f"Shodan lookup detected for {target}."
-                print(f"  🔍 Shodan lookup detected for: {target}")
-                print(f"  ✓ Selected: shodan_lookup")
-                return selected_tools, reasoning
-
-        # 6. Fallback to LLM-based tool selection
-        print("  📡 Using LLM for tool selection...")
-        system_prompt = get_phase1_prompt(self._get_tool_list_string())
 
         messages = [
             {"role": "system", "content": system_prompt},
