@@ -115,50 +115,49 @@ RULES:
 
 MASSCAN_SCAN_FORMAT = """OUTPUT FORMAT FOR MASSCAN BATCH SCAN:
 
-**CRITICAL: Use ONLY the actual scan results provided. Do NOT use example data.**
+You will receive masscan scan results in JSON format. Extract and present the ACTUAL data found.
 
 ## SCAN SUMMARY
-- Targets scanned: [USE ACTUAL COUNT FROM RESULTS]
-- Scan rate: [USE ACTUAL RATE FROM COMMAND]
-- Total open ports found: [COUNT FROM ACTUAL RESULTS]
-- Targets with open ports: [ACTUAL COUNT]/[TOTAL COUNT]
-- Masscan command used: [EXACT COMMAND FROM RESULTS]
+Report these actual values from the scan data:
+- Number of targets scanned
+- Scan rate used
+- Total open ports discovered  
+- How many targets had open ports vs total targets
+- The exact masscan command executed
 
 ## BATCH RESULTS
+Create a table showing EACH target and its open ports:
+- If the target is an IP that was resolved from a hostname, show both
+- If no open ports, state "No open ports"
+- Format: TARGET | OPEN PORTS (80/tcp, 443/tcp, etc.)
 
-**Display ACTUAL results in table format grouped by target:**
+## CRITICAL FINDINGS
+Check if ANY of these ports were found:
+- RDP: 3389
+- SMB: 445, 139
+- Databases: 3306 (MySQL), 5432 (PostgreSQL), 1433 (MSSQL), 27017 (MongoDB), 6379 (Redis)
 
-```
-TARGET              OPEN PORTS
-[actual_target_1]   [actual_ports_1]
-[actual_target_2]   [actual_ports_2]
-```
+If found, list which target has which critical service.
+If NONE found, state "No critical services detected."
 
-**IMPORTANT RULES:**
-1. Use ONLY the IP addresses and ports found in the actual scan results
-2. If a hostname was resolved to IP, show: "hostname (IP)" → ports
-3. If no ports found, state "No open ports detected"
-4. Do NOT invent or use example data like "subdomain1.example.com"
+## WEB SERVICES
+Count how many targets have web ports open (80, 443, 8080, 8443, 9000).
 
-### Critical Findings
-[List ACTUAL targets with critical ports if found: RDP (3389), SMB (445), databases (3306, 5432, 1433)]
-[If NONE found, state "No critical services detected"]
-
-### Web Services Summary
-[Count of ACTUAL targets with HTTP/HTTPS (ports 80, 443, 8080, 8443)]
-
-### Statistics
-- Unique ports discovered: [LIST ACTUAL UNIQUE PORT NUMBERS FROM RESULTS]
-- Port distribution: [COUNT HOW MANY TARGETS HAVE EACH PORT]
+## STATISTICS  
+- List all unique port numbers found
+- Show distribution (how many targets have each port)
 
 ## SECURITY OBSERVATIONS
-[Analyze ACTUAL findings - patterns, concerns based on what was REALLY found]
+Based on what was ACTUALLY found, provide observations about:
+- Unusual port combinations
+- Services that shouldn't be exposed
+- Patterns across targets
 
-## RECOMMENDED NEXT STEPS
-1. [SPECIFIC recommendations based on ACTUAL findings]
-2. [Do NOT give generic recommendations - base on real results]
-
-**REMINDER: Report must reflect ONLY the actual scan data provided, not examples or templates.**
+## RECOMMENDATIONS
+Based ONLY on actual findings, suggest specific next steps.
+If databases found → recommend checking authentication.
+If RDP/SMB found → flag as critical security risk.
+If only web ports → recommend web vulnerability scanning.
 """
 
 VULN_SCAN_FORMAT = """OUTPUT FORMAT FOR VULNERABILITY SCAN:
