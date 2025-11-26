@@ -19,7 +19,7 @@ from typing import Dict, Any, List, Optional
 import xml.etree.ElementTree as ET
 
 from .models_enhanced import (
-    ScanSession, NmapResult, ShodanResult, BBOTResult, AmassResult,
+    ScanSession, NmapResult, ShodanResult, BBOTResult, AmassResult, MasscanResult,
     CVEEnrichment, ThreatIntelligence, LLMContextCache, GeneratedReport,
     get_nmap_summary_for_target, get_subdomain_summary_for_domain, get_threat_context_for_ip
 )
@@ -488,6 +488,88 @@ class ToolResultPersister:
         self.db.commit()
         return amass_result
 
+    def save_masscan_result(self, result: Dict[str, Any]) -> MasscanResult:
+        """Save Masscan scan result with critical service detection."""
+        targets = result.get('targets', [])
+        if isinstance(targets, str):
+            targets = [targets]
+        
+        resolved = result.get('resolved_targets', targets)
+        results_data = result.get('results', {})
+        
+        # Identify critical services (RDP, SMB, databases)
+        critical = self._extract_critical_services(results_data)
+        
+        # Group by hostname for easy LLM queries
+        hostname_mapping = result.get('hostname_to_ip', {})
+        by_hostname = self._group_masscan_by_hostname(results_data, hostname_mapping)
+        
+        masscan_result = MasscanResult(
+            session_id=self.session_id,
+            targets=targets,
+            resolved_targets=resolved,
+            hostname_to_ip=hostname_mapping,
+            scan_type=result.get('tool', '').replace('masscan_', ''),
+            ports_scanned=result.get('ports_scanned'),
+            scan_rate=result.get('scan_rate'),
+            command=result.get('command'),
+            json_output_path=result.get('output_json'),
+            elapsed_seconds=result.get('elapsed_seconds'),
+            targets_count=result.get('targets_count', len(targets)),
+            targets_with_ports=result.get('targets_with_open_ports', 0),
+            total_open_ports=result.get('total_open_ports', 0),
+            results=results_data,
+            results_by_hostname=by_hostname if by_hostname else None,
+            critical_services_found=critical if critical else None
+        )
+        
+        self.db.add(masscan_result)
+        self.db.commit()
+        return masscan_result
+
+    def _extract_critical_services(self, results: Dict) -> List[Dict]:
+        """Identify critical services (RDP, SMB, databases)."""
+        critical_ports = {
+            3389: "rdp",
+            445: "smb",
+            139: "netbios",
+            3306: "mysql",
+            5432: "postgresql",
+            1433: "mssql",
+            27017: "mongodb",
+            6379: "redis",
+            1521: "oracle"
+        }
+        
+        critical_findings = []
+        for ip, ports in results.items():
+            for port_info in ports:
+                port = port_info.get('port')
+                if port in critical_ports:
+                    critical_findings.append({
+                        "target": ip,
+                        "port": port,
+                        "service": critical_ports[port],
+                        "protocol": port_info.get('protocol', 'tcp')
+                    })
+        
+        return critical_findings
+
+    def _group_masscan_by_hostname(self, results: Dict, hostname_to_ip: Dict) -> Dict:
+        """Group results by original hostname for better LLM presentation."""
+        if not hostname_to_ip:
+            return {}
+        
+        # Reverse mapping: IP -> hostname
+        ip_to_hostname = {ip: hostname for hostname, ip in hostname_to_ip.items()}
+        
+        by_hostname = {}
+        for ip, ports in results.items():
+            hostname = ip_to_hostname.get(ip, ip)
+            by_hostname[hostname] = [p.get('port') for p in ports]
+        
+        return by_hostname
+
     def save_tool_result(self, tool_name: str, result: Dict[str, Any]) -> Any:
         """
         Generic method to save any tool result.
@@ -503,6 +585,8 @@ class ToolResultPersister:
             return self.save_bbot_result(result)
         elif 'amass' in tool_lower:
             return self.save_amass_result(result)
+        elif 'masscan' in tool_lower:
+            return self.save_masscan_result(result)
         else:
             # Unknown tool - just log
             print(f"  Warning: No persister for tool '{tool_name}'")
@@ -539,6 +623,7 @@ class LLMContextBuilder:
             },
             "nmap_data": self._get_nmap_context(session_id),
             "shodan_data": self._get_shodan_context(session_id),
+            "masscan_data": self._get_masscan_context(session_id),
             "subdomain_data": self._get_subdomain_context(session_id),
             "threat_intel": self._get_threat_context(session_id),
             "summary": {}
@@ -557,6 +642,11 @@ class LLMContextBuilder:
     def _get_shodan_context(self, session_id: str) -> List[Dict]:
         """Get Shodan results for session."""
         results = self.db.query(ShodanResult).filter_by(session_id=session_id).all()
+        return [r.to_dict() for r in results]
+
+    def _get_masscan_context(self, session_id: str) -> List[Dict]:
+        """Get Masscan results for session."""
+        results = self.db.query(MasscanResult).filter_by(session_id=session_id).all()
         return [r.to_dict() for r in results]
 
     def _get_subdomain_context(self, session_id: str) -> Dict[str, Any]:

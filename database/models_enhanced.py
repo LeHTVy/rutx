@@ -74,6 +74,7 @@ class ScanSession(Base):
     shodan_results = relationship("ShodanResult", back_populates="session", cascade="all, delete-orphan")
     bbot_results = relationship("BBOTResult", back_populates="session", cascade="all, delete-orphan")
     amass_results = relationship("AmassResult", back_populates="session", cascade="all, delete-orphan")
+    masscan_results = relationship("MasscanResult", back_populates="session", cascade="all, delete-orphan")
     generated_reports = relationship("GeneratedReport", back_populates="session", cascade="all, delete-orphan")
 
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -344,6 +345,78 @@ class AmassResult(Base):
             "subdomains_by_category": self.subdomains_by_category,
             "high_value_targets": self.high_value_targets,
             "executed_at": self.executed_at.isoformat() if self.executed_at else None
+        }
+
+
+class MasscanResult(Base):
+    """
+    Stores Masscan port scan results for fast batch scanning.
+    Optimized for scanning many targets quickly.
+    """
+    __tablename__ = 'masscan_results'
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    session_id = Column(String(36), ForeignKey('scan_sessions.id'), nullable=True, index=True)
+
+    # Target info
+    targets = Column(JSON, nullable=False)  # Original targets (hostnames or IPs)
+    resolved_targets = Column(JSON, nullable=True)  # Resolved IPs
+    hostname_to_ip = Column(JSON, nullable=True)  # DNS mapping
+
+    # Scan parameters
+    scan_type = Column(String(50), nullable=True)  # quick_scan, batch_scan, port_scan, web_scan
+    ports_scanned = Column(String(200), nullable=True)  # "80,443,8080" or "1-1000"
+    scan_rate = Column(Integer, nullable=True)  # Packets/sec
+
+    # Execution
+    command = Column(Text, nullable=True)
+    json_output_path = Column(String(500), nullable=True)
+    elapsed_seconds = Column(Float, nullable=True)
+    executed_at = Column(DateTime, default=datetime.utcnow)
+
+    # Results summary
+    targets_count = Column(Integer, default=0)
+    targets_with_ports = Column(Integer, default=0)
+    total_open_ports = Column(Integer, default=0)
+
+    # Parsed results (structured for LLM)
+    results = Column(JSON, nullable=True)  # {ip: [{port, protocol, state}]}
+    results_by_hostname = Column(JSON, nullable=True)  # {hostname: [ports]} for better presentation
+
+    # High-value findings (for LLM prioritization)
+    critical_services_found = Column(JSON, nullable=True)  # Targets with RDP/SMB/databases
+
+    # Relationships
+    session = relationship("ScanSession", back_populates="masscan_results")
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index('idx_masscan_session', 'session_id'),
+        Index('idx_masscan_type_date', 'scan_type', 'executed_at'),
+    )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "targets": self.targets,
+            "scan_type": self.scan_type,
+            "targets_count": self.targets_count,
+            "targets_with_ports": self.targets_with_ports,
+            "total_open_ports": self.total_open_ports,
+            "results": self.results,
+            "results_by_hostname": self.results_by_hostname,
+            "critical_services_found": self.critical_services_found,
+            "executed_at": self.executed_at.isoformat() if self.executed_at else None
+        }
+
+    def get_open_ports_by_target(self) -> Dict[str, List[int]]:
+        """Get simplified {target: [ports]} mapping."""
+        if not self.results:
+            return {}
+        return {
+            ip: [p['port'] for p in ports]
+            for ip, ports in self.results.items()
         }
 
 
