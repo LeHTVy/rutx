@@ -1009,6 +1009,12 @@ Select the most appropriate tool for the user's request."""
             if not nmap_tools:
                 return "osint"
         
+        # Check for masscan tools
+        masscan_tools = ["masscan_scan", "masscan_quick_scan", "masscan_batch_scan",
+                        "masscan_port_scan", "masscan_web_scan"]
+        if any(tool in tools_used for tool in masscan_tools):
+            return "masscan"
+        
         # Check for port scan tools
         port_scan_tools = ["nmap_quick_scan", "nmap_fast_scan", "nmap_port_scan", 
                           "nmap_all_ports", "nmap_service_detection", "nmap_aggressive_scan",
