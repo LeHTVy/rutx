@@ -115,51 +115,50 @@ RULES:
 
 MASSCAN_SCAN_FORMAT = """OUTPUT FORMAT FOR MASSCAN BATCH SCAN:
 
+**CRITICAL: Use ONLY the actual scan results provided. Do NOT use example data.**
+
 ## SCAN SUMMARY
-- Targets scanned: [count]
-- Scan rate: [packets/sec]
-- Total open ports found: [count]
-- Targets with open ports: [count]/[total]
-- Masscan command used: [command]
+- Targets scanned: [USE ACTUAL COUNT FROM RESULTS]
+- Scan rate: [USE ACTUAL RATE FROM COMMAND]
+- Total open ports found: [COUNT FROM ACTUAL RESULTS]
+- Targets with open ports: [ACTUAL COUNT]/[TOTAL COUNT]
+- Masscan command used: [EXACT COMMAND FROM RESULTS]
 
 ## BATCH RESULTS
 
-Display in table format grouped by target:
+**Display ACTUAL results in table format grouped by target:**
 
 ```
-TARGET                      OPEN PORTS
-subdomain1.example.com      80/tcp, 443/tcp
-subdomain2.example.com      22/tcp, 80/tcp, 443/tcp, 3389/tcp
-subdomain3.example.com      No open ports
-api.example.com             80/tcp, 443/tcp, 3306/tcp
+TARGET              OPEN PORTS
+[actual_target_1]   [actual_ports_1]
+[actual_target_2]   [actual_ports_2]
 ```
+
+**IMPORTANT RULES:**
+1. Use ONLY the IP addresses and ports found in the actual scan results
+2. If a hostname was resolved to IP, show: "hostname (IP)" → ports
+3. If no ports found, state "No open ports detected"
+4. Do NOT invent or use example data like "subdomain1.example.com"
 
 ### Critical Findings
-[Targets with critical services: RDP (3389), SMB (445), databases (3306, 5432, 1433), admin ports]
+[List ACTUAL targets with critical ports if found: RDP (3389), SMB (445), databases (3306, 5432, 1433)]
+[If NONE found, state "No critical services detected"]
 
 ### Web Services Summary
-[Count of targets with HTTP/HTTPS services found, list if significant]
+[Count of ACTUAL targets with HTTP/HTTPS (ports 80, 443, 8080, 8443)]
 
 ### Statistics
-- Total unique ports discovered: [list unique port numbers]
-- Most common ports: [port counts]
+- Unique ports discovered: [LIST ACTUAL UNIQUE PORT NUMBERS FROM RESULTS]
+- Port distribution: [COUNT HOW MANY TARGETS HAVE EACH PORT]
 
 ## SECURITY OBSERVATIONS
-[Highlight patterns, unexpected services, or security concerns based on the batch results]
+[Analyze ACTUAL findings - patterns, concerns based on what was REALLY found]
 
 ## RECOMMENDED NEXT STEPS
-1. Detailed scans: Run nmap service detection on targets with critical ports
-2. Vulnerability scanning: Run vuln scans on high-risk services
-3. Further investigation: [Specific recommendations based on findings]
+1. [SPECIFIC recommendations based on ACTUAL findings]
+2. [Do NOT give generic recommendations - base on real results]
 
-RULES:
-- Show results grouped by target for clarity
-- Highlight CRITICAL services found (RDP, databases, admin panels)
-- Mention total unique ports discovered across all targets
-- Note: Masscan shows OPEN ports only (not filtered/closed)
-- Include the actual masscan command that was used
-- Suggest nmap follow-up scans for detailed service detection
-- Use table format for better readability
+**REMINDER: Report must reflect ONLY the actual scan data provided, not examples or templates.**
 """
 
 VULN_SCAN_FORMAT = """OUTPUT FORMAT FOR VULNERABILITY SCAN:
