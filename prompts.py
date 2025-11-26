@@ -62,20 +62,39 @@ PORT_SCAN_FORMAT = """OUTPUT FORMAT FOR PORT SCAN:
 
 ## SCAN SUMMARY
 - Target: [IP/hostname]
-- Open ports found: [count]
-- Services identified: [count]
 - Scan type: [quick/full/aggressive/etc]
+- Nmap command used: [command]
+- Total ports scanned: [count]
+- Port states found:
+  * Open: [count]
+  * Closed: [count]
+  * Filtered: [count]
 
-## OPEN PORTS & SERVICES
+## PORT SCAN RESULTS
+
+**CRITICAL: Display port information in a clear table format showing PORT STATE for all ports.**
+
+Example format:
+```
+PORT      STATE      SERVICE
+22/tcp    open       ssh
+80/tcp    open       http
+443/tcp   open       https
+3306/tcp  filtered   mysql
+8080/tcp  closed     http-proxy
+```
 
 ### Critical Services (High Risk)
-[List ports with potentially vulnerable services - RDP, SMB, databases, etc.]
+[List ports with potentially vulnerable services - RDP, SMB, databases, etc. with their states]
 
 ### Web Services
-[List HTTP/HTTPS and related ports with versions]
+[List HTTP/HTTPS and related ports with versions and states]
 
-### Other Services
-[List remaining open ports with service details]
+### Other Open Ports
+[List remaining open ports with service details and states]
+
+### Filtered/Closed Ports (if significant)
+[If there are important filtered or closed ports worth mentioning, list them here]
 
 ## SECURITY FINDINGS
 [Highlight any concerning configurations, outdated versions, or exposed services]
@@ -84,10 +103,63 @@ PORT_SCAN_FORMAT = """OUTPUT FORMAT FOR PORT SCAN:
 [Suggest specific follow-up scans based on findings, e.g., "Run vulnerability scan on port 445 (SMB)"]
 
 RULES:
+- ALWAYS show port states (open/closed/filtered) in output
+- Use table format for port listings to ensure clarity
 - Focus on PORT and SERVICE information
 - NO subdomain categorization
-- Flag high-risk services (RDP 3389, SMB 445, databases)
+- Flag high-risk services (RDP 3389, SMB 445, databases, telnet 23)
+- Mention if ports are filtered (firewall) vs closed vs open
+- Include the actual nmap command that was used
 - Suggest specific next steps based on open ports
+"""
+
+MASSCAN_SCAN_FORMAT = """OUTPUT FORMAT FOR MASSCAN BATCH SCAN:
+
+## SCAN SUMMARY
+- Targets scanned: [count]
+- Scan rate: [packets/sec]
+- Total open ports found: [count]
+- Targets with open ports: [count]/[total]
+- Masscan command used: [command]
+
+## BATCH RESULTS
+
+Display in table format grouped by target:
+
+```
+TARGET                      OPEN PORTS
+subdomain1.example.com      80/tcp, 443/tcp
+subdomain2.example.com      22/tcp, 80/tcp, 443/tcp, 3389/tcp
+subdomain3.example.com      No open ports
+api.example.com             80/tcp, 443/tcp, 3306/tcp
+```
+
+### Critical Findings
+[Targets with critical services: RDP (3389), SMB (445), databases (3306, 5432, 1433), admin ports]
+
+### Web Services Summary
+[Count of targets with HTTP/HTTPS services found, list if significant]
+
+### Statistics
+- Total unique ports discovered: [list unique port numbers]
+- Most common ports: [port counts]
+
+## SECURITY OBSERVATIONS
+[Highlight patterns, unexpected services, or security concerns based on the batch results]
+
+## RECOMMENDED NEXT STEPS
+1. Detailed scans: Run nmap service detection on targets with critical ports
+2. Vulnerability scanning: Run vuln scans on high-risk services
+3. Further investigation: [Specific recommendations based on findings]
+
+RULES:
+- Show results grouped by target for clarity
+- Highlight CRITICAL services found (RDP, databases, admin panels)
+- Mention total unique ports discovered across all targets
+- Note: Masscan shows OPEN ports only (not filtered/closed)
+- Include the actual masscan command that was used
+- Suggest nmap follow-up scans for detailed service detection
+- Use table format for better readability
 """
 
 VULN_SCAN_FORMAT = """OUTPUT FORMAT FOR VULNERABILITY SCAN:
@@ -244,7 +316,9 @@ def get_phase3_prompt(scan_results: str, db_context: str = "{}", scan_type: str 
     """Build Phase 3 (Analysis) prompt with scan-type specific format"""
     
     # Select appropriate format based on scan type
-    if scan_type == "port_scan":
+    if scan_type == "masscan" or "masscan" in scan_results.lower():
+        output_format = MASSCAN_SCAN_FORMAT
+    elif scan_type == "port_scan":
         output_format = PORT_SCAN_FORMAT
     elif scan_type == "vuln_scan":
         output_format = VULN_SCAN_FORMAT

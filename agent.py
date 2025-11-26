@@ -377,7 +377,12 @@ Select the most appropriate tool for the user's request."""
             print(f"  🎯 High-value target detected: {target} → Comprehensive scan")
         else:
             # Detect nmap scan type based on keywords
-            nmap_tool = "nmap_quick_scan"  # Default
+            if self._is_ip_address(target):
+                 # Single IP target - default to better scan (Top 1000 + Version)
+                 nmap_tool = "nmap_service_detection"
+            else:
+                 nmap_tool = "nmap_quick_scan"  # Default for domains/unknowns
+            
             auto_shodan = False  # Auto-enable Shodan for certain scan types
             
             if "comprehensive" in prompt_lower or "complete" in prompt_lower:
@@ -582,13 +587,14 @@ Select the most appropriate tool for the user's request."""
                 selected_tools = []
                 
                 # Process priority targets with service detection (Top 1000 + Version)
+                # Use nmap for detailed analysis of critical/high-value targets
                 for target in critical_list + high_value_list:
                     selected_tools.append({
                         "name": "nmap_service_detection",  # Top 1000 ports + Version info
                         "arguments": {"target": target}
                     })
                 
-                # Also scan all other (non-priority) subdomains with quick scan
+                # Also scan all other (non-priority) subdomains
                 all_subdomains = set()
                 for scan_result in self.scan_results:
                     if scan_result.get("result", {}).get("subdomains"):
@@ -597,26 +603,43 @@ Select the most appropriate tool for the user's request."""
                 # Get non-priority targets
                 other_targets = sorted(all_subdomains - self.critical_targets - self.high_value_targets)
                 
-                for target in other_targets:
+                # Use masscan for batch scanning if many targets (10+)
+                if len(other_targets) >= 10:
+                    # Masscan batch scan - much faster for many targets
                     selected_tools.append({
-                        "name": "nmap_quick_scan",  # Top 100 ports - very fast
-                        "arguments": {"target": target}
+                        "name": "masscan_batch_scan",
+                        "arguments": {"targets": ",".join(other_targets)}
                     })
+                else:
+                    # Use nmap quick scan for few targets
+                    for target in other_targets:
+                        selected_tools.append({
+                            "name": "nmap_quick_scan",  # Top 100 ports - very fast
+                            "arguments": {"target": target}
+                        })
                 
                 total_targets = len(all_subdomains)
                 priority_count = len(critical_list) + len(high_value_list)
                 other_count = len(other_targets)
                 
-                reasoning = f"Smart batch scan: {priority_count} priority targets (service scan) + {other_count} others (quick scan) = {total_targets} total"
+                if len(other_targets) >= 10:
+                    scan_strategy = f"{priority_count} priority (nmap service) + {other_count} others (masscan batch)"
+                    reasoning = f"Smart batch scan: {scan_strategy} = {total_targets} total"
+                else:
+                    reasoning = f"Smart batch scan: {priority_count} priority targets (service scan) + {other_count} others (quick scan) = {total_targets} total"
                 
-                print(f"  🚨 {len(critical_list)} CRITICAL targets → Service scan (top 1000 + version)")
-                print(f"  🎯 {len(high_value_list)} High-value targets → Service scan (top 1000 + version)")
-                print(f"  ⚡ {len(other_targets)} Other targets → Quick scan (top 100 ports)")
+                print(f"  🚨 {len(critical_list)} CRITICAL targets → Nmap service scan (top 1000 + version)")
+                print(f"  🎯 {len(high_value_list)} High-value targets → Nmap service scan (top 1000 + version)")
+                if len(other_targets) >= 10:
+                    print(f"  ⚡ {len(other_targets)} Other targets → Masscan batch scan (FAST)")
+                else:
+                    print(f"  ⚡ {len(other_targets)} Other targets → Nmap quick scan (top 100 ports)")
                 
                 if selected_tools:
                     print(f"  ✓ Selected: Port scan for {len(selected_tools)} total targets")
                     for i, tool in enumerate(selected_tools[:3], 1):
-                        print(f"    {i}. {tool['arguments']['target']} ({tool['name']})")
+                        tool_target = tool['arguments'].get('target') or f"{len(tool['arguments'].get('targets', '').split(','))} targets"
+                        print(f"    {i}. {tool_target} ({tool['name']})")
                     if len(selected_tools) > 3:
                         print(f"    ... and {len(selected_tools) - 3} more")
                     return selected_tools, reasoning
@@ -630,24 +653,36 @@ Select the most appropriate tool for the user's request."""
                         recovered_subdomains.extend(scan_result["result"]["subdomains"])
 
                 if recovered_subdomains:
-                    # Scan ALL recovered subdomains with quick scan
                     targets_to_scan = sorted(set(recovered_subdomains))
-                    print(f"  🔗 Context reference detected - recovered {len(targets_to_scan)} subdomains from interrupted scan")
-                    selected_tools = []
-                    reasoning = f"Port scanning {len(targets_to_scan)} subdomains recovered from previous scan (quick scan)."
-
-                    for target in targets_to_scan:
-                        selected_tools.append({
-                            "name": "nmap_quick_scan",
-                            "arguments": {"target": target}
-                        })
+                    
+                    # Use masscan for batch scanning if many targets (10+)
+                    if len(targets_to_scan) >= 10:
+                        print(f"  🔗 Context reference detected - recovered {len(targets_to_scan)} subdomains from interrupted scan")
+                        selected_tools = [{
+                            "name": "masscan_batch_scan",
+                            "arguments": {"targets": ",".join(targets_to_scan)}
+                        }]
+                        reasoning = f"Port scanning {len(targets_to_scan)} subdomains recovered from previous scan (masscan batch)."
+                        print(f"  ✓ Selected: Masscan batch scan for {len(targets_to_scan)} targets (FAST)")
+                    else:
+                        # Use nmap quick scan for few targets
+                        print(f"  🔗 Context reference detected - recovered {len(targets_to_scan)} subdomains from interrupted scan")
+                        selected_tools = []
+                        reasoning = f"Port scanning {len(targets_to_scan)} subdomains recovered from previous scan (quick scan)."
+                        
+                        for target in targets_to_scan:
+                            selected_tools.append({
+                                "name": "nmap_quick_scan",
+                                "arguments": {"target": target}
+                            })
 
                     if selected_tools:
-                        print(f"  ✓ Selected: Quick scan for {len(selected_tools)} targets")
-                        for i, tool in enumerate(selected_tools[:3], 1):
-                            print(f"    {i}. {tool['arguments']['target']} ({tool['name']})")
-                        if len(selected_tools) > 3:
-                            print(f"    ... and {len(selected_tools) - 3} more")
+                        if len(targets_to_scan) < 10:
+                            print(f"  ✓ Selected: Quick scan for {len(selected_tools)} targets")
+                            for i, tool in enumerate(selected_tools[:3], 1):
+                                print(f"    {i}. {tool['arguments']['target']} ({tool['name']})")
+                            if len(selected_tools) > 3:
+                                print(f"    ... and {len(selected_tools) - 3} more")
                         return selected_tools, reasoning
                 else:
                     print("  ⚠️  Context reference detected but no usable targets from previous scan")
@@ -862,6 +897,14 @@ Select the most appropriate tool for the user's request."""
                 else:
                     print(f"    ⚠️  {result.get('error', 'Unknown error')}")
 
+            except requests.exceptions.ConnectionError as e:
+                print(f"    ⚠️  Network Error: Could not connect to external service (DNS/Internet issue).")
+                print(f"    ℹ️  Continuing without this tool's results.")
+                results.append({
+                    "tool": tool_name,
+                    "args": tool_args,
+                    "result": {"success": False, "error": "Network Connection Error (DNS/Internet)"}
+                })
             except Exception as e:
                 print(f"    ❌ Error: {e}")
                 results.append({

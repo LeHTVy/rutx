@@ -12,6 +12,7 @@ from .nmap_tools import NMAP_TOOLS, execute_tool as execute_nmap_tool
 from .amass_tools import AMASS_TOOLS, execute_amass_tool
 from .bbot_tools import BBOT_TOOLS, execute_bbot_tool
 from .shodan_tools import SHODAN_TOOLS, execute_shodan_tool
+from .masscan_tools import MASSCAN_TOOLS, execute_masscan_tool
 
 # ============================================================================
 # OUTPUT MANAGEMENT (inline)
@@ -106,7 +107,7 @@ def execute_output_manager_tool(tool_name, tool_args):
 # COMBINE ALL TOOLS
 # ============================================================================
 
-ALL_TOOLS = NMAP_TOOLS + AMASS_TOOLS + BBOT_TOOLS + SHODAN_TOOLS + OUTPUT_MANAGER_TOOLS
+ALL_TOOLS = NMAP_TOOLS + AMASS_TOOLS + BBOT_TOOLS + SHODAN_TOOLS + MASSCAN_TOOLS + OUTPUT_MANAGER_TOOLS
 
 
 def get_all_tool_names():
@@ -140,6 +141,8 @@ def execute_tool(tool_name: str, tool_args: dict):
         return execute_bbot_tool(tool_name, tool_args)
     if tool_name in [t['function']['name'] for t in SHODAN_TOOLS]:
         return execute_shodan_tool(tool_name, tool_args)
+    if tool_name in [t['function']['name'] for t in MASSCAN_TOOLS]:
+        return execute_masscan_tool(tool_name, tool_args)
     if tool_name in [t['function']['name'] for t in OUTPUT_MANAGER_TOOLS]:
         return execute_output_manager_tool(tool_name, tool_args)
 
