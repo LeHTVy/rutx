@@ -814,6 +814,17 @@ Select the most appropriate tool for the user's request."""
             target = self._extract_ip_from_prompt(user_prompt)
             if target:
                 selected_tools = self._get_shodan_tools(target)
+                reasoning = f"Shodan lookup detected for {target}."
+                print(f"  🔍 Shodan lookup detected for: {target}")
+                print(f"  ✓ Selected: shodan_lookup")
+                return selected_tools, reasoning
+
+        # 6. Fallback to LLM-based tool selection
+        print("  📡 Using LLM for tool selection...")
+        system_prompt = get_phase1_prompt(self._get_tool_list_string())
+
+        messages = [
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
 
