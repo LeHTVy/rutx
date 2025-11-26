@@ -115,49 +115,60 @@ RULES:
 
 MASSCAN_SCAN_FORMAT = """OUTPUT FORMAT FOR MASSCAN BATCH SCAN:
 
-You will receive masscan scan results in JSON format. Extract and present the ACTUAL data found.
+**CRITICAL ANTI-HALLUCINATION RULES:**
+1. DO NOT invent ANY IP addresses, hostnames, or services
+2. DO NOT use example data like "System A/B/C" or "192.168.x.x"
+3. ONLY report data that EXISTS in the scan_results JSON below
+4. If you cannot find specific data, state "Data not found" instead of inventing it
+
+**STEP 1: EXTRACT DATA FROM scan_results JSON**
+
+Look for the "masscan_data" field in the scan results. Extract:
+- targets: List of original hostnames scanned
+- results: Dictionary of {IP: [{port, protocol, state}]}
+- hostname_to_ip: Mapping of hostnames to resolved IPs
+- command: The actual masscan command executed
+- scan_rate, ports_scanned, total_open_ports
+
+**STEP 2: CREATE REPORT USING ONLY EXTRACTED DATA**
 
 ## SCAN SUMMARY
-Report these actual values from the scan data:
-- Number of targets scanned
-- Scan rate used
-- Total open ports discovered  
-- How many targets had open ports vs total targets
-- The exact masscan command executed
+Report fromMasscan data:
+- Targets scanned: [Count from targets list]
+- Scan rate: [From scan_rate field] packets/sec
+- Total open ports: [From total_open_ports]
+- Command executed: [Full command string]
 
-## BATCH RESULTS
-Create a table showing EACH target and its open ports:
-- If the target is an IP that was resolved from a hostname, show both
-- If no open ports, state "No open ports"
-- Format: TARGET | OPEN PORTS (80/tcp, 443/tcp, etc.)
+## RESULTS TABLE
+For EACH IP in the results dictionary, show:
 
-## CRITICAL FINDINGS
-Check if ANY of these ports were found:
-- RDP: 3389
-- SMB: 445, 139
-- Databases: 3306 (MySQL), 5432 (PostgreSQL), 1433 (MSSQL), 27017 (MongoDB), 6379 (Redis)
+| HOSTNAME (IP) | OPEN PORTS |
+|---------------|------------|
+| hostname (IP) | port1/tcp, port2/tcp |
 
-If found, list which target has which critical service.
-If NONE found, state "No critical services detected."
+Use the hostname_to_ip mapping to show hostnames with their IPs.
+
+## CRITICAL SERVICES
+Check results for these ports ONLY:
+- 3389 (RDP), 445/139 (SMB), 3306 (MySQL), 5432 (PostgreSQL), 1433 (MSSQL)
+
+If found, list: "hostname (IP): port/protocol - service"
+If NONE found: "No critical services detected"
 
 ## WEB SERVICES
-Count how many targets have web ports open (80, 443, 8080, 8443, 9000).
+Count IPs that have ports 80, 443, 8080, or 8443 open.
 
-## STATISTICS  
-- List all unique port numbers found
-- Show distribution (how many targets have each port)
-
-## SECURITY OBSERVATIONS
-Based on what was ACTUALLY found, provide observations about:
-- Unusual port combinations
-- Services that shouldn't be exposed
-- Patterns across targets
+## STATISTICS
+- List all unique port numbers from the results
+- Count how many targets have each port
 
 ## RECOMMENDATIONS
-Based ONLY on actual findings, suggest specific next steps.
-If databases found → recommend checking authentication.
-If RDP/SMB found → flag as critical security risk.
-If only web ports → recommend web vulnerability scanning.
+Based ONLY on what ports were actually found, suggest:
+- If databases found → verify access controls
+- If RDP/SMB found → flag as high-risk external exposure  
+- If only web ports → recommend WAF review
+
+**VERIFICATION**: Before sending, verify you used ONLY data from scan_results. If you used ANY example IPs or invented systems, DELETE THE REPORT AND START OVER.
 """
 
 VULN_SCAN_FORMAT = """OUTPUT FORMAT FOR VULNERABILITY SCAN:
