@@ -775,23 +775,7 @@ Select the most appropriate tool for the user's request."""
                     reasoning += " With Shodan CVE enrichment."
                 return selected_tools, reasoning
 
-        # 3. Check for port scan request (with optional OSINT enrichment)
-        if self._detect_port_scan(user_prompt):
-            target = self._extract_target_from_prompt(user_prompt)
-            if target:
-                with_osint = self._detect_osint_enrichment(user_prompt)
-                selected_tools = self._get_port_scan_tools(target, user_prompt, with_osint=with_osint)
-                reasoning = f"Port scan detected for {target}."
-                print(f"  🔍 Port scan detected for: {target}")
-                for tool in selected_tools:
-                    if 'nmap' in tool['name']:
-                        print(f"  ✓ Selected: {tool['name']}")
-                if with_osint and self._is_ip_address(target):
-                    print(f"  ✓ Selected: shodan_lookup (OSINT enrichment)")
-                    reasoning += " With Shodan OSINT enrichment."
-                return selected_tools, reasoning
-
-        # 4. Check for masscan request
+        # 3. Check for masscan request (BEFORE port scan to avoid conflict)
         if self._detect_masscan_scan(user_prompt):
             target = self._extract_target_from_prompt(user_prompt)
             if target:
@@ -807,6 +791,22 @@ Select the most appropriate tool for the user's request."""
                     print(f"  ✓ Selected: {selected_tools[0]['name']} on ports {ports}")
                 else:
                     print(f"  ✓ Selected: {selected_tools[0]['name']}")
+                return selected_tools, reasoning
+
+        # 4. Check for port scan request (with optional OSINT enrichment)
+        if self._detect_port_scan(user_prompt):
+            target = self._extract_target_from_prompt(user_prompt)
+            if target:
+                with_osint = self._detect_osint_enrichment(user_prompt)
+                selected_tools = self._get_port_scan_tools(target, user_prompt, with_osint=with_osint)
+                reasoning = f"Port scan detected for {target}."
+                print(f"  🔍 Port scan detected for: {target}")
+                for tool in selected_tools:
+                    if 'nmap' in tool['name']:
+                        print(f"  ✓ Selected: {tool['name']}")
+                if with_osint and self._is_ip_address(target):
+                    print(f"  ✓ Selected: shodan_lookup (OSINT enrichment)")
+                    reasoning += " With Shodan OSINT enrichment."
                 return selected_tools, reasoning
 
         # 5. Check for Shodan lookup request
