@@ -248,6 +248,14 @@ Select the most appropriate tool for the user's request."""
         prompt_lower = user_prompt.lower()
         return any(keyword in prompt_lower for keyword in shodan_keywords)
 
+    def _detect_masscan_scan(self, user_prompt: str) -> bool:
+        """Detect if user is requesting masscan scanning"""
+        masscan_keywords = [
+            'masscan', 'mass scan', 'fast scan', 'batch scan'
+        ]
+        prompt_lower = user_prompt.lower()
+        return any(keyword in prompt_lower for keyword in masscan_keywords)
+
     def _detect_osint_enrichment(self, user_prompt: str) -> bool:
         """Detect if user wants OSINT enrichment with their scan"""
         osint_keywords = [
@@ -541,6 +549,31 @@ Select the most appropriate tool for the user's request."""
         
         return tools
 
+    def _get_masscan_tools(self, targets: str, ports: str = None, user_prompt: str = "") -> List[Dict]:
+        """Get masscan tools for fast batch scanning"""
+        prompt_lower = user_prompt.lower()
+        
+        # Determine tool based on keywords
+        if 'web' in prompt_lower:
+            tool_name = "masscan_web_scan"
+        elif ports:
+            tool_name = "masscan_port_scan"
+        elif 'batch' in prompt_lower or 'quick' in prompt_lower:
+            tool_name = "masscan_quick_scan"
+        else:
+            tool_name = "masscan_quick_scan"  # Default
+        
+        tools = [{
+            "name": tool_name,
+            "arguments": {"targets": targets}
+        }]
+        
+        # Add ports if specified
+        if ports and tool_name == "masscan_port_scan":
+            tools[0]["arguments"]["ports"] = ports
+        
+        return tools
+
     def _get_shodan_tools(self, target: str) -> List[Dict]:
         """Get Shodan tools for IP lookup"""
         return [
@@ -758,22 +791,29 @@ Select the most appropriate tool for the user's request."""
                     reasoning += " With Shodan OSINT enrichment."
                 return selected_tools, reasoning
 
-        # 4. Check for Shodan lookup request
+        # 4. Check for masscan request
+        if self._detect_masscan_scan(user_prompt):
+            target = self._extract_target_from_prompt(user_prompt)
+            if target:
+                # Extract port specification from prompt
+                import re
+                port_match = re.search(r'ports?\s+([\d,\-]+)', user_prompt, re.IGNORECASE)
+                ports = port_match.group(1) if port_match else None
+                
+                selected_tools = self._get_masscan_tools(target, ports, user_prompt)
+                reasoning = f"Masscan scan detected for {target}."
+                print(f"  🔍 Masscan scan detected for: {target}")
+                if ports:
+                    print(f"  ✓ Selected: {selected_tools[0]['name']} on ports {ports}")
+                else:
+                    print(f"  ✓ Selected: {selected_tools[0]['name']}")
+                return selected_tools, reasoning
+
+        # 5. Check for Shodan lookup request
         if self._detect_shodan_lookup(user_prompt):
             target = self._extract_ip_from_prompt(user_prompt)
             if target:
                 selected_tools = self._get_shodan_tools(target)
-                reasoning = f"Shodan lookup detected for {target}."
-                print(f"  🔍 Shodan lookup detected for: {target}")
-                print(f"  ✓ Selected: shodan_lookup")
-                return selected_tools, reasoning
-
-        # 5. Fallback to LLM-based tool selection
-        print("  📡 Using LLM for tool selection...")
-        system_prompt = get_phase1_prompt(self._get_tool_list_string())
-
-        messages = [
-            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
 
