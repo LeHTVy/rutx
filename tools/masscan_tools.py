@@ -12,6 +12,35 @@ from datetime import datetime
 from typing import List, Union, Dict, Any
 
 
+def _resolve_hostname_to_ip(hostname: str) -> str:
+    """
+    Resolve hostname to IP address for masscan (masscan requires IPs).
+    
+    Args:
+        hostname: Hostname or IP address
+    
+    Returns:
+        str: IP address or original hostname if resolution fails
+    """
+    import socket
+    
+    # Check if already an IP
+    try:
+        socket.inet_aton(hostname)
+        return hostname  # Already an IP
+    except socket.error:
+        pass  # Not an IP, try to resolve
+    
+    # Try to resolve hostname to IP
+    try:
+        ip = socket.gethostbyname(hostname)
+        print(f"    [DNS] Resolved {hostname} → {ip}")
+        return ip
+    except socket.gaierror:
+        print(f"    [DNS] Warning: Could not resolve {hostname}, using as-is")
+        return hostname
+
+
 def masscan_scan(
     targets: Union[str, List[str]],
     ports: str = "80,443,8080,8443,22,21,25,3389",
@@ -35,6 +64,19 @@ def masscan_scan(
     # Convert targets to list if single string
     if isinstance(targets, str):
         targets = [targets]
+    
+    # Resolve hostnames to IPs (masscan requires IPs)
+    original_targets = targets.copy()
+    resolved_targets = []
+    hostname_to_ip = {}  # Track mapping for reporting
+    
+    for target in targets:
+        ip = _resolve_hostname_to_ip(target)
+        resolved_targets.append(ip)
+        if ip != target:
+            hostname_to_ip[target] = ip
+    
+    targets = resolved_targets
     
     # Generate output file path
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -119,8 +161,10 @@ def masscan_scan(
         return {
             "success": True,
             "tool": "masscan_scan",
-            "targets": targets,
-            "targets_count": len(targets),
+            "targets": original_targets,  # Original hostnames
+            "resolved_targets": targets,  # Resolved IPs
+            "hostname_to_ip": hostname_to_ip,  # DNS mapping
+            "targets_count": len(original_targets),
             "output_json": json_output,
             "output": result.stdout,
             "elapsed_seconds": round(elapsed, 2),
@@ -130,7 +174,7 @@ def masscan_scan(
             "targets_with_open_ports": targets_with_ports,
             "total_open_ports": total_open_ports,
             "command": ' '.join(cmd_parts),
-            "summary": f"Masscan: {targets_with_ports}/{len(targets)} targets with open ports, {total_open_ports} total ports found",
+            "summary": f"Masscan: {targets_with_ports}/{len(original_targets)} targets with open ports, {total_open_ports} total ports found",
             "timestamp": datetime.now().isoformat()
         }
         
