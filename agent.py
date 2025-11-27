@@ -810,6 +810,19 @@ Select the most appropriate tool for the user's request."""
                     if 'nmap' in tool['name']:
                         print(f"  ✓ Selected: {tool['name']}")
 
+        #  5. LLM fallback for unrecognized requests
+        # Build system prompt with effectiveness guidance
+        from prompts import get_phase1_prompt
+        from tools import get_all_tool_names
+        
+        # Format tool list for LLM
+        tool_names = get_all_tool_names()
+        tool_list_str = "\\n".join([f"- {tool}" for tool in tool_names])
+        
+        # Get enhanced Phase 1 prompt with effectiveness + patterns
+        system_prompt = get_phase1_prompt(tool_list_str, user_request=user_prompt)
+        
+        # Call LLM with enhanced guidance
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
@@ -1031,72 +1044,69 @@ Select the most appropriate tool for the user's request."""
             except Exception:
                 pass
 
-        # Prepare scan results for LLM
-        results_summary = []
+        # Prepare COMPLETE scan results for LLM (no truncation!)
+        results_for_llm = []
         for r in scan_results:
-            summary = {
+            tool_result = {
                 "tool": r["tool"],
                 "success": r["result"].get("success", False),
                 "target": r["result"].get("target") or r["args"].get("target") or r["args"].get("domain") or r["args"].get("ip"),
-                "summary": r["result"].get("summary", ""),
-                "findings": r["result"].get("findings_count", 0),
-                "hosts": r["result"].get("hosts_discovered", 0),
-                "ports": r["result"].get("open_ports_count", 0),
-                "subdomains": r["result"].get("subdomains_found", 0)
+                "command": r["result"].get("command", ""),
             }
 
-            # Include port details if available (from nmap parsing)
-            if r["result"].get("open_ports"):
-                summary["ports_detail"] = r["result"]["open_ports"][:15]
+            # Include ALL scan data (no truncation!)
+            result = r["result"]
+            
+            # For Nmap scans - include everything
+            if "nmap" in r["tool"].lower():
+                tool_result["scan_summary"] = result.get("summary", "")
+                tool_result["hosts_discovered"] = result.get("hosts_discovered", 0)
+                tool_result["open_ports"] = result.get("open_ports", [])  # All ports!
+                tool_result["open_ports_count"] = result.get("open_ports_count", 0)
+                tool_result["services"] = result.get("services", [])  # All services!
+                tool_result["vulnerabilities"] = result.get("vulnerabilities", [])
+                tool_result["os_detection"] = result.get("os_detection")
+                tool_result["raw_summary"] = result.get("output", "")[:2000]  # First 2000 chars of raw output
 
-            # Include services detected
-            if r["result"].get("services"):
-                summary["services"] = r["result"]["services"][:15]
+            # For Masscan - include complete results
+            elif "masscan" in r["tool"].lower():
+                masscan_result = result
+                tool_result["masscan_data"] = {
+                    "targets": masscan_result.get("targets", []),
+                    "resolved_targets": masscan_result.get("resolved_targets", []),
+                    "hostname_to_ip": masscan_result.get("hostname_to_ip", {}),
+                    "results": masscan_result.get("results", {}),  # All results!
+                    "ports_scanned": masscan_result.get("ports_scanned"),
+                    "command": masscan_result.get("command"),
+                    "scan_rate": masscan_result.get("scan_rate"),
+                    "targets_with_open_ports": masscan_result.get("targets_with_open_ports", 0),
+                    "total_open_ports": masscan_result.get("total_open_ports", 0),
+                    "scan_duration": masscan_result.get("scan_duration", 0)
+                }
 
-            # Include vulnerabilities if found
-            if r["result"].get("vulnerabilities"):
-                summary["vulnerabilities"] = r["result"]["vulnerabilities"][:10]
-
-            # Include subdomains if available
-            if r["result"].get("subdomains"):
-                summary["subdomains_list"] = r["result"]["subdomains"][:20]
-
-            # Include Shodan data if available (OSINT enrichment)
-            if "shodan" in r["tool"].lower() and r["result"].get("data"):
-                shodan_data = r["result"]["data"]
-                summary["shodan_intel"] = {
+            # For Shodan - include complete data
+            elif "shodan" in r["tool"].lower() and result.get("data"):
+                shodan_data = result["data"]
+                tool_result["shodan_intel"] = {
+                    "ip": shodan_data.get("ip_str"),
                     "organization": shodan_data.get("organization"),
                     "isp": shodan_data.get("isp"),
-                    "country": shodan_data.get("country"),
-                    "ports": shodan_data.get("ports", [])[:20],
-                    "vulns": shodan_data.get("vulns", [])[:10],
+                    "country": shodan_data.get("country_name"),
+                    "city": shodan_data.get("city"),
+                    "ports": shodan_data.get("ports", []),  # All ports!
+                    "hostnames": shodan_data.get("hostnames", []),
+                    "vulns": list(shodan_data.get("vulns", [])),  # All CVEs!
+                    "os": shodan_data.get("os"),
                     "threat_level": shodan_data.get("threat_level"),
                     "threat_indicators": shodan_data.get("threat_indicators", [])
                 }
 
-            # Include Masscan data if available
-            if "masscan" in r["tool"].lower():
-                masscan_result = r["result"]
-                summary["masscan_data"] = {
-                    "targets": masscan_result.get("targets", []),
-                    "resolved_targets": masscan_result.get("resolved_targets", []),
-                    "hostname_to_ip": masscan_result.get("hostname_to_ip", {}),
-                    "results": masscan_result.get("results", {}),
-                    "ports_scanned": masscan_result.get("ports_scanned"),
-                    "command": masscan_result.get("command"),
-                    "scan_rate": masscan_result.get("scan_rate"),
-                    "targets_with_ports": masscan_result.get("targets_with_open_ports", 0),
-                    "total_open_ports": masscan_result.get("total_open_ports", 0)
-                }
-                # Override target to show first target or resolved IP
-                if masscan_result.get("targets"):
-                    targets = masscan_result["targets"]
-                    if isinstance(targets, list) and targets:
-                        summary["target"] = targets[0]
-                    elif isinstance(targets, str):
-                        summary["target"] = targets
+            # For subdomain scans - include all subdomains
+            elif result.get("subdomains"):
+                tool_result["subdomains"] = result["subdomains"]  # All subdomains!
+                tool_result["subdomains_count"] = len(result["subdomains"])
 
-            results_summary.append(summary)
+            results_for_llm.append(tool_result)
 
         # Get enriched context from Phase 2 caching OR build fresh
         enriched_context = getattr(self, 'enriched_context', None)
@@ -1127,8 +1137,9 @@ Select the most appropriate tool for the user's request."""
         scan_type = self._detect_scan_type(scan_results)
         print(f"  📋 Report format: {scan_type}")
 
+        # Send COMPLETE scan data to LLM
         system_prompt = get_phase3_prompt(
-            json.dumps(results_summary, indent=2),
+            json.dumps(results_for_llm, indent=2),
             json.dumps(db_context, indent=2),
             scan_type=scan_type
         )

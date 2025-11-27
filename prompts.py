@@ -1,13 +1,63 @@
 """
 Prompt Management System
 Centralized prompts for SNODE AI 3-Phase Security Scanning
+
+Enhanced with:
+- Tool effectiveness scoring (from effectiveness.py)
+- Attack pattern templates (from attack_patterns.py)
+- Intelligent tool selection guidance
+
+Version: 2.0 (Enhanced with HexStrike-inspired features)
 """
 
+# Import effectiveness and pattern systems
+try:
+    from effectiveness import (
+        get_tool_effectiveness,
+        get_best_tools,
+        detect_target_type,
+        get_effectiveness_summary
+    )
+    from attack_patterns import (
+        get_pattern,
+        suggest_pattern,
+        get_pattern_summary,
+        get_all_patterns_summary
+    )
+    ENHANCED_FEATURES_AVAILABLE = True
+except ImportError:
+    # Fallback if files not found
+    ENHANCED_FEATURES_AVAILABLE = False
+    print("Warning: effectiveness.py or attack_patterns.py not found. Running in basic mode.")
+
 # ============================================================================
-# TOOL SELECTION GUIDE (Used in Phase 1)
+# TOOL SELECTION GUIDE (Used in Phase 1) - ENHANCED
 # ============================================================================
 
-TOOL_SELECTION_GUIDE = """TOOL SELECTION BASED ON TARGET TYPE:
+TOOL_SELECTION_GUIDE = """INTELLIGENT TOOL SELECTION:
+
+**STEP 1: DETECT TARGET TYPE**
+Automatically detect from input:
+- IP address (192.168.x.x) → network_host
+- Domain (example.com) → web_application  
+- "subdomain" in request → subdomain_enum
+- "api" in request → api_endpoint
+
+**STEP 2: USE EFFECTIVENESS SCORES**
+Each tool has effectiveness rating (0.0-1.0) for each target type:
+- 0.9-1.0: EXCELLENT (primary tool for this task)
+- 0.8-0.9: VERY GOOD (should consider)
+- 0.7-0.8: GOOD (useful)
+- <0.7: LIMITED (use only if specialized)
+
+**STEP 3: CONSIDER ATTACK PATTERNS**
+Pre-defined workflows for common scenarios:
+- web_reconnaissance: Nmap → BBOT → Shodan → Nuclei (when added)
+- subdomain_enumeration: Amass → BBOT
+- network_discovery: Nmap quick → Nmap detailed → Shodan
+- bug_bounty_recon: Amass → BBOT → Masscan → Nmap detailed
+
+**TOOL COMBINATIONS (Current Tools):**
 
 1. DNS/HOSTNAME (example.com):
    - Subdomain enumeration: amass_enum, bbot_subdomain_enum
@@ -115,60 +165,85 @@ RULES:
 
 MASSCAN_SCAN_FORMAT = """OUTPUT FORMAT FOR MASSCAN BATCH SCAN:
 
-**CRITICAL ANTI-HALLUCINATION RULES:**
-1. DO NOT invent ANY IP addresses, hostnames, or services
-2. DO NOT use example data like "System A/B/C" or "192.168.x.x"
-3. ONLY report data that EXISTS in the scan_results JSON below
-4. If you cannot find specific data, state "Data not found" instead of inventing it
+**CRITICAL: YOU MUST REPORT PER-DOMAIN, NOT GENERAL ADVICE!**
 
-**STEP 1: EXTRACT DATA FROM scan_results JSON**
+**ANTI-HALLUCINATION RULES:**
+1. DO NOT invent ANY data
+2. DO NOT give generic security advice
+3. ONLY report what EXISTS in scan_results JSON
+4. MUST show WHICH domain/IP has WHICH ports open
+5. If no data, state "No data found" - DO NOT INVENT!
 
-Look for the "masscan_data" field in the scan results. Extract:
-- targets: List of original hostnames scanned
-- results: Dictionary of {IP: [{port, protocol, state}]}
-- hostname_to_ip: Mapping of hostnames to resolved IPs
-- command: The actual masscan command executed
-- scan_rate, ports_scanned, total_open_ports
+**STEP 1: Extract masscan_data from scan_results**
 
-**STEP 2: CREATE REPORT USING ONLY EXTRACTED DATA**
+Find the "masscan_data" object containing:
+- hostname_to_ip: {domain: IP}
+- results: {IP: [{port, protocol, state}]}
 
-## SCAN SUMMARY
-Report fromMasscan data:
-- Targets scanned: [Count from targets list]
-- Scan rate: [From scan_rate field] packets/sec
-- Total open ports: [From total_open_ports]
-- Command executed: [Full command string]
+**STEP 2: Create PER-DOMAIN table**
 
-## RESULTS TABLE
-For EACH IP in the results dictionary, show:
+## SCAN RESULTS
 
-| HOSTNAME (IP) | OPEN PORTS |
-|---------------|------------|
-| hostname (IP) | port1/tcp, port2/tcp |
+**CRITICAL: Show EACH domain individually:**
 
-Use the hostname_to_ip mapping to show hostnames with their IPs.
+### Domain-by-Domain Breakdown:
 
-## CRITICAL SERVICES
-Check results for these ports ONLY:
-- 3389 (RDP), 445/139 (SMB), 3306 (MySQL), 5432 (PostgreSQL), 1433 (MSSQL)
+For EACH entry in hostname_to_ip, create:
 
-If found, list: "hostname (IP): port/protocol - service"
-If NONE found: "No critical services detected"
+**[DOMAIN_NAME] ([IP_ADDRESS])**
+- Open Ports: [port1/tcp, port2/tcp, port3/tcp]
+- Services: [service names based on ports]
+- Risk Level: [CRITICAL if 3389/445/3306, HIGH if SSH only, MEDIUM if web only, LOW if no ports]
 
-## WEB SERVICES
-Count IPs that have ports 80, 443, 8080, or 8443 open.
+Example:
+```
+**api.snode.com (192.168.1.5)**
+- Open Ports: 443/tcp, 22/tcp
+- Services: HTTPS, SSH
+- Risk Level: HIGH (SSH exposed to internet)
 
-## STATISTICS
-- List all unique port numbers from the results
-- Count how many targets have each port
+**admin.snode.com (192.168.1.10)**
+- Open Ports: 80/tcp, 443/tcp, 3306/tcp
+- Services: HTTP, HTTPS, MySQL
+- Risk Level: CRITICAL (MySQL exposed)
+```
+
+Repeat for EVERY domain in the scan!
+
+## CRITICAL FINDINGS
+
+List domains with CRITICAL services (3389/RDP, 445/SMB, 3306/MySQL, 5432/PostgreSQL, 1433/MSSQL):
+- [domain] ([IP]): port/protocol - [WHY IT'S CRITICAL]
+
+If none: "No critical services exposed"
+
+## HIGH-RISK FINDINGS
+
+List domains with HIGH-RISK services (22/SSH, 21/FTP, 25/SMTP on non-mail servers):
+- [domain] ([IP]): port/protocol - [WHY IT'S RISKY]
+
+## WEB SERVICES SUMMARY
+
+Count domains with ports 80, 443, 8080, 8443:
+- Total web-facing domains: [count]
+- HTTP only (no HTTPS): [list domains]
+- HTTPS enabled: [list domains]
 
 ## RECOMMENDATIONS
-Based ONLY on what ports were actually found, suggest:
-- If databases found → verify access controls
-- If RDP/SMB found → flag as high-risk external exposure  
-- If only web ports → recommend WAF review
 
-**VERIFICATION**: Before sending, verify you used ONLY data from scan_results. If you used ANY example IPs or invented systems, DELETE THE REPORT AND START OVER.
+Based ONLY on actual findings:
+1. For each CRITICAL domain → Specific action
+2. For each HIGH-RISK domain → Specific action
+3. Overall scan summary → Next steps
+
+**VERIFICATION CHECKLIST (before sending):**
+- [ ] Did I list EACH domain individually?
+- [ ] Did I show WHICH ports are open on WHICH domain?
+- [ ] Did I use ONLY real data from scan_results?
+- [ ] Did I avoid generic security advice?
+- [ ] Did I provide domain names, not just IPs?
+
+If you failed ANY checklist item, DELETE your report and start over!
 """
 
 VULN_SCAN_FORMAT = """OUTPUT FORMAT FOR VULNERABILITY SCAN:
@@ -304,21 +379,62 @@ RULES:
 # HELPER FUNCTIONS
 # ============================================================================
 
-def get_phase1_prompt(tool_list: str) -> str:
-    """Build Phase 1 (Tool Selection) prompt"""
-    return f"""You are SNODE AI, a security analysis agent.
+def get_phase1_prompt(tool_list: str, user_request: str = "") -> str:
+    """
+    Build Phase 1 (Tool Selection) prompt with intelligent guidance
+    
+    Args:
+        tool_list: Formatted list of available tools
+        user_request: User's request text (optional, for pattern suggestion)
+    
+    Returns:
+        Enhanced Phase 1 prompt with effectiveness and pattern guidance
+    """
+    base_prompt = f"""You are SNODE AI, a security analysis agent.
 
 PHASE 1: TOOL SELECTION
-- Analyze the user's request
-- Choose 1-3 appropriate tools
-- Consider target type (IP, domain, URL)
 
 AVAILABLE TOOLS:
 {tool_list}
 
 {TOOL_SELECTION_GUIDE}
+"""
+    
+    # Add enhanced features if available
+    if ENHANCED_FEATURES_AVAILABLE and user_request:
+        # Detect target type from user request
+        target_type = detect_target_type(user_request)
+        
+        # Get effectiveness summary for this target type
+        effectiveness_info = get_effectiveness_summary(target_type)
+        
+        # Suggest attack pattern if applicable
+        suggested_pattern = suggest_pattern(user_request, target_type)
+        pattern_info = ""
+        if suggested_pattern:
+            pattern_info = f"\n**SUGGESTED ATTACK PATTERN:**\n{get_pattern_summary(suggested_pattern)}\n"
+        
+        enhanced_guidance = f"""
 
-Call the appropriate tool(s). Analysis comes in Phase 3."""
+**INTELLIGENT GUIDANCE FOR THIS REQUEST:**
+
+Detected Target Type: {target_type}
+
+{effectiveness_info}
+{pattern_info}
+
+**SELECTION STRATEGY:**
+1. Prioritize tools with highest effectiveness scores (0.9+)
+2. Consider following the suggested pattern if applicable
+3. Select 1-3 tools maximum for efficiency
+4. Explain why each tool was selected
+
+"""
+        base_prompt += enhanced_guidance
+    
+    base_prompt += "\nCall the appropriate tool(s). Analysis comes in Phase 3."
+    
+    return base_prompt
 
 
 def get_phase3_prompt(scan_results: str, db_context: str = "{}", scan_type: str = "generic") -> str:

@@ -16,7 +16,7 @@ OLLAMA_LIST_ENDPOINT = "http://localhost:11434/api/tags"
 MODEL_NAME = "mathstral:latest"  
 
 # Timeout Settings (in seconds)
-TIMEOUT_NMAP = 1200  # 20 minutes
+TIMEOUT_NMAP = 1800  # 30 minutes (was 20, increased for comprehensive scans)
 TIMEOUT_OLLAMA = 1800 # 30 minutes 
 TIMEOUT_AMASS = 1200  # 20 minutes
 TIMEOUT_BBOT = 1200   # 20 minutes  
