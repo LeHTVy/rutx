@@ -63,6 +63,11 @@ class SNODEAgent:
         self.is_subdomain_scan = False  # Track if this is a subdomain enumeration scan
         self.high_value_targets = set()  # Track high-value subdomains for smart scan prioritization
         self.critical_targets = set()  # Track CRITICAL targets (api, admin, dev) for comprehensive scans
+        
+        # OSINT Intelligence (for crown jewel identification)
+        self.osint_intelligence = None  # Stores OSINT analysis results
+        self.crown_jewels = set()  # CROWN JEWEL targets identified from business intelligence
+        self.business_context = ""  # Business context scraped from target website
 
         # Enhanced persistence (4-phase flow)
         self.db_session_id = None  # Database ScanSession ID
@@ -593,6 +598,202 @@ Select the most appropriate tool for the user's request."""
         prompt_lower = user_prompt.lower()
         return any(keyword in prompt_lower for keyword in reference_keywords)
 
+    def _get_intelligent_port_scan_strategy(self, subdomains: List[str]) -> List[Dict]:
+        """
+        Professional port scanning workflow with DNS pre-resolution and deduplication
+        
+        Uses OSINT intelligence to prioritize scanning:
+        - Crown jewels: Full port scan (1-65535) with naabu
+        - High-value: Top 1000 ports
+        - Others: Batch scan common ports
+        
+        Args:
+            subdomains: List of subdomains to scan
+        
+        Returns:
+            List of tool selections with intelligent prioritization
+        """
+        print("\n  🧠 INTELLIGENT PORT SCAN STRATEGY")
+        print("  " + "="*58)
+        
+        try:
+            from tools.dns_tools import get_unique_ips, print_deduplication_stats
+            
+            # Stage 0: DNS Resolution + Deduplication
+            print("  📊 STAGE 0: DNS Pre-Resolution & Deduplication")
+            unique_ips, ip_to_subdomains, subdomain_to_ip = get_unique_ips(subdomains)
+            
+            # Print stats
+            print_deduplication_stats(subdomains, unique_ips, ip_to_subdomains)
+            
+        except ImportError:
+            print("  ⚠️  DNS tools not available, using subdomains directly")
+            subdomain_to_ip = {sub: sub for sub in subdomains}
+            ip_to_subdomains = {sub: [sub] for sub in subdomains}
+            unique_ips = subdomains
+        
+        # Use OSINT intelligence if available
+        selected_tools = []
+        
+        if self.osint_intelligence:
+            print("\n  🎯 STAGE 1: OSINT-Guided Prioritization")
+            
+            intelligence = self.osint_intelligence
+            
+            # CROWN JEWELS: Comprehensive scans (ALL 65535 ports!)
+            crown_jewels = intelligence.get("crown_jewels", [])
+            if crown_jewels:
+                crown_targets = [t["subdomain"] for t in crown_jewels]
+                print(f"\n  👑 CROWN JEWELS ({len(crown_targets)}) → FULL PORT SCAN (1-65535):")
+                
+                for target_info in crown_jewels:
+                    subdomain = target_info["subdomain"]
+                    score = target_info["score"]
+                    print(f"     • {subdomain} (Score: {score}/10)")
+                    
+                    # Use naabu for full port scan
+                    selected_tools.append({
+                        "name": "naabu_full_scan",
+                        "arguments": {"targets": subdomain, "rate": 10000}
+                    })
+            
+            # HIGH-VALUE: Top 1000 ports
+            high_value = intelligence.get("high_value", [])
+            if high_value:
+                high_targets = [t["subdomain"] for t in high_value]
+                print(f"\n  🎯 HIGH-VALUE ({len(high_targets)}) → TOP 1000 PORTS:")
+                
+                for target_info in high_value[:5]:  # Show first 5
+                    print(f"     • {target_info['subdomain']} (Score: {target_info['score']}/10)")
+                
+                if len(high_value) > 5:
+                    print(f"     ... and {len(high_value) - 5} more")
+                
+                # Batch scan with naabu top-1000
+                selected_tools.append({
+                    "name": "naabu_top_ports",
+                    "arguments": {
+                        "targets": ",".join(high_targets),
+                        "top": 1000
+                    }
+                })
+            
+            # MEDIUM/LOW: Quick batch scan (common ports)
+            medium_low = intelligence.get("medium_value", []) + intelligence.get("low_value", [])
+            if medium_low:
+                medium_low_targets = [t["subdomain"] for t in medium_low]
+                print(f"\n  ⚡ MEDIUM/LOW ({len(medium_low_targets)}) → COMMON PORTS (FAST):")
+                print(f"     → Masscan batch scan")
+                
+                selected_tools.append({
+                    "name": "masscan_batch_scan",
+                    "arguments": {"targets": ",".join(medium_low_targets)}
+                })
+            
+            total = len(crown_jewels) + len(high_value) + len(medium_low)
+            print(f"\n  ✅ Strategy: {len(crown_jewels)} comprehensive + {len(high_value)} detailed + {len(medium_low)} quick = {total} targets")
+            
+        else:
+            # Fallback: No OSINT, use IP deduplication only
+            print("\n  ⚡ STAGE 1: Fast Discovery (No OSINT)")
+            print(f"     → Scanning {len(unique_ips)} unique IPs with top-1000 ports")
+            
+            # Use naabu top-1000 on all unique IPs
+            selected_tools.append({
+                "name": "naabu_top_ports",
+                "arguments": {
+                    "targets": ",".join(unique_ips),
+                    "top": 1000
+                }
+            })
+        
+        return selected_tools
+
+    def _gather_osint_intelligence(self, domain: str, subdomains: List[str]) -> Dict[str, Any]:
+        """
+        Gather OSINT intelligence to identify crown jewels
+        
+        Scrapes company website, analyzes business context,
+        identifies which subdomains are most critical
+        
+        Args:
+            domain: Main domain (e.g., "snode.com")
+            subdomains: List of discovered subdomains
+        
+        Returns:
+            Intelligence dictionary with crown jewels identified
+        """
+        print("\n" + "="*60)
+        print("🔍 PHASE 0: OSINT INTELLIGENCE GATHERING")
+        print("="*60)
+        
+        try:
+            from osint_intelligence import OSINTIntelligenceAnalyzer
+            
+            # Try to scrape homepage for business context
+            web_content = {}
+            try:
+                import requests
+                from bs4 import BeautifulSoup
+                
+                print(f"  📄 Scraping homepage of {domain}...")
+                response = requests.get(f"https://{domain}", timeout=10, verify=False)
+                soup = BeautifulSoup(response.text, 'html.parser')
+                
+                # Extract text content
+                homepage_text = soup.get_text(separator=' ', strip=True)[:2000]
+                web_content = {"homepage": homepage_text}
+                
+                # Store business context
+                self.business_context = homepage_text
+                
+                print(f"  ✓ Scraped {len(homepage_text)} characters of business context")
+            except Exception as e:
+                print(f"  ⚠️  Could not scrape {domain}: {e}")
+                web_content = {}
+            
+            # Analyze intelligence
+            analyzer = OSINTIntelligenceAnalyzer()
+            intelligence = analyzer.analyze_target_intelligence(
+                domain=domain,
+                subdomains=subdomains,
+                web_content=web_content
+            )
+            
+            # Store intelligence
+            self.osint_intelligence = intelligence
+            
+            # Extract crown jewels
+            for target in intelligence.get("crown_jewels", []):
+                self.crown_jewels.add(target["subdomain"])
+            
+            # Display results
+            crown_count = len(intelligence.get("crown_jewels", []))
+            high_count = len(intelligence.get("high_value", []))
+            
+            if crown_count > 0:
+                print(f"\n  👑 CROWN JEWELS IDENTIFIED ({crown_count}):")
+                for target in intelligence.get("crown_jewels", [])[:5]:
+                    print(f"     • {target['subdomain']} (Score: {target['score']}/10)")
+                    for reason in target['reasons'][:2]:
+                        print(f"       - {reason}")
+            
+            if high_count > 0:
+                print(f"\n  🎯 HIGH-VALUE TARGETS ({high_count}):")
+                for target in intelligence.get("high_value", [])[:3]:
+                    print(f"     • {target['subdomain']} (Score: {target['score']}/10)")
+            
+            print(f"\n  ✓ Intelligence gathered on {len(subdomains)} targets")
+            
+            return intelligence
+            
+        except ImportError:
+            print("  ⚠️  OSINT intelligence module not available")
+            return None
+        except Exception as e:
+            print(f"  ⚠️  OSINT intelligence failed: {e}")
+            return None
+
     def phase_1_tool_selection(self, user_prompt: str) -> Tuple[List[Dict], str]:
         """
         Phase 1: Tool Selection (LLM/Keyword)
@@ -607,6 +808,30 @@ Select the most appropriate tool for the user's request."""
 
         # Check if user is referencing previous scan results
         if self._detect_context_reference(user_prompt):
+            # NEW: Use intelligent port scan workflow with DNS deduplication!
+            if self.osint_intelligence and self._detect_port_scan(user_prompt):
+                # Collect all subdomains from OSINT intelligence
+                intelligence = self.osint_intelligence
+                all_subdomains = []
+                
+                for category in ["crown_jewels", "high_value", "medium_value", "low_value"]:
+                    targets = intelligence.get(category, [])
+                    all_subdomains.extend([t["subdomain"] for t in targets])
+                
+                if all_subdomains:
+                    # Use intelligent workflow (DNS + dedup + naabu!)
+                    selected_tools = self._get_intelligent_port_scan_strategy(all_subdomains)
+                    
+                    total_targets = len(all_subdomains)
+                    crown_count = len(intelligence.get("crown_jewels", []))
+                    high_count = len(intelligence.get("high_value", []))
+                    other_count = total_targets - crown_count - high_count
+                    
+                    reasoning = f"Intelligent port scan: {crown_count} crown jewels (full 65535 ports), {high_count} high-value (top 1000), {other_count} others (batch) = {total_targets} total with DNS deduplication"
+                    
+                    return selected_tools, reasoning
+            
+            # FALLBACK: Original keyword-based prioritization (if no OSINT)
             # Combine critical and high-value targets
             all_priority_targets = list(self.critical_targets.union(self.high_value_targets))
 
@@ -1655,6 +1880,24 @@ Select the most appropriate tool for the user's request."""
         # Phase 2: Execution
         self.current_phase = IterationPhase.EXECUTION
         execution_results = self.phase_2_execution(selected_tools)
+        
+        # NEW: Gather OSINT Intelligence after subdomain enumeration
+        # This identifies crown jewels BEFORE user says "port scan those"
+        if self.is_subdomain_scan:
+            # Extract discovered subdomains from execution results
+            all_subdomains = []
+            domain = None
+            
+            for result in execution_results:
+                if result["result"].get("subdomains"):
+                    all_subdomains.extend(result["result"]["subdomains"])
+                    # Get domain from first result
+                    if not domain:
+                        domain = result.get("args", {}).get("domain") or result["result"].get("target")
+            
+            # Gather OSINT intelligence if we have subdomains
+            if all_subdomains and domain:
+                self._gather_osint_intelligence(domain, all_subdomains)
 
         # Phase 3: Intelligence Analysis
         self.current_phase = IterationPhase.ANALYSIS

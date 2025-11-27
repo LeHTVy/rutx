@@ -165,6 +165,40 @@ RULES:
 
 MASSCAN_SCAN_FORMAT = """OUTPUT FORMAT FOR MASSCAN BATCH SCAN:
 
+**🚨 EMERGENCY RULE - CHECK THIS FIRST:**
+
+Before writing ANYTHING, check scan_results for masscan_data.results.
+
+If scan_results shows:
+- Empty results object: {}
+- OR masscan_data.results has NO entries
+- OR masscan_data.total_open_ports == 0  
+- OR results object exists but all IPs have empty port arrays []
+
+Then you MUST output EXACTLY this format and STOP:
+
+## SCAN RESULTS
+Masscan batch scan completed on [X] targets.
+Scanned ports: [list actual ports from masscan_data.ports_scanned]
+**Result: No open ports detected on any target.**
+
+This indicates:
+- All scanned ports are closed or filtered by firewalls
+- Targets may not be responding to scans
+- Network filtering may be blocking scan traffic
+
+## RECOMMENDATIONS
+1. Verify targets are reachable (basic connectivity test)
+2. Perform detailed Nmap service detection on high-priority targets
+3. Check if network firewall rules are blocking scan traffic
+4. Consider scanning from different source IP/network
+
+**DO NOT PROCEED FURTHER. DO NOT INVENT PORT DATA!**
+
+---
+
+**ONLY IF masscan_data.results contains actual IPs with port arrays, proceed below:**
+
 **CRITICAL: YOU MUST REPORT PER-DOMAIN, NOT GENERAL ADVICE!**
 
 **ANTI-HALLUCINATION RULES:**
