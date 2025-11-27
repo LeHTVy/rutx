@@ -734,14 +734,25 @@ Select the most appropriate tool for the user's request."""
             web_content = {}
             try:
                 import requests
-                from bs4 import BeautifulSoup
+                try:
+                    from bs4 import BeautifulSoup
+                    has_bs4 = True
+                except ImportError:
+                    has_bs4 = False
+                    import re
                 
                 print(f"  📄 Scraping homepage of {domain}...")
                 response = requests.get(f"https://{domain}", timeout=10, verify=False)
-                soup = BeautifulSoup(response.text, 'html.parser')
                 
-                # Extract text content
-                homepage_text = soup.get_text(separator=' ', strip=True)[:2000]
+                if has_bs4:
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    homepage_text = soup.get_text(separator=' ', strip=True)[:2000]
+                else:
+                    # Regex fallback if bs4 missing
+                    print("  ⚠️  bs4 not found, using regex scraping")
+                    text = re.sub(r'<[^>]+>', ' ', response.text)
+                    homepage_text = re.sub(r'\s+', ' ', text).strip()[:2000]
+                
                 web_content = {"homepage": homepage_text}
                 
                 # Store business context

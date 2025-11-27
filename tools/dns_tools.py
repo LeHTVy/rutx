@@ -79,6 +79,9 @@ def _dnsx_resolve(subdomains: List[str], timeout: int) -> Dict[str, str]:
         )
         
         # Parse output: subdomain [IP1,IP2]
+        import re
+        ip_regex = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
+        
         mapping = {}
         if os.path.exists(output_file):
             with open(output_file, 'r') as f:
@@ -87,15 +90,14 @@ def _dnsx_resolve(subdomains: List[str], timeout: int) -> Dict[str, str]:
                     if not line:
                         continue
                     
-                    # Format: subdomain [IP1,IP2,...]
-                    parts = line.split()
-                    if len(parts) >= 2:
+                    # Find IP in the line
+                    ips = ip_regex.findall(line)
+                    if ips:
+                        # First part is subdomain
+                        parts = line.split()
                         subdomain = parts[0]
-                        # Extract IP from brackets
-                        ip_part = parts[1].strip('[]')
-                        # Take first IP if multiple
-                        ip = ip_part.split(',')[0] if ',' in ip_part else ip_part
-                        mapping[subdomain] = ip
+                        # First found IP is the resolution
+                        mapping[subdomain] = ips[0]
         
         return mapping
         
