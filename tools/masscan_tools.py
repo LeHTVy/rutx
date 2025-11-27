@@ -121,35 +121,56 @@ def masscan_scan(
         scan_results = {}
         try:
             with open(json_output, 'r') as f:
-                # Masscan JSON is not valid JSON array, it's line-delimited JSON objects
-                # We need to parse it line by line
-                lines = f.readlines()
-                for line in lines:
-                    line = line.strip()
-                    if not line or line in ['{', '}', '[', ']']:
-                        continue
-                    # Remove trailing comma if present
-                    if line.endswith(','):
-                        line = line[:-1]
+                content = f.read().strip()
+                if not content:
+                    pass
+                else:
                     try:
-                        obj = json.loads(line)
-                        ip = obj.get('ip')
-                        port_info = obj.get('ports', [])
-                        
-                        if ip:
-                            if ip not in scan_results:
-                                scan_results[ip] = []
-                            
-                            # Port info is a list
-                            if isinstance(port_info, list):
-                                for port_obj in port_info:
-                                    scan_results[ip].append({
-                                        'port': port_obj.get('port'),
-                                        'protocol': port_obj.get('proto', 'tcp'),
-                                        'state': port_obj.get('status', 'open')
-                                    })
+                        # Try parsing as standard JSON array first
+                        data = json.loads(content)
+                        if isinstance(data, list):
+                            for obj in data:
+                                ip = obj.get('ip')
+                                port_info = obj.get('ports', [])
+                                if ip:
+                                    if ip not in scan_results:
+                                        scan_results[ip] = []
+                                    if isinstance(port_info, list):
+                                        for port_obj in port_info:
+                                            scan_results[ip].append({
+                                                'port': port_obj.get('port'),
+                                                'protocol': port_obj.get('proto', 'tcp'),
+                                                'state': port_obj.get('status', 'open')
+                                            })
+                        else:
+                            # Single object?
+                            pass
                     except json.JSONDecodeError:
-                        continue
+                        # Fallback to line-by-line NDJSON parsing
+                        f.seek(0)
+                        lines = f.readlines()
+                        for line in lines:
+                            line = line.strip()
+                            if not line or line in ['{', '}', '[', ']']:
+                                continue
+                            if line.endswith(','):
+                                line = line[:-1]
+                            try:
+                                obj = json.loads(line)
+                                ip = obj.get('ip')
+                                port_info = obj.get('ports', [])
+                                if ip:
+                                    if ip not in scan_results:
+                                        scan_results[ip] = []
+                                    if isinstance(port_info, list):
+                                        for port_obj in port_info:
+                                            scan_results[ip].append({
+                                                'port': port_obj.get('port'),
+                                                'protocol': port_obj.get('proto', 'tcp'),
+                                                'state': port_obj.get('status', 'open')
+                                            })
+                            except json.JSONDecodeError:
+                                continue
         except FileNotFoundError:
             # No output file means no results
             scan_results = {}

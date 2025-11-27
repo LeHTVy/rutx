@@ -724,7 +724,7 @@ Select the most appropriate tool for the user's request."""
             Intelligence dictionary with crown jewels identified
         """
         print("\n" + "="*60)
-        print("🔍 PHASE 0: OSINT INTELLIGENCE GATHERING")
+        print("🔍 INTELLIGENCE ENRICHMENT (OSINT)")
         print("="*60)
         
         try:

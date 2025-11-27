@@ -99,6 +99,10 @@ def _dnsx_resolve(subdomains: List[str], timeout: int) -> Dict[str, str]:
                         # First found IP is the resolution
                         mapping[subdomain] = ips[0]
         
+        if not mapping:
+            print("  ⚠️  dnsx returned no results, falling back to Python DNS")
+            return _fallback_resolve(subdomains)
+            
         return mapping
         
     except subprocess.TimeoutExpired:
