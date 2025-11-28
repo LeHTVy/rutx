@@ -1373,6 +1373,74 @@ Select the most appropriate tool for the user's request."""
         scan_type = self._detect_scan_type(scan_results)
         print(f"  📋 Report format: {scan_type}")
 
+        # SPECIAL HANDLING: Check if masscan found zero results
+        # Generate report programmatically instead of relying on LLM
+        if scan_type == "masscan":
+            # Extract masscan data from results
+            masscan_data = None
+            for r in results_for_llm:
+                if r.get("tool", "").startswith("masscan") and "masscan_data" in r:
+                    masscan_data = r["masscan_data"]
+                    break
+
+            # If masscan found zero open ports, generate report directly
+            if masscan_data and masscan_data.get("total_open_ports", 0) == 0:
+                print("  ⚠️  Masscan found no open ports - generating report directly")
+                total_targets = len(masscan_data.get("targets", []))
+                ports_scanned = masscan_data.get("ports_scanned", "unknown")
+
+                analysis = f"""## SCAN RESULTS
+
+Masscan batch scan completed on {total_targets} targets.
+Scanned ports: {ports_scanned}
+**Result: No open ports detected on any target.**
+
+This indicates:
+- All scanned ports are closed or filtered by firewalls
+- Targets may not be responding to scans
+- Network filtering may be blocking scan traffic
+
+### Targets Scanned:
+"""
+                # List all targets
+                for i, target in enumerate(masscan_data.get("targets", [])[:50], 1):
+                    analysis += f"\n{i}. {target}"
+
+                if len(masscan_data.get("targets", [])) > 50:
+                    analysis += f"\n... and {len(masscan_data.get('targets', [])) - 50} more targets"
+
+                analysis += """
+
+## RECOMMENDATIONS
+
+1. **Verify Connectivity**: Test basic network connectivity to targets (ping, traceroute)
+2. **Check Firewall Rules**: Network firewalls may be blocking scan traffic
+3. **Retry with Different Approach**:
+   - Try slower scan rate to avoid triggering IDS/IPS
+   - Use Nmap service detection on high-priority targets for more detailed results
+   - Scan from different source IP/network if possible
+4. **Alternative Tools**: Consider using Nmap for more detailed scanning with service detection
+5. **Targeted Scanning**: Focus on known critical targets with comprehensive scans
+
+### Next Steps:
+- Review if targets are actually reachable from your scan position
+- Consider using 'nmap service detection' on high-priority targets
+- Check if scan is being blocked by network security devices
+"""
+                # Skip LLM call and return the programmatic report
+                if self.session_manager and self.db_session_id and enriched_context:
+                    try:
+                        self.session_manager.set_analysis_results(
+                            self.db_session_id,
+                            {"analysis": analysis[:5000]},
+                            enriched_context.get("summary", {}).get("risk_score", 0),
+                            enriched_context.get("summary", {}).get("risk_level", "UNKNOWN")
+                        )
+                    except Exception:
+                        pass
+
+                return analysis
+
         # Send COMPLETE scan data to LLM
         system_prompt = get_phase3_prompt(
             json.dumps(results_for_llm, indent=2),
@@ -1395,9 +1463,16 @@ Select the most appropriate tool for the user's request."""
 
         analysis = response.get("message", {}).get("content", "No analysis generated")
 
-        # Handle invalid LLM responses
+        # Handle invalid LLM responses or generic templates
         invalid_responses = ["", "None", "No analysis generated", "null", "N/A"]
-        if not analysis or analysis.strip() in invalid_responses:
+        # Also detect if LLM returned a generic template with placeholders
+        has_placeholders = any(placeholder in analysis for placeholder in [
+            "[Insert Date]", "[Total Number]", "[Number of", "ServerA", "[X]",
+            "[list", "[count", "[brief summary]"
+        ])
+
+        if not analysis or analysis.strip() in invalid_responses or has_placeholders:
+            print("  ⚠️  LLM returned invalid/generic template - using fallback report")
             analysis = self._generate_basic_analysis_report(scan_results)
 
         # Store analysis results in session
@@ -1824,12 +1899,50 @@ Select the most appropriate tool for the user's request."""
                 if result.get("summary"):
                     report_parts.append(f"- **Summary:** {result['summary']}")
 
+                # MASSCAN-SPECIFIC HANDLING
+                if "masscan" in tool_name.lower():
+                    total_targets = result.get("targets_count", len(result.get("targets", [])))
+                    total_ports = result.get("total_open_ports", 0)
+                    targets_with_ports = result.get("targets_with_open_ports", 0)
+                    ports_scanned = result.get("ports_scanned", "unknown")
+
+                    report_parts.append(f"- **Targets Scanned:** {total_targets}")
+                    report_parts.append(f"- **Ports Scanned:** {ports_scanned}")
+                    report_parts.append(f"- **Targets with Open Ports:** {targets_with_ports}/{total_targets}")
+                    report_parts.append(f"- **Total Open Ports Found:** {total_ports}")
+
+                    if total_ports == 0:
+                        report_parts.append("\n**⚠️  No open ports detected on any target**")
+                        report_parts.append("This may indicate:")
+                        report_parts.append("  - Targets are protected by firewalls")
+                        report_parts.append("  - Targets are offline or unreachable")
+                        report_parts.append("  - Scan traffic is being filtered")
+                    else:
+                        # Show results per target
+                        masscan_results = result.get("results", {})
+                        hostname_to_ip = result.get("hostname_to_ip", {})
+
+                        # Reverse mapping (IP to hostname)
+                        ip_to_hostname = {v: k for k, v in hostname_to_ip.items()}
+
+                        if masscan_results:
+                            report_parts.append("\n**Open Ports by Target:**")
+                            for ip, ports in list(masscan_results.items())[:10]:  # Show first 10
+                                hostname = ip_to_hostname.get(ip, ip)
+                                port_str = ", ".join([f"{p['port']}/{p['protocol']}" for p in ports])
+                                report_parts.append(f"  - **{hostname}** ({ip}): {port_str}")
+
+                            if len(masscan_results) > 10:
+                                report_parts.append(f"  ... and {len(masscan_results) - 10} more targets with open ports")
+
+                    continue  # Skip generic port handling below
+
                 # Target info
                 target = result.get("target") or result.get("domain") or result.get("ip")
                 if target:
                     report_parts.append(f"- **Target:** {target}")
 
-                # Open ports
+                # Open ports (for Nmap, etc.)
                 if result.get("open_ports"):
                     ports = result["open_ports"][:10]
                     port_list = [f"{p['port']}/{p['protocol']} ({p.get('service', 'unknown')})" for p in ports]

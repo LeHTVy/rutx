@@ -66,17 +66,33 @@ def masscan_scan(
         targets = [targets]
     
     # Resolve hostnames to IPs (masscan requires IPs)
+    # Also deduplicate to avoid scanning same IP multiple times
     original_targets = targets.copy()
     resolved_targets = []
     hostname_to_ip = {}  # Track mapping for reporting
-    
+    seen_ips = set()  # Track IPs we've already added
+
     for target in targets:
         ip = _resolve_hostname_to_ip(target)
+
+        # Skip if we've already resolved this IP
+        if ip in seen_ips:
+            # Still track the hostname mapping
+            if ip != target:
+                hostname_to_ip[target] = ip
+            continue
+
+        seen_ips.add(ip)
         resolved_targets.append(ip)
         if ip != target:
             hostname_to_ip[target] = ip
-    
+
     targets = resolved_targets
+
+    # Report deduplication savings
+    if len(original_targets) != len(targets):
+        savings = len(original_targets) - len(targets)
+        print(f"    [DEDUP] Removed {savings} duplicate IPs ({len(targets)} unique IPs to scan)")
     
     # Generate output file path
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -128,6 +144,7 @@ def masscan_scan(
                     try:
                         # Try parsing as standard JSON array first
                         data = json.loads(content)
+                        print(f"DEBUG: Masscan output is valid JSON array with {len(data)} entries")
                         if isinstance(data, list):
                             for obj in data:
                                 ip = obj.get('ip')
@@ -142,10 +159,11 @@ def masscan_scan(
                                                 'protocol': port_obj.get('proto', 'tcp'),
                                                 'state': port_obj.get('status', 'open')
                                             })
+                            print(f"DEBUG: Parsed {len(scan_results)} IPs from JSON array")
                         else:
-                            # Single object?
-                            pass
+                            print("DEBUG: Masscan output is valid JSON but not a list?")
                     except json.JSONDecodeError:
+                        print("DEBUG: Masscan output is NOT a valid JSON array, trying NDJSON")
                         # Fallback to line-by-line NDJSON parsing
                         f.seek(0)
                         lines = f.readlines()

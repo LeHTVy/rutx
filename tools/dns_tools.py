@@ -61,14 +61,16 @@ def _dnsx_resolve(subdomains: List[str], timeout: int) -> Dict[str, str]:
     output_file = tempfile.mktemp(suffix='.txt')
     
     try:
-        # Run dnsx with response flag to get IPs
+        # Run dnsx with JSON output
         cmd = [
             "dnsx",
             "-l", input_file,
-            "-resp",  # Show IP responses
+            "-j",     # JSON output
             "-silent",
             "-o", output_file
         ]
+        
+        # print(f"DEBUG: Running command: {' '.join(cmd)}")
         
         result = subprocess.run(
             cmd,
@@ -78,11 +80,14 @@ def _dnsx_resolve(subdomains: List[str], timeout: int) -> Dict[str, str]:
             check=False
         )
         
-        # Parse output: subdomain [IP1,IP2]
-        import re
-        ip_regex = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
+        if result.returncode != 0:
+            print(f"  ⚠️  dnsx failed with code {result.returncode}")
+            print(f"  ⚠️  stderr: {result.stderr}")
         
+        # Parse JSON output
+        import json
         mapping = {}
+        
         if os.path.exists(output_file):
             with open(output_file, 'r') as f:
                 for line in f:
@@ -90,17 +95,24 @@ def _dnsx_resolve(subdomains: List[str], timeout: int) -> Dict[str, str]:
                     if not line:
                         continue
                     
-                    # Find IP in the line
-                    ips = ip_regex.findall(line)
-                    if ips:
-                        # First part is subdomain
-                        parts = line.split()
-                        subdomain = parts[0]
-                        # First found IP is the resolution
-                        mapping[subdomain] = ips[0]
+                    try:
+                        data = json.loads(line)
+                        host = data.get('host')
+                        
+                        # Get IP from 'a' records or 'aaaa' records
+                        ips = data.get('a', []) or data.get('aaaa', [])
+                        
+                        if host and ips:
+                            # Use first IP
+                            mapping[host] = ips[0]
+                            
+                    except json.JSONDecodeError:
+                        continue
         
         if not mapping:
-            print("  ⚠️  dnsx returned no results, falling back to Python DNS")
+            print("  ⚠️  dnsx returned no results (empty output or parsing failed)")
+            # print(f"DEBUG: Raw output was: {content if 'content' in locals() else 'N/A'}")
+            print("  ⚠️  Falling back to Python DNS")
             return _fallback_resolve(subdomains)
             
         return mapping
