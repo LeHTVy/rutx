@@ -480,53 +480,6 @@ def get_phase3_prompt(scan_results: str, db_context: str = "{}", scan_type: str 
     if scan_type == "masscan" or "masscan" in scan_results.lower():
         output_format = MASSCAN_SCAN_FORMAT
     elif scan_type == "port_scan":
-        output_format = PORT_SCAN_FORMAT
-    elif scan_type == "vuln_scan":
-        output_format = VULN_SCAN_FORMAT
-    elif scan_type == "subdomain":
-        output_format = SUBDOMAIN_DISCOVERY_FORMAT
-    elif scan_type == "osint" or scan_type == "shodan":
-        output_format = OSINT_FORMAT
-    else:
-        output_format = GENERIC_FORMAT
-    
-    # Add minimal data detection guidance
-    minimal_data_guidance = """
-MINIMAL DATA DETECTION:
-If the scan results show minimal or insufficient data:
-- Clearly state that results are limited
-- Suggest specific follow-up scans that would provide more value
-- Examples:
-  * "Only 3 ports open. Suggest: Run service detection scan to identify versions"
-  * "No subdomains found with passive scan. Suggest: Try active subdomain scan or brute force mode"
-  * "Port 80/443 open. Suggest: Run web vulnerability scan or technology detection"
-  
-Provide these suggestions in the RECOMMENDED NEXT STEPS section.
-"""
-    
-    return f"""You are SNODE AI, a security analysis agent.
-
-PHASE 3: ANALYSIS & REPORT
-
-SCAN TYPE: {scan_type.upper()}
-
-SCAN RESULTS:
-{scan_results}
-
-DATABASE CONTEXT:
-{db_context}
-
-{VULNERABILITY_ANALYSIS}
-
-{output_format}
-
-{minimal_data_guidance}"""
-
-
-
-def get_phase4_prompt(combined_results: str, tool_count: int) -> str:
-    """Build Phase 4 (Combined Analysis) prompt for multi-tool subdomain scans"""
-    return f"""You are SNODE AI, a security analysis agent.
 
 PHASE 4: COMBINED SUBDOMAIN ANALYSIS
 
