@@ -5,7 +5,6 @@ Protects against adversarial prompts trying to manipulate the AI agent
 
 import re
 import base64
-import base32hex
 from typing import Tuple, List
 
 
