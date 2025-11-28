@@ -1,9 +1,12 @@
 """
-Configuration file for RUTX Security Scanning Framework
+Configuration file for SNODE AI - Wireless Security Scanning Framework
 Centralized settings for all agents and tools
+
+SNODE AI uses LOCAL Ollama LLM (no cloud/OpenAI dependencies)
 
 Active Tools:
 - Nmap: Network scanning and service detection
+- Masscan: Fast port scanning for batch operations
 - Shodan: Threat intelligence and vulnerability data
 - Amass: OWASP subdomain enumeration and attack surface mapping
 - BBOT: Recursive internet scanner for advanced reconnaissance
@@ -61,3 +64,24 @@ CMDB_DATABASE = {
 CTI_DATABASE = {
     "1.2.3.4": {"status": "malicious", "type": "Known C2 Server", "confidence": "95%"}
 }
+
+# ============================================================================
+# Phoenix Tracing & Observability (SNODE Integration)
+# Works with LOCAL Ollama LLM - no OpenAI instrumentation needed
+# ============================================================================
+ENABLE_TRACING = True  # Enable Phoenix/OpenTelemetry tracing
+PHOENIX_HOST = "127.0.0.1"
+PHOENIX_PORT = 6006  # Phoenix dashboard at http://localhost:6006
+
+# ============================================================================
+# Guardrails & Security (SNODE Integration)
+# ============================================================================
+ENABLE_GUARDRAILS = True  # Enable input/output validation
+STRICT_INPUT_VALIDATION = True  # Strict mode for prompt injection detection
+ALLOW_DESTRUCTIVE_COMMANDS = False  # Allow potentially dangerous commands (⚠️ use with caution)
+
+# Guardrail Settings
+PROMPT_INJECTION_DETECTION = True  # Detect prompt injection attempts
+DANGEROUS_COMMAND_FILTER = True  # Filter dangerous commands before execution
+AUTO_SANITIZE_COMMANDS = True  # Attempt to sanitize dangerous commands
+

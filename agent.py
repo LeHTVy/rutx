@@ -33,6 +33,13 @@ from database import (
 )
 from prompts import get_phase1_prompt, get_phase3_prompt, get_phase4_prompt
 
+# SNODE Integration (Tracing + Guardrails)
+try:
+    from utils.tracing import trace_ollama_call
+    TRACING_AVAILABLE = True
+except ImportError:
+    TRACING_AVAILABLE = False
+
 
 class IterationPhase:
     """Enumeration for iteration phases"""
@@ -101,14 +108,27 @@ class SNODEAgent:
         if tools:
             payload["tools"] = tools
 
+        # === SNODE TRACING: Wrap Ollama call ===
         try:
-            response = requests.post(
-                OLLAMA_ENDPOINT,
-                json=payload,
-                timeout=timeout
-            )
-            response.raise_for_status()
-            return response.json()
+            if TRACING_AVAILABLE:
+                # Get prompt for tracing
+                user_msg = next((m["content"] for m in messages if m["role"] == "user"), "")
+                with trace_ollama_call(self.model, user_msg):
+                    response = requests.post(
+                        OLLAMA_ENDPOINT,
+                        json=payload,
+                        timeout=timeout
+                    )
+                    response.raise_for_status()
+                    return response.json()
+            else:
+                response = requests.post(
+                    OLLAMA_ENDPOINT,
+                    json=payload,
+                    timeout=timeout
+                )
+                response.raise_for_status()
+                return response.json()
         except requests.exceptions.HTTPError as e:
             # If 500 error with tools, retry without tools (model may not support function calling)
             if response.status_code == 500 and tools and retry_without_tools:
@@ -1463,16 +1483,43 @@ This indicates:
 
         analysis = response.get("message", {}).get("content", "No analysis generated")
 
+        # DEBUG: Log LLM response for troubleshooting
+        if analysis:
+            print(f"  🔍 DEBUG: LLM response length: {len(analysis)} chars")
+            # Show first 300 chars to diagnose issues without overwhelming output
+            preview = analysis[:300].replace("\n", "\\n")
+            print(f"  🔍 DEBUG: Preview: {preview}...")
+
         # Handle invalid LLM responses or generic templates
         invalid_responses = ["", "None", "No analysis generated", "null", "N/A"]
-        # Also detect if LLM returned a generic template with placeholders
-        has_placeholders = any(placeholder in analysis for placeholder in [
-            "[Insert Date]", "[Total Number]", "[Number of", "ServerA", "[X]",
-            "[list", "[count", "[brief summary]"
-        ])
+        
+        # More specific placeholder detection - only flag if response has MULTIPLE generic placeholders
+        # Removed overly broad patterns like [X], [list, [count that match legitimate outputs
+        placeholder_patterns = [
+            "[Insert Date]",      # Very specific generic placeholder
+            "[Total Number]",     # Very specific generic placeholder  
+            "ServerA",            # Clearly a placeholder name from examples
+            "[brief summary]",    # Instruction placeholder
+            "[WHY IT'S",         # From prompt examples, shouldn't appear in good output
+            "[Insert",           # Catch other [Insert X] variants
+        ]
 
-        if not analysis or analysis.strip() in invalid_responses or has_placeholders:
-            print("  ⚠️  LLM returned invalid/generic template - using fallback report")
+        # Count how many different placeholders appear
+        placeholder_count = sum(1 for p in placeholder_patterns if p in analysis)
+
+        # Flag as invalid if:
+        # 1. Response is empty or in invalid_responses list, OR
+        # 2. Has 2+ generic placeholders (stronger evidence of template), OR
+        # 3. Analysis is suspiciously short (<100 chars) suggesting incomplete generation
+        is_template = (
+            not analysis or
+            analysis.strip() in invalid_responses or
+            placeholder_count >= 2 or
+            (len(analysis.strip()) < 100 and any(p in analysis for p in ["[", "ServerA"]))
+        )
+
+        if is_template:
+            print(f"  ⚠️  LLM returned invalid/generic template - using fallback report (placeholders: {placeholder_count})")
             analysis = self._generate_basic_analysis_report(scan_results)
 
         # Store analysis results in session

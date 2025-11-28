@@ -278,6 +278,10 @@ def main():
     print_banner()
     print_system_info()
 
+    # Initialize SNODE Integration (Tracing + Guardrails)
+    from utils.snode_integration import get_snode_integration
+    snode = get_snode_integration()
+
     # Import agent here to avoid circular imports
     from agent import SNODEAgent
     from utils import create_input_handler
@@ -306,6 +310,13 @@ def main():
             prompt = input_handler.input().strip()
 
             if not prompt:
+                continue
+
+            # === GUARDRAIL: Validate user input ===
+            is_valid, reason = snode.validate_user_input(prompt)
+            if not is_valid:
+                print(f"{Colors.RED}⛔ Input blocked by guardrails{Colors.RESET}")
+                print(f"{Colors.DIM}Reason: {reason}{Colors.RESET}\n")
                 continue
 
             # Handle commands
