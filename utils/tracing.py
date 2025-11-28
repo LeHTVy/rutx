@@ -54,15 +54,30 @@ class TracingManager:
             
             print(f"🔍 Starting Phoenix tracing...")
             
-            # Launch Phoenix server (using env vars)
-            self.session = px.launch_app()
+            # Suppress ALL warnings and Phoenix verbose output
+            import sys
+            from io import StringIO
             
-            # Register OpenTelemetry with minimal output
-            self.tracer_provider = register(
-                project_name=self.project_name,
-                endpoint=f"http://{host}:{port}/v1/traces",
-                set_global_tracer_provider=True  # Suppress warning about this
-            )
+            # Capture stdout/stderr during Phoenix startup
+            old_stdout = sys.stdout
+            old_stderr = sys.stderr
+            sys.stdout = StringIO()
+            sys.stderr = StringIO()
+            
+            try:
+                # Launch Phoenix server (using env vars) - ALL OUTPUT SUPPRESSED
+                self.session = px.launch_app()
+                
+                # Register OpenTelemetry - ALL OUTPUT SUPPRESSED
+                self.tracer_provider = register(
+                    project_name=self.project_name,
+                    endpoint=f"http://{host}:{port}/v1/traces",
+                    set_global_tracer_provider=True
+                )
+            finally:
+                # Restore stdout/stderr
+                sys.stdout = old_stdout
+                sys.stderr = old_stderr
             
             # NOTE: We do NOT instrument OpenAI since we use Ollama
             # Ollama calls will be traced manually via custom spans
