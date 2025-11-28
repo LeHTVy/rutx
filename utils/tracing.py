@@ -5,7 +5,13 @@ Works with LOCAL OLLAMA LLM (no OpenAI dependencies)
 """
 
 import os
+import warnings
 from typing import Optional
+
+# Suppress SQLAlchemy warnings from Phoenix
+warnings.filterwarnings("ignore", category=Warning, module="sqlalchemy")
+warnings.filterwarnings("ignore", message=".*SAWarning.*")
+
 try:
     import phoenix as px
     from phoenix.otel import register
@@ -42,23 +48,27 @@ class TracingManager:
             return False
         
         try:
-            print(f"🔍 Starting Phoenix tracing server on {host}:{port}...")
+            # Set env vars to avoid deprecation warnings
+            os.environ["PHOENIX_HOST"] = host
+            os.environ["PHOENIX_PORT"] = str(port)
             
-            # Launch Phoenix server
-            self.session = px.launch_app(host=host, port=port)
+            print(f"🔍 Starting Phoenix tracing...")
             
-            # Register OpenTelemetry
+            # Launch Phoenix server (using env vars)
+            self.session = px.launch_app()
+            
+            # Register OpenTelemetry with minimal output
             self.tracer_provider = register(
                 project_name=self.project_name,
-                endpoint=f"http://{host}:{port}/v1/traces"
+                endpoint=f"http://{host}:{port}/v1/traces",
+                set_global_tracer_provider=True  # Suppress warning about this
             )
             
             # NOTE: We do NOT instrument OpenAI since we use Ollama
             # Ollama calls will be traced manually via custom spans
             
             self.enabled = True
-            print(f"✅ Phoenix tracing active at http://{host}:{port}")
-            print(f"   📊 Tracing Ollama calls with custom spans")
+            print(f"   ✅ Dashboard: http://{host}:{port}")
             
             return True
             
