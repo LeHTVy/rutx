@@ -621,36 +621,20 @@ Select the most appropriate tool for the user's request."""
     def _get_intelligent_port_scan_strategy(self, subdomains: List[str]) -> List[Dict]:
         """
         Professional port scanning workflow with DNS pre-resolution and deduplication
-        
+
         Uses OSINT intelligence to prioritize scanning:
         - Crown jewels: Full port scan (1-65535) with naabu
         - High-value: Top 1000 ports
         - Others: Batch scan common ports
-        
+
         Args:
             subdomains: List of subdomains to scan
-        
+
         Returns:
             List of tool selections with intelligent prioritization
         """
         print("\n  🧠 INTELLIGENT PORT SCAN STRATEGY")
         print("  " + "="*58)
-        
-        try:
-            from tools.dns_tools import get_unique_ips, print_deduplication_stats
-            
-            # Stage 0: DNS Resolution + Deduplication
-            print("  📊 STAGE 0: DNS Pre-Resolution & Deduplication")
-            unique_ips, ip_to_subdomains, subdomain_to_ip = get_unique_ips(subdomains)
-            
-            # Print stats
-            print_deduplication_stats(subdomains, unique_ips, ip_to_subdomains)
-            
-        except ImportError:
-            print("  ⚠️  DNS tools not available, using subdomains directly")
-            subdomain_to_ip = {sub: sub for sub in subdomains}
-            ip_to_subdomains = {sub: [sub] for sub in subdomains}
-            unique_ips = subdomains
         
         # Use OSINT intelligence if available
         selected_tools = []
@@ -714,16 +698,15 @@ Select the most appropriate tool for the user's request."""
             print(f"\n  ✅ Strategy: {len(crown_jewels)} comprehensive + {len(high_value)} detailed + {len(medium_low)} quick = {total} targets")
             
         else:
-            # Fallback: No OSINT, use IP deduplication only
-            print("\n  ⚡ STAGE 1: Fast Discovery (No OSINT)")
-            print(f"     → Scanning {len(unique_ips)} unique IPs with top-1000 ports")
-            
-            # Use naabu top-1000 on all unique IPs
+            # Fallback: No OSINT intelligence - use batch scan on all subdomains
+            print("\n  ⚡ STAGE 1: Batch Scan (No OSINT)")
+            print(f"     → Scanning {len(subdomains)} subdomains")
+
+            # Use masscan batch scan (it handles DNS resolution + deduplication internally)
             selected_tools.append({
-                "name": "naabu_top_ports",
+                "name": "masscan_batch_scan",
                 "arguments": {
-                    "targets": ",".join(unique_ips),
-                    "top": 1000
+                    "targets": ",".join(subdomains)
                 }
             })
         

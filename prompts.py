@@ -410,6 +410,57 @@ RULES:
 - Give actionable recommendations
 """
 
+# Phase 4 format for combined subdomain analysis
+SUBDOMAIN_ANALYSIS_PHASE4_FORMAT = """PHASE 4: COMBINED SUBDOMAIN ANALYSIS
+
+You have received results from {tool_count} subdomain enumeration tools (Amass + BBOT).
+
+**YOUR TASK**: Generate ONLY the SECURITY ANALYSIS and RECOMMENDATIONS sections.
+The categorized subdomain lists will be generated programmatically for accuracy.
+Focus on providing intelligent security insights based on the discovered subdomains.
+
+COMBINED SCAN RESULTS:
+{combined_results}
+
+NOTE: The results include:
+- "categorized": Pre-categorized subdomains by type (www, api, mail, dev, staging, admin, vpn, internal, test, other)
+- "category_counts": Total count for each category
+- "critical_targets": CRITICAL subdomains (api, admin, dev) that get comprehensive scans + Shodan
+- "high_value_targets": High-value subdomains (staging, test, mail, vpn, internal) that get comprehensive scans
+
+ANALYSIS REQUIREMENTS:
+1. Analyze the critical_targets and high_value_targets lists
+2. Review the categorized subdomains and their counts
+3. Identify specific security concerns based on what was discovered
+4. Provide actionable, specific recommendations
+5. Consider the context: which subdomains pose the highest risk?
+
+OUTPUT FORMAT - Generate ONLY these two sections:
+
+## SECURITY ANALYSIS
+[Provide detailed security analysis including:]
+- Assessment of critical targets found (reference specific subdomains)
+- Risk evaluation of high-value targets
+- Specific concerns about exposed infrastructure (dev/staging/admin panels)
+- Analysis of attack surface based on subdomain categories
+- Any anomalies or particularly concerning findings
+
+## RECOMMENDATIONS
+[Provide specific, actionable recommendations:]
+1. Immediate actions (0-24h) - Critical issues to address now
+2. Short-term actions (1-7d) - Important security improvements
+3. Long-term improvements (1-30d) - Strategic security enhancements
+4. Specific scanning priorities - Which subdomains to investigate first
+5. Remediation steps - How to secure exposed infrastructure
+
+GUIDELINES:
+- Be specific - reference actual subdomain names when discussing risks
+- Prioritize by severity - Critical > High > Medium > Low
+- Provide context - explain WHY each finding is concerning
+- Give actionable steps - tell them HOW to remediate, not just WHAT to fix
+- Consider the full picture - analyze patterns across all categories
+"""
+
 
 # ============================================================================
 # HELPER FUNCTIONS
@@ -475,59 +526,43 @@ Detected Target Type: {target_type}
 
 def get_phase3_prompt(scan_results: str, db_context: str = "{}", scan_type: str = "generic") -> str:
     """Build Phase 3 (Analysis) prompt with scan-type specific format"""
-    
+
     # Select appropriate format based on scan type
     if scan_type == "masscan" or "masscan" in scan_results.lower():
         output_format = MASSCAN_SCAN_FORMAT
     elif scan_type == "port_scan":
+        output_format = PORT_SCAN_FORMAT
+    elif scan_type == "vuln_scan" or "vulnerability" in scan_results.lower():
+        output_format = VULN_SCAN_FORMAT
+    elif scan_type == "subdomain" or "subdomain" in scan_results.lower():
+        output_format = SUBDOMAIN_DISCOVERY_FORMAT
+    elif scan_type == "osint":
+        output_format = OSINT_FORMAT
+    else:
+        output_format = GENERIC_FORMAT
 
-PHASE 4: COMBINED SUBDOMAIN ANALYSIS
+    # Build the complete Phase 3 prompt
+    prompt = f"""You are SNODE AI, a security analysis agent.
 
-You have received results from {tool_count} subdomain enumeration tools (Amass + BBOT).
+PHASE 3: ANALYSIS
 
-**YOUR TASK**: Generate ONLY the SECURITY ANALYSIS and RECOMMENDATIONS sections.
-The categorized subdomain lists will be generated programmatically for accuracy.
-Focus on providing intelligent security insights based on the discovered subdomains.
+SCAN RESULTS:
+{scan_results}
 
-COMBINED SCAN RESULTS:
-{combined_results}
+DATABASE CONTEXT (previous findings):
+{db_context}
 
-NOTE: The results include:
-- "categorized": Pre-categorized subdomains by type (www, api, mail, dev, staging, admin, vpn, internal, test, other)
-- "category_counts": Total count for each category
-- "critical_targets": CRITICAL subdomains (api, admin, dev) that get comprehensive scans + Shodan
-- "high_value_targets": High-value subdomains (staging, test, mail, vpn, internal) that get comprehensive scans
+{VULNERABILITY_ANALYSIS}
 
-ANALYSIS REQUIREMENTS:
-1. Analyze the critical_targets and high_value_targets lists
-2. Review the categorized subdomains and their counts
-3. Identify specific security concerns based on what was discovered
-4. Provide actionable, specific recommendations
-5. Consider the context: which subdomains pose the highest risk?
+{output_format}
 
-OUTPUT FORMAT - Generate ONLY these two sections:
-
-## SECURITY ANALYSIS
-[Provide detailed security analysis including:]
-- Assessment of critical targets found (reference specific subdomains)
-- Risk evaluation of high-value targets
-- Specific concerns about exposed infrastructure (dev/staging/admin panels)
-- Analysis of attack surface based on subdomain categories
-- Any anomalies or particularly concerning findings
-
-## RECOMMENDATIONS
-[Provide specific, actionable recommendations:]
-1. Immediate actions (0-24h) - Critical issues to address now
-2. Short-term actions (1-7d) - Important security improvements
-3. Long-term improvements (1-30d) - Strategic security enhancements
-4. Specific scanning priorities - Which subdomains to investigate first
-5. Remediation steps - How to secure exposed infrastructure
-
-GUIDELINES:
-- Be specific - reference actual subdomain names when discussing risks
-- Prioritize by severity - Critical > High > Medium > Low
-- Provide context - explain WHY each finding is concerning
-- Give actionable steps - tell them HOW to remediate, not just WHAT to fix
-- Consider the full picture - analyze patterns across all categories
+CRITICAL RULES:
+- Analyze the ACTUAL scan data provided above
+- Cross-reference with database context if relevant
+- Follow the output format for scan type: {scan_type}
+- Be specific and evidence-based
+- Provide actionable recommendations
 """
+
+    return prompt
 

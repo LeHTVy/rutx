@@ -291,7 +291,49 @@ def main():
 
     # Create interactive input handler with history support
     input_handler = create_input_handler(
+        prompt=f"{Colors.CYAN}SNODE{Colors.RESET}> ",
+        history_file=".snode_history"
+    )
+
+    # Main interaction loop
+    while True:
+        try:
+            # Get user input with history support
+            prompt = input_handler.input().strip()
+
+            if not prompt:
+                continue
+
+            # Handle built-in commands
+            if prompt.lower() in ['quit', 'exit']:
+                print(f"\n{Colors.YELLOW}Goodbye!{Colors.RESET}\n")
+                break
+
+            elif prompt.lower() == 'help':
+                print_help()
+                continue
+
+            elif prompt.lower() == 'tools':
+                print_tool_list()
+                continue
+
+            elif prompt.lower() == 'clear':
+                clear_screen()
+                print_banner()
+                print_system_info()
+                continue
+
+            elif prompt.lower() == 'banner':
+                clear_screen()
+                print_banner()
+                continue
+
+            elif prompt.lower() == 'sudo':
+                if not is_admin():
+                    print(f"\n{Colors.YELLOW}Restarting as Administrator...{Colors.RESET}\n")
                     restart_as_admin()
+                else:
+                    print(f"\n{Colors.GREEN}Already running as Administrator{Colors.RESET}\n")
                 continue
 
             # Run the 3-phase scan
