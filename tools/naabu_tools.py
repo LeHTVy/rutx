@@ -207,15 +207,35 @@ def naabu_web_ports(targets: Union[str, List[str]]) -> Dict[str, Any]:
 def naabu_critical_ports(targets: Union[str, List[str]]) -> Dict[str, Any]:
     """
     Scan critical services ports (databases, RDP, SMB, etc.)
-    
+
     Args:
         targets: Targets to scan
-    
+
     Returns:
         dict: Scan results
     """
     critical_ports = "22,23,21,25,3389,445,139,1433,3306,5432,27017,6379,9200,9300"
     return naabu_scan(targets, ports=critical_ports, rate=5000)
+
+
+def naabu_batch_scan(targets: str, ports: str = "1-65535", rate: int = 1000, timeout: int = 1800) -> Dict[str, Any]:
+    """
+    Batch scan multiple targets with Naabu (for medium/low priority targets)
+
+    Args:
+        targets: Comma-separated list of targets
+        ports: Port range (default: 1-65535 for comprehensive)
+        rate: Scan rate in packets/sec (default: 1000 for stealth)
+        timeout: Timeout in seconds (default: 1800 = 30 minutes)
+
+    Returns:
+        dict: Scan results with all targets
+    """
+    # Convert comma-separated string to list
+    target_list = [t.strip() for t in targets.split(",")]
+
+    # Use the base naabu_scan function
+    return naabu_scan(target_list, ports=ports, rate=rate, timeout=timeout)
 
 
 # ============================================================================
@@ -302,6 +322,35 @@ NAABU_TOOLS = [
                 "required": ["targets"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "naabu_batch_scan",
+            "description": "Batch scan multiple targets with comprehensive port coverage. Use for: medium/low priority targets, batch subdomain scanning, large-scale port discovery. Scans all 65535 ports by default at stealthy rate (1000 pps). Takes 10-30 minutes for 100-200 targets.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "targets": {
+                        "type": "string",
+                        "description": "Comma-separated list of targets (IPs or domains)"
+                    },
+                    "ports": {
+                        "type": "string",
+                        "description": "Port range (default: 1-65535). Options: '1-65535', 'top-1000', '80,443,8080'"
+                    },
+                    "rate": {
+                        "type": "integer",
+                        "description": "Scan rate in packets/sec (default: 1000 for stealth, max: 10000)"
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Timeout in seconds (default: 1800 = 30 minutes)"
+                    }
+                },
+                "required": ["targets"]
+            }
+        }
     }
 ]
 
@@ -324,6 +373,7 @@ def execute_naabu_tool(tool_name: str, tool_args: dict) -> dict:
         "naabu_top_ports": naabu_top_ports,
         "naabu_web_ports": naabu_web_ports,
         "naabu_critical_ports": naabu_critical_ports,
+        "naabu_batch_scan": naabu_batch_scan,
     }
     
     if tool_name not in tools:
