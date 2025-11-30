@@ -1,7 +1,0 @@
-{
-  "timestamp": "2025-11-18T14:30:01Z",
-  "event_type": "login_success",
-  "source_ip": "10.0.0.5",
-  "destination_ip": "192.168.1.100",
-  "user": "alice"
-}

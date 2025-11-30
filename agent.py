@@ -31,7 +31,7 @@ from database import (
     ScanSessionManager, ToolResultPersister, LLMContextBuilder,
     persist_tool_results, build_and_cache_context, get_cached_context
 )
-from prompts import get_phase1_prompt, get_phase3_prompt, get_phase4_prompt
+from prompts import get_phase1_prompt, get_phase3_prompt
 
 # SNODE Integration (Tracing + Guardrails)
 try:
