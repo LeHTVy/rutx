@@ -10,6 +10,7 @@ Phase 4: Report Generation - LLM formats for target audience
 
 import json
 import requests
+import urllib3
 import sys
 import os
 from datetime import datetime
@@ -745,6 +746,8 @@ Select the most appropriate tool for the user's request."""
                     import re
                 
                 print(f"  📄 Scraping homepage of {domain}...")
+                # Suppress SSL verification warnings for scraping
+                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
                 response = requests.get(f"https://{domain}", timeout=10, verify=False)
                 
                 if has_bs4:
@@ -1384,6 +1387,9 @@ Select the most appropriate tool for the user's request."""
             for r in results_for_llm:
                 if r.get("tool", "").startswith("masscan") and "masscan_data" in r:
                     masscan_data = r["masscan_data"]
+                    # Extract the results and hostname mapping for report generation
+                    results = masscan_data.get("results", {})
+                    hostname_to_ip = masscan_data.get("hostname_to_ip", {})
                     break
 
             # If masscan found zero open ports, generate report directly
