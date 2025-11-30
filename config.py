@@ -16,7 +16,7 @@ Active Tools:
 # Ollama AI Configuration
 OLLAMA_ENDPOINT = "http://localhost:11434/api/chat"
 OLLAMA_LIST_ENDPOINT = "http://localhost:11434/api/tags"
-MODEL_NAME = "mathstral:latest"  
+MODEL_NAME = "llama3.2:latest"  
 
 # Timeout Settings (in seconds)
 TIMEOUT_NMAP = 1800  # 30 minutes (was 20, increased for comprehensive scans)
@@ -44,6 +44,15 @@ SHODAN_API_KEY = "GOcpJ7gEk2IKfLr8N9500eyXjJ7vva2G"
 
 # Security Settings
 REQUIRE_AUTHORIZATION_PROMPT = True  
+
+# SNODE Integration Settings
+ENABLE_TRACING = False  # Set to True to enable Phoenix tracing
+PHOENIX_HOST = "localhost"
+PHOENIX_PORT = 6006
+
+ENABLE_GUARDRAILS = True  # Enable input/output validation
+STRICT_INPUT_VALIDATION = True  # Strict prompt injection detection
+ALLOW_DESTRUCTIVE_COMMANDS = False  # Block dangerous commands (rm -rf, etc.)
 
 # Logging
 LOG_LEVEL = "INFO"
