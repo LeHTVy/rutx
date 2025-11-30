@@ -1441,8 +1441,563 @@ This indicates:
                         )
                     except Exception:
                         pass
+                # Build per-domain report
+                analysis = f"""## SCAN SUMMARY
 
+**Targets Scanned:** {len(masscan_data.get('targets', []))}
+**Unique IPs:** {len(results)}
+**Total Open Ports Found:** {masscan_data.get('total_open_ports', 0)}
+**Targets with Open Ports:** {masscan_data.get('targets_with_open_ports', 0)}
+**Ports Scanned:** {masscan_data.get('ports_scanned', 'N/A')}
+**Scan Duration:** {masscan_data.get('scan_duration', 0):.1f} seconds
+
+---
+
+## DOMAIN-BY-DOMAIN FINDINGS
+
+"""
+                
+                # Critical services to flag
+                critical_ports = {3306: "MySQL", 5432: "PostgreSQL", 1433: "MSSQL", 3389: "RDP", 445: "SMB"}
+                high_risk_ports = {22: "SSH", 21: "FTP", 25: "SMTP", 23: "Telnet"}
+                web_ports = {80: "HTTP", 443: "HTTPS", 8080: "HTTP-Alt", 8443: "HTTPS-Alt"}
+                
+                critical_findings = []
+                high_risk_findings = []
+                web_services = []
+                
+                # Process each domain
+                for domain, ip in sorted(hostname_to_ip.items()):
+                    if ip in results and results[ip]:
+                        ports_data = results[ip]
+                        port_numbers = sorted([p["port"] for p in ports_data])
+                        
+                        analysis += f"\n### **{domain}** (`{ip}`)\n\n"
+                        
+                        # Categorize ports
+                        critical_on_host = []
+                        high_risk_on_host = []
+                        web_on_host = []
+                        other_ports = []
+                        
+                        for port_num in port_numbers:
+                            if port_num in critical_ports:
+                                critical_on_host.append(f"{port_num}/{critical_ports[port_num]}")
+                            elif port_num in high_risk_ports:
+                                high_risk_on_host.append(f"{port_num}/{high_risk_ports[port_num]}")
+                            elif port_num in web_ports:
+                                web_on_host.append(f"{port_num}/{web_ports[port_num]}")
+                            else:
+                                other_ports.append(str(port_num))
+                        
+                        # Display ports
+                        analysis += f"**Open Ports:** {', '.join(map(str, port_numbers))}\n\n"
+                        
+                        # Risk assessment
+                        if critical_on_host:
+                            risk = "🚨 **CRITICAL**"
+                            analysis += f"**Risk Level:** {risk}\n\n"
+                            analysis += f"**Critical Services Exposed:**\n"
+                            for svc in critical_on_host:
+                                analysis += f"- {svc}\n"
+                            critical_findings.append((domain, ip, critical_on_host))
+                        elif high_risk_on_host:
+                            risk = "⚠️ **HIGH**"
+                            analysis += f"**Risk Level:** {risk}\n\n"
+                            analysis += f"**High-Risk Services:**\n"
+                            for svc in high_risk_on_host:
+                                analysis += f"- {svc}\n"
+                            high_risk_findings.append((domain, ip, high_risk_on_host))
+                        elif web_on_host:
+                            risk = "ℹ️ **MEDIUM**"
+                            analysis += f"**Risk Level:** {risk}\n\n"
+                            analysis += f"**Web Services:**\n"
+                            for svc in web_on_host:
+                                analysis += f"- {svc}\n"
+                            web_services.append((domain, ip, web_on_host))
+                        else:
+                            risk = "ℹ️ **LOW**"
+                            analysis += f"**Risk Level:** {risk}\n\n"
+                        
+                        analysis += "\n"
+                
+                # Summary sections
+                if critical_findings:
+                    analysis += f"\n---\n\n## 🚨 CRITICAL FINDINGS ({len(critical_findings)})\n\n"
+                    analysis += "These services should NEVER be exposed to the internet:\n\n"
+                    for domain, ip, services in critical_findings:
+                        analysis += f"- **{domain}** (`{ip}`): {', '.join(services)}\n"
+                
+                if high_risk_findings:
+                    analysis += f"\n---\n\n## ⚠️ HIGH-RISK FINDINGS ({len(high_risk_findings)})\n\n"
+                    analysis += "These services should be carefully secured:\n\n"
+                    for domain, ip, services in high_risk_findings:
+                        analysis += f"- **{domain}** (`{ip}`): {', '.join(services)}\n"
+                
+                if web_services:
+                    analysis += f"\n---\n\n## 🌐 WEB SERVICES ({len(web_services)})\n\n"
+                    # Check for HTTP without HTTPS
+                    http_only = []
+                    for domain, ip, services in web_services:
+                        has_https = any("443" in s for s in services)
+                        has_http = any("80/" in s for s in services)
+                        if has_http and not has_https:
+                            http_only.append(domain)
+                    
+                    if http_only:
+                        analysis += f"**⚠️ HTTP Only (No HTTPS):** {', '.join(http_only)}\n\n"
+                
+                # Recommendations
+                analysis += "\n---\n\n## RECOMMENDATIONS\n\n"
+                
+                if critical_findings:
+                    analysis += "### IMMEDIATE (Critical - 0-24h)\n\n"
+                    analysis += "1. **Block Database Ports**: Firewall rules should block external access to MySQL (3306), PostgreSQL (5432), MSSQL (1433)\n"
+                    analysis += "2. **Block RDP/SMB**: Remote Desktop (3389) and SMB (445) should NEVER be internet-facing\n"
+                    analysis += "3. **Verify Business Justification**: If these services are intentional, implement VPN access instead\n\n"
+                
+                if high_risk_findings:
+                    analysis += "### HIGH PRIORITY (1-7 days)\n\n"
+                    analysis += "1. **Secure SSH Access**: Implement key-based auth, disable password login, use fail2ban\n"
+                    analysis += "2. **Review FTP/SMTP**: Consider SFTP instead of FTP, verify SMTP has proper auth\n"
+                    analysis += "3. **Monitor Access Logs**: Set up alerts for login attempts on these services\n\n"
+                
+                if http_only:
+                    analysis += "### MEDIUM PRIORITY (7-30 days)\n\n"
+                    analysis += "1. **Enable HTTPS**: Deploy SSL certificates for all HTTP-only sites\n"
+                    analysis += "2. **Redirect HTTP to HTTPS**: Configure automatic redirection\n\n"
+                
+                analysis += "### NEXT STEPS\n\n"
+                analysis += "1. **Detailed Scanning**: Run `nmap service detection` on critical/high-risk hosts for version info\n"
+                analysis += "2. **Vulnerability Assessment**: Check for known CVEs in exposed services\n"
+                analysis += "3. **Network Segmentation**: Review firewall rules and network architecture\n"
+                analysis += "4. **Compliance Review**: Verify exposure aligns with PCI-DSS, HIPAA, or other compliance requirements\n"
+                
+                # Save to database
+                if self.session_manager and self.db_session_id and enriched_context:
+                    try:
+                        # Calculate risk score based on findings
+                        risk_score = min(100, len(critical_findings) * 40 + len(high_risk_findings) * 20)
+                        risk_level = "CRITICAL" if critical_findings else ("HIGH" if high_risk_findings else "MEDIUM")
+                        
+                        self.session_manager.set_analysis_results(
+                            self.db_session_id,
+                            {"analysis": analysis[:10000]},  # Increased limit for detailed reports
+                            risk_score,
+                            risk_level
+                        )
+                    except Exception:
+                        pass
+                
+                # HYBRID APPROACH: Use LLM as cyber analyst to review the programmatic report
+                print(f"  🤖 LLM Cyber Analyst reviewing findings...")
+                
+                analyst_prompt = f"""You are a senior cybersecurity analyst reviewing a port scan report.
+
+**YOUR TASK**: Provide strategic security insights and actionable recommendations based on the findings below.
+
+# SCAN REPORT TO ANALYZE:
+
+{analysis}
+
+---
+
+As a cyber analyst, provide:
+
+1. **THREAT ASSESSMENT** 
+   - What are the most critical security risks?
+   - Which findings pose immediate threats?
+   - What attack vectors are exposed?
+
+2. **VULNERABILITY ANALYSIS**
+   - Which services are most likely to be vulnerable?
+   - What known exploits exist for the exposed services?
+   - What CVEs should be checked?
+
+3. **STRATEGIC RECOMMENDATIONS**
+   - What should be prioritized first?
+   - What additional scans or assessments are needed?
+   - What security controls should be implemented?
+
+4. **COMPLIANCE & BEST PRACTICES**
+   - Any compliance violations (PCI-DSS, HIPAA, SOC2)?
+   - Industry best practices being violated?
+   - Recommended security frameworks to follow?
+
+Be specific, actionable, and prioritize by risk level. Reference specific findings from the report."""
+
+                llm_messages = [
+                    {"role": "system", "content": "You are a senior cybersecurity analyst with expertise in penetration testing, vulnerability assessment, and security architecture."},
+                    {"role": "user", "content": analyst_prompt}
+                ]
+                
+                try:
+                    llm_response = self._call_ollama(llm_messages, timeout=TIMEOUT_OLLAMA)
+                    
+                    if "error" not in llm_response:
+                        llm_insights = llm_response.get("message", {}).get("content", "")
+                        
+                        if llm_insights and len(llm_insights.strip()) > 100:
+                            # Append LLM insights to programmatic report
+                            analysis += "\n\n---\n\n# 🧠 CYBER ANALYST INSIGHTS\n\n"
+                            analysis += llm_insights
+                            print(f"  ✅ Cyber analyst insights added ({len(llm_insights)} chars)")
+                        else:
+                            print(f"  ⚠️  Cyber analyst response too short, skipping")
+                    else:
+                        print(f"  ⚠️  Cyber analyst LLM error: {llm_response.get('error', 'unknown')}")
+                except Exception as e:
+                    print(f"  ⚠️  Cyber analyst failed: {e}")
+                
                 return analysis
+
+
+        # NMAP PORT SCAN: Generate programmatic report for better accuracy
+        if scan_type == "port_scan":
+            # Extract nmap data from results
+            nmap_data = None
+            for r in results_for_llm:
+                if "nmap" in r.get("tool", "").lower() and (r.get("open_ports") or r.get("scan_summary")):
+                    nmap_data = r
+                    break
+            
+            if nmap_data:
+                print(f"  📊 Generating structured Nmap port scan report")
+                
+                target = nmap_data.get("target", "Unknown")
+                command = nmap_data.get("command", "N/A")
+                open_ports = nmap_data.get("open_ports", [])
+                services = nmap_data.get("services", [])
+                hosts_discovered = nmap_data.get("hosts_discovered", 0)
+                
+                # Build report
+                analysis = f"""## SCAN SUMMARY
+
+**Target:** {target}
+**Hosts Discovered:** {hosts_discovered}
+**Total Open Ports:** {len(open_ports)}
+**Scan Command:** `{command}`
+
+---
+
+## OPEN PORTS
+
+"""
+                
+                if not open_ports:
+                    analysis += "**No open ports detected.**\n\n"
+                    analysis += "This could indicate:\n"
+                    analysis += "- Host is down or unreachable\n"
+                    analysis += "- All ports are filtered by firewall\n"
+                    analysis += "- Host is configured to not respond to scans\n"
+                else:
+                    # Categorize ports
+                    critical_ports_dict = {3306: "MySQL", 5432: "PostgreSQL", 1433: "MSSQL", 3389: "RDP", 445: "SMB", 139: "NetBIOS"}
+                    high_risk_ports_dict = {22: "SSH", 21: "FTP", 23: "Telnet", 25: "SMTP", 161: "SNMP"}
+                    web_ports_dict = {80: "HTTP", 443: "HTTPS", 8080: "HTTP-Alt", 8443: "HTTPS-Alt", 8000: "HTTP-Alt", 8888: "HTTP-Alt"}
+                    
+                    critical_findings = []
+                    high_risk_findings = []
+                    web_findings = []
+                    other_findings = []
+                    
+                    for port_info in open_ports:
+                        port_num = port_info.get("port", 0)
+                        service = port_info.get("service", "unknown")
+                        state = port_info.get("state", "unknown")
+                        
+                        if state == "open":
+                            if port_num in critical_ports_dict:
+                                critical_findings.append((port_num, service, critical_ports_dict[port_num]))
+                            elif port_num in high_risk_ports_dict:
+                                high_risk_findings.append((port_num, service, high_risk_ports_dict[port_num]))
+                            elif port_num in web_ports_dict:
+                                web_findings.append((port_num, service, web_ports_dict[port_num]))
+                            else:
+                                other_findings.append((port_num, service))
+                    
+                    # Display ports by category
+                    if critical_findings:
+                        analysis += f"### 🚨 **CRITICAL** ({len(critical_findings)} ports)\n\n"
+                        analysis += "These services should NEVER be exposed to the internet:\n\n"
+                        analysis += "| Port | State | Service | Risk |\n"
+                        analysis += "|------|-------|---------|------|\n"
+                        for port, service, svc_name in critical_findings:
+                            analysis += f"| {port}/tcp | open | {service} | {svc_name} - CRITICAL |\n"
+                        analysis += "\n"
+                    
+                    if high_risk_findings:
+                        analysis += f"### ⚠️ **HIGH RISK** ({len(high_risk_findings)} ports)\n\n"
+                        analysis += "These services require strong security controls:\n\n"
+                        analysis += "| Port | State | Service | Risk |\n"
+                        analysis += "|------|-------|---------|------|\n"
+                        for port, service, svc_name in high_risk_findings:
+                            analysis += f"| {port}/tcp | open | {service} | {svc_name} - HIGH |\n"
+                        analysis += "\n"
+                    
+                    if web_findings:
+                        analysis += f"### 🌐 **WEB SERVICES** ({len(web_findings)} ports)\n\n"
+                        analysis += "| Port | State | Service | Protocol |\n"
+                        analysis += "|------|-------|---------|----------|\n"
+                        for port, service, svc_name in web_findings:
+                            analysis += f"| {port}/tcp | open | {service} | {svc_name} |\n"
+                        analysis += "\n"
+                        
+                        # Check for HTTP without HTTPS
+                        has_http = any(p[0] in [80, 8080, 8000, 8888] for p in web_findings)
+                        has_https = any(p[0] in [443, 8443] for p in web_findings)
+                        if has_http and not has_https:
+                            analysis += "⚠️ **WARNING**: HTTP detected without HTTPS - unencrypted traffic\n\n"
+                    
+                    if other_findings:
+                        analysis += f"### ℹ️ **OTHER OPEN PORTS** ({len(other_findings)} ports)\n\n"
+                        analysis += "| Port | State | Service |\n"
+                        analysis += "|------|-------|--------|\n"
+                        for port, service in other_findings:
+                            analysis += f"| {port}/tcp | open | {service} |\n"
+                        analysis += "\n"
+                
+                # Recommendations
+                analysis += "\n---\n\n## RECOMMENDATIONS\n\n"
+                
+                if critical_findings:
+                    analysis += "### IMMEDIATE (0-24h)\n\n"
+                    analysis += "1. **Block Critical Services**: Immediately firewall block "
+                    analysis += ", ".join([f"port {p[0]}" for p in critical_findings])
+                    analysis += "\n2. **Verify Necessity**: Confirm if these services require internet exposure\n"
+                    analysis += "3. **Implement VPN**: Use VPN access instead of direct exposure\n\n"
+                
+                if high_risk_findings:
+                    analysis += "### SHORT-TERM (1-7 days)\n\n"
+                    for port, _, svc_name in high_risk_findings:
+                        if svc_name == "SSH":
+                            analysis += f"1. **SSH (port {port})**: Use key-based auth, disable password login, enable fail2ban\n"
+                        elif svc_name == "FTP":
+                            analysis += f"2. **FTP (port {port})**: Replace with SFTP or FTPS\n"
+                        elif svc_name == "Telnet":
+                            analysis += f"3. **Telnet (port {port})**: DISABLE immediately - use SSH instead\n"
+                    analysis += "\n"
+                
+                if web_findings:
+                    has_http = any(p[0] in [80, 8080] for p in web_findings)
+                    has_https = any(p[0] in [443, 8443] for p in web_findings)
+                    if has_http:
+                        if not has_https:
+                            if not high_risk_findings and not critical_findings:
+                                analysis += "### SHORT-TERM (1-7 days)\n\n"
+                            analysis += "4. **Enable HTTPS**: Deploy SSL/TLS certificates\n"
+                            analysis += "5. **Redirect HTTP to HTTPS**: Configure automatic redirection\n\n"
+                
+                analysis += "### NEXT STEPS\n\n"
+                analysis += "1. **Service Version Detection**: Run `nmap -sV` to identify software versions\n"
+                analysis += "2. **Vulnerability Scan**: Run `nmap --script vuln` to check for known vulnerabilities\n"
+                analysis += "3. **OS Detection**: Run `nmap -O` for operating system fingerprinting\n"
+                analysis += "4. **Threat Intelligence**: Use Shodan to check for known exposures\n"
+                
+                # Calculate risk score
+                if self.session_manager and self.db_session_id and enriched_context:
+                    try:
+                        risk_score = min(100, len(critical_findings) * 50 + len(high_risk_findings) * 25 + len(web_findings) * 10)
+                        risk_level = "CRITICAL" if critical_findings else ("HIGH" if high_risk_findings else "MEDIUM")
+                        
+                        self.session_manager.set_analysis_results(
+                            self.db_session_id,
+                            {"analysis": analysis[:10000]},
+                            risk_score,
+                            risk_level
+                        )
+                    except Exception:
+                        pass
+                
+                # HYBRID APPROACH: Use LLM as cyber analyst
+                print(f"  🤖 LLM Cyber Analyst reviewing Nmap findings...")
+                
+                analyst_prompt = f"""You are a senior cybersecurity analyst reviewing an Nmap port scan report.
+
+**YOUR TASK**: Provide expert security analysis based on the findings below.
+
+# SCAN REPORT TO ANALYZE:
+
+{analysis}
+
+---
+
+As a cyber analyst, provide:
+
+1. **THREAT ASSESSMENT**: What are the immediate security risks and attack vectors?
+2. **VULNERABILITY ANALYSIS**: Which services are likely vulnerable? What CVEs to check?
+3. **STRATEGIC RECOMMENDATIONS**: What actions should be prioritized?
+4. **NEXT STEPS**: What additional scans or security assessments are needed?
+
+Be specific and reference exact findings from the report."""
+
+                llm_messages = [
+                    {"role": "system", "content": "You are a senior cybersecurity analyst specializing in network security and vulnerability assessment."},
+                    {"role": "user", "content": analyst_prompt}
+                ]
+                
+                try:
+                    llm_response = self._call_ollama(llm_messages, timeout=TIMEOUT_OLLAMA)
+                    
+                    if "error" not in llm_response:
+                        llm_insights = llm_response.get("message", {}).get("content", "")
+                        
+                        if llm_insights and len(llm_insights.strip()) > 100:
+                            analysis += "\n\n---\n\n# 🧠 CYBER ANALYST INSIGHTS\n\n"
+                            analysis += llm_insights
+                            print(f"  ✅ Cyber analyst insights added")
+                except Exception as e:
+                    print(f"  ⚠️  Cyber analyst failed: {e}")
+                
+                return analysis
+
+
+        # NMAP VULN SCAN: Generate programmatic vulnerability report
+        if scan_type == "vuln_scan":
+            # Extract nmap vuln data
+            nmap_data = None
+            for r in results_for_llm:
+                if "vuln" in r.get("tool", "").lower() and r.get("vulnerabilities"):
+                    nmap_data = r
+                    break
+            
+            if nmap_data:
+                print(f"  📊 Generating structured vulnerability report")
+                
+                target = nmap_data.get("target", "Unknown")
+                vulnerabilities = nmap_data.get("vulnerabilities", [])
+                open_ports = nmap_data.get("open_ports", [])
+                
+                analysis = f"""## VULNERABILITY SCAN REPORT
+
+**Target:** {target}
+**Scan Type:** Nmap NSE Vulnerability Scripts
+**Open Ports:** {len(open_ports)}
+**Vulnerability Indicators Found:** {len(vulnerabilities)}
+
+---
+
+"""
+                
+                if not vulnerabilities:
+                    analysis += "## RESULTS\n\n"
+                    analysis += "✅ **No vulnerabilities detected by NSE scripts.**\n\n"
+                    analysis += "**Note**: This does not guarantee the system is secure. It only means:\n"
+                    analysis += "- No known vulnerabilities found in Nmap's script database\n"
+                    analysis += "- Services may still have unpatched vulnerabilities\n"
+                    analysis += "- Configuration issues may exist\n\n"
+                else:
+                    analysis += "## 🚨 VULNERABILITIES DETECTED\n\n"
+                    
+                    # Try to categorize vulnerabilities by severity
+                    critical_vulns = []
+                    high_vulns = []
+                    other_vulns = []
+                    
+                    for vuln in vulnerabilities:
+                        vuln_lower = vuln.lower()
+                        if "critical" in vuln_lower or "rce" in vuln_lower or "remote code execution" in vuln_lower:
+                            critical_vulns.append(vuln)
+                        elif "high" in vuln_lower or "vulnerable" in vuln_lower:
+                            high_vulns.append(vuln)
+                        else:
+                            other_vulns.append(vuln)
+                    
+                    if critical_vulns:
+                        analysis += "### 🔴 CRITICAL SEVERITY\n\n"
+                        for vuln in critical_vulns:
+                            analysis += f"- {vuln}\n"
+                        analysis += "\n"
+                    
+                    if high_vulns:
+                        analysis += "### 🟠 HIGH SEVERITY\n\n"
+                        for vuln in high_vulns:
+                            analysis += f"- {vuln}\n"
+                        analysis += "\n"
+                    
+                    if other_vulns:
+                        analysis += "### ℹ️ OTHER FINDINGS\n\n"
+                        for vuln in other_vulns:
+                            analysis += f"- {vuln}\n"
+                        analysis += "\n"
+                
+                analysis += "---\n\n## RECOMMENDATIONS\n\n"
+                
+                if critical_vulns:
+                    analysis += "### IMMEDIATE (0-24h) - CRITICAL\n\n"
+                    analysis += "1. **Patch Immediately**: Apply security updates for all critical vulnerabilities\n"
+                    analysis += "2. **Isolate System**: Consider isolating the system until patches are applied\n"
+                    analysis += "3. **Incident Response**: Activate incident response procedures\n\n"
+                
+                if high_vulns or critical_vulns:
+                    analysis += "### SHORT-TERM (1-7 days)\n\n"
+                    analysis += "1. **Verify Patches**: Confirm all security updates are applied successfully\n"
+                    analysis += "2. **Scan Again**: Re-run vulnerability scan to verify fixes\n"
+                    analysis += "3. **Review Logs**: Check for signs of exploitation\n\n"
+                
+                analysis += "### ONGOING\n\n"
+                analysis += "1. **Regular Scanning**: Schedule monthly vulnerability scans\n"
+                analysis += "2. **Patch Management**: Implement automated patch management\n"
+                analysis += "3. **Security Monitoring**: Enable IDS/IPS and SIEM monitoring\n"
+                analysis += "4. **Penetration Testing**: Conduct annual penetration tests\n"
+                
+                if self.session_manager and self.db_session_id and enriched_context:
+                    try:
+                        risk_score = min(100, len(critical_vulns) * 60 + len(high_vulns) * 30 + len(other_vulns) * 10)
+                        risk_level = "CRITICAL" if critical_vulns else ("HIGH" if high_vulns else "MEDIUM")
+                        
+                        self.session_manager.set_analysis_results(
+                            self.db_session_id,
+                            {"analysis": analysis[:10000]},
+                            risk_score,
+                            risk_level
+                        )
+                    except Exception:
+                        pass
+                
+                # HYBRID APPROACH: Use LLM as cyber analyst for vulnerability interpretation
+                print(f"  🤖 LLM Cyber Analyst reviewing vulnerabilities...")
+                
+                analyst_prompt = f"""You are a senior cybersecurity analyst reviewing a vulnerability scan report.
+
+**YOUR TASK**: Provide expert vulnerability analysis and remediation guidance.
+
+# VULNERABILITY SCAN REPORT:
+
+{analysis}
+
+---
+
+As a cyber analyst, provide:
+
+1. **EXPLOIT RISK ASSESSMENT**: Which vulnerabilities are actively exploited in the wild?
+2. **CVE ANALYSIS**: What are the CVSS scores and exploit complexity?
+3. **ATTACK CHAIN**: How could these vulnerabilities be chained together?
+4. **REMEDIATION ROADMAP**: Detailed, prioritized patching plan
+5. **COMPENSATING CONTROLS**: What temporary mitigations can be implemented?
+
+Be specific about CVEs, provide CVSS scores if known, and reference specific vulnerabilities."""
+
+                llm_messages = [
+                    {"role": "system", "content": "You are a senior vulnerability analyst with expertise in exploit development, CVE analysis, and security patching."},
+                    {"role": "user", "content": analyst_prompt}
+                ]
+                
+                try:
+                    llm_response = self._call_ollama(llm_messages, timeout=TIMEOUT_OLLAMA)
+                    
+                    if "error" not in llm_response:
+                        llm_insights = llm_response.get("message", {}).get("content", "")
+                        
+                        if llm_insights and len(llm_insights.strip()) > 100:
+                            analysis += "\n\n---\n\n# 🧠 CYBER ANALYST INSIGHTS\n\n"
+                            analysis += llm_insights
+                            print(f"  ✅ Vulnerability analyst insights added")
+                except Exception as e:
+                    print(f"  ⚠️  Cyber analyst failed: {e}")
+                
+                return analysis
+
 
         # Send COMPLETE scan data to LLM
         system_prompt = get_phase3_prompt(
