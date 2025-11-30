@@ -683,16 +683,21 @@ Select the most appropriate tool for the user's request."""
                     }
                 })
             
-            # MEDIUM/LOW: Quick batch scan (common ports)
+            # MEDIUM/LOW: Comprehensive two-stage scan for rich LLM analysis
             medium_low = intelligence.get("medium_value", []) + intelligence.get("low_value", [])
             if medium_low:
                 medium_low_targets = [t["subdomain"] for t in medium_low]
-                print(f"\n  ⚡ MEDIUM/LOW ({len(medium_low_targets)}) → COMMON PORTS (FAST):")
-                print(f"     → Masscan batch scan")
-                
+                print(f"\n  ⚡ MEDIUM/LOW ({len(medium_low_targets)}) → COMPREHENSIVE SCAN:")
+                print(f"     → Stage 1: Naabu full port scan (1-65535, stealthy)")
+                print(f"     → Stage 2: Nmap service detection (auto-triggered)")
+
                 selected_tools.append({
-                    "name": "masscan_batch_scan",
-                    "arguments": {"targets": ",".join(medium_low_targets)}
+                    "name": "naabu_batch_scan",
+                    "arguments": {
+                        "targets": ",".join(medium_low_targets),
+                        "ports": "1-65535",  # Comprehensive scan
+                        "rate": 1000  # Slower rate to avoid IDS/IPS detection
+                    }
                 })
             
             total = len(crown_jewels) + len(high_value) + len(medium_low)
@@ -1227,6 +1232,57 @@ Select the most appropriate tool for the user's request."""
                 print("\n  ⚠️  All scans failed - no context to build")
                 self.enriched_context = None
 
+        # AUTO NMAP FOLLOW-UP: Check for Naabu results and trigger service detection
+        naabu_results_found = False
+        for scan_result in results:
+            if "naabu" in scan_result["tool"].lower():
+                naabu_data = scan_result["result"]
+
+                if naabu_data.get("success"):
+                    # Extract targets with open ports
+                    naabu_results = naabu_data.get("results", {})
+                    targets_with_ports = []
+
+                    for ip, port_list in naabu_results.items():
+                        if port_list and len(port_list) > 0:
+                            targets_with_ports.append(ip)
+
+                    if targets_with_ports:
+                        naabu_results_found = True
+                        print(f"\n  📊 Naabu discovered {len(targets_with_ports)} hosts with open ports")
+                        print(f"  🔍 Triggering automatic Nmap service detection...")
+
+                        # Limit to 50 hosts to avoid timeout
+                        targets_to_scan = targets_with_ports[:50]
+
+                        if len(targets_with_ports) > 50:
+                            print(f"  ⚠️  Limiting Nmap to top 50 hosts (found {len(targets_with_ports)} total)")
+
+                        # Run Nmap service detection
+                        try:
+                            nmap_result = execute_tool("nmap_service_detection", {
+                                "target": ",".join(targets_to_scan),
+                                "timeout": 900  # 15 minutes for service detection
+                            })
+
+                            # Append to results for Phase 3 analysis
+                            results.append({
+                                "tool": "nmap_service_detection_followup",
+                                "args": {"target": ",".join(targets_to_scan)},
+                                "result": nmap_result
+                            })
+
+                            if nmap_result.get("success"):
+                                print(f"  ✅ Nmap service detection completed")
+                            else:
+                                print(f"  ⚠️  Nmap service detection failed: {nmap_result.get('error', 'unknown')}")
+
+                        except Exception as e:
+                            print(f"  ⚠️  Nmap follow-up error: {e}")
+
+        if not naabu_results_found:
+            print("  ℹ️  No Naabu results to follow up on")
+
         return results
 
 
@@ -1256,7 +1312,12 @@ Select the most appropriate tool for the user's request."""
                         "masscan_port_scan", "masscan_web_scan"]
         if any(tool in tools_used for tool in masscan_tools):
             return "masscan"
-        
+
+        # Check for naabu tools
+        naabu_tools = ["naabu_scan", "naabu_batch_scan", "naabu_port_scan"]
+        if any(tool in tools_used for tool in naabu_tools):
+            return "naabu"
+
         # Check for port scan tools
         port_scan_tools = ["nmap_quick_scan", "nmap_fast_scan", "nmap_port_scan", 
                           "nmap_all_ports", "nmap_service_detection", "nmap_aggressive_scan",
@@ -1324,6 +1385,19 @@ Select the most appropriate tool for the user's request."""
                     "targets_with_open_ports": masscan_result.get("targets_with_open_ports", 0),
                     "total_open_ports": masscan_result.get("total_open_ports", 0),
                     "scan_duration": masscan_result.get("scan_duration", 0)
+                }
+
+            # For Naabu - include complete results (similar to masscan)
+            elif "naabu" in r["tool"].lower():
+                naabu_result = result
+                tool_result["naabu_data"] = {
+                    "targets": naabu_result.get("targets", []),
+                    "results": naabu_result.get("results", {}),  # {IP: [ports]}
+                    "total_hosts_scanned": naabu_result.get("total_hosts_scanned", 0),
+                    "hosts_with_ports": naabu_result.get("hosts_with_ports", 0),
+                    "total_open_ports": naabu_result.get("total_open_ports", 0),
+                    "scan_duration": naabu_result.get("scan_duration", 0),
+                    "scan_rate": naabu_result.get("scan_rate", 1000)
                 }
 
             # For Shodan - include complete data
@@ -1447,6 +1521,12 @@ This indicates:
                         )
                     except Exception:
                         pass
+
+                return analysis
+
+            # ELSE: Masscan found open ports - generate detailed per-domain report
+            if masscan_data and masscan_data.get("total_open_ports", 0) > 0:
+                print("  📊 Masscan found open ports - generating detailed report")
                 # Build per-domain report
                 analysis = f"""## SCAN SUMMARY
 
