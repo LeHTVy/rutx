@@ -566,3 +566,73 @@ CRITICAL RULES:
 
     return prompt
 
+
+def get_phase4_prompt(combined_results: str, tool_count: int) -> str:
+    """
+    Build Phase 4 (Report Generation) prompt for combining multi-tool results
+    
+    Args:
+        combined_results: JSON string containing combined scan results from multiple tools
+        tool_count: Number of tools used in the scan
+    
+    Returns:
+        Phase 4 prompt for LLM to generate comprehensive security analysis
+    """
+    
+    prompt = f"""You are SNODE AI, a security analysis agent.
+
+PHASE 4: COMBINED REPORT GENERATION
+
+You have received results from {tool_count} subdomain enumeration tools.
+
+**YOUR TASK**: Generate ONLY the SECURITY ANALYSIS and RECOMMENDATIONS sections.
+The categorized subdomain lists will be generated programmatically for accuracy.
+Focus on providing intelligent security insights based on the discovered subdomains.
+
+COMBINED SCAN RESULTS:
+{combined_results}
+
+NOTE: The results include:
+- "categorized": Pre-categorized subdomains by type (www, api, mail, dev, staging, admin, vpn, internal, test, other)
+- "category_counts": Total count for each category
+- "critical_targets": CRITICAL subdomains (api, admin, dev) that get comprehensive scans + Shodan
+- "high_value_targets": High-value subdomains (staging, test, mail, vpn, internal) that get comprehensive scans
+
+ANALYSIS REQUIREMENTS:
+1. Analyze the critical_targets and high_value_targets lists
+2. Review the categorized subdomains and their counts
+3. Identify specific security concerns based on what was discovered
+4. Provide actionable, specific recommendations
+5. Consider the context: which subdomains pose the highest risk?
+
+OUTPUT FORMAT - Generate ONLY these two sections:
+
+## SECURITY ANALYSIS
+[Provide detailed security analysis including:]
+- Assessment of critical targets found (reference specific subdomains)
+- Risk evaluation of high-value targets
+- Specific concerns about exposed infrastructure (dev/staging/admin panels)
+- Analysis of attack surface based on subdomain categories
+- Any anomalies or particularly concerning findings
+
+## RECOMMENDATIONS
+[Provide specific, actionable recommendations:]
+1. Immediate actions (0-24h) - Critical issues to address now
+2. Short-term actions (1-7d) - Important security improvements
+3. Long-term improvements (1-30d) - Strategic security enhancements
+4. Specific scanning priorities - Which subdomains to investigate first
+5. Remediation steps - How to secure exposed infrastructure
+
+GUIDELINES:
+- Be specific - reference actual subdomain names when discussing risks
+- Prioritize by severity - Critical > High > Medium > Low
+- Provide context - explain WHY each finding is concerning
+- Give actionable steps - tell them HOW to remediate, not just WHAT to fix
+- Consider the full picture - analyze patterns across all categories
+
+CRITICAL: Do NOT generate subdomain lists. We will add those programmatically.
+ONLY provide security analysis and recommendations.
+"""
+    
+    return prompt
+
