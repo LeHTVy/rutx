@@ -683,20 +683,22 @@ Select the most appropriate tool for the user's request."""
                     }
                 })
             
-            # MEDIUM/LOW: Fast adaptive scan strategy (30-45 min for 200+ targets)
+            # MEDIUM/LOW: Fast stealth scan with Nmap (balanced speed + stealth)
             medium_low = intelligence.get("medium_value", []) + intelligence.get("low_value", [])
             if medium_low:
                 medium_low_targets = [t["subdomain"] for t in medium_low]
-                print(f"\n  ⚡ MEDIUM/LOW ({len(medium_low_targets)}) → FAST ADAPTIVE SCAN:")
-                print(f"     → Strategy: Top 1000 ports (fast) + full scan on interesting targets")
-                print(f"     → Estimated time: 30-45 minutes for {len(medium_low_targets)} targets")
+                print(f"\n  ⚡ MEDIUM/LOW ({len(medium_low_targets)}) → STEALTH SCAN:")
+                print(f"     → Strategy: Nmap stealth scan (top 1000 ports)")
+                print(f"     → Timing: T3 (Normal) - balanced speed/stealth")
+                print(f"     → Rate: 300 pps (low noise)")
 
                 selected_tools.append({
-                    "name": "naabu_batch_scan",
+                    "name": "nmap_stealth_batch_scan",
                     "arguments": {
                         "targets": ",".join(medium_low_targets),
-                        "ports": "top-1000",  # Fast: scan top 1000 ports only
-                        "rate": 3000  # Faster rate (3x speed, still reasonable)
+                        "ports": "top-1000",  # Top 1000 common ports
+                        "timing": "T3",  # Normal timing (balanced)
+                        "max_rate": 300  # Low rate for stealth (vs 3000 pps in Naabu)
                     }
                 })
             
@@ -1322,9 +1324,9 @@ Select the most appropriate tool for the user's request."""
             return "naabu"
 
         # Check for port scan tools
-        port_scan_tools = ["nmap_quick_scan", "nmap_fast_scan", "nmap_port_scan", 
+        port_scan_tools = ["nmap_quick_scan", "nmap_fast_scan", "nmap_port_scan",
                           "nmap_all_ports", "nmap_service_detection", "nmap_aggressive_scan",
-                          "nmap_stealth_scan", "nmap_comprehensive_scan"]
+                          "nmap_stealth_scan", "nmap_comprehensive_scan", "nmap_stealth_batch_scan"]
         if any(tool in tools_used for tool in port_scan_tools):
             return "port_scan"
         
@@ -1822,13 +1824,29 @@ Be specific, actionable, and prioritize by risk level. Reference specific findin
 
         # NMAP PORT SCAN: Generate programmatic report for better accuracy
         if scan_type == "port_scan":
-            # Extract nmap data from results
+            # Check if it's a batch scan (nmap_stealth_batch_scan)
+            batch_scan_data = None
+            for r in results_for_llm:
+                if r.get("tool", "") == "nmap_stealth_batch_scan":
+                    batch_scan_data = r
+                    break
+
+            # If batch scan, use the programmatic batch report (like naabu)
+            if batch_scan_data:
+                print(f"  📊 Generating programmatic Nmap batch scan report")
+                targets_scanned = batch_scan_data.get("targets_count", 0)
+
+                # Reuse the naabu report generator (compatible format)
+                analysis = self._generate_naabu_report(batch_scan_data, targets_scanned)
+                return analysis
+
+            # Extract traditional single-target nmap data
             nmap_data = None
             for r in results_for_llm:
                 if "nmap" in r.get("tool", "").lower() and (r.get("open_ports") or r.get("scan_summary")):
                     nmap_data = r
                     break
-            
+
             if nmap_data:
                 print(f"  📊 Generating structured Nmap port scan report")
                 
@@ -2300,31 +2318,33 @@ Be specific about CVEs, provide CVSS scores if known, and reference specific vul
 
         return {"cves": list(set(cves)), "count": len(set(cves))}
 
-    def _generate_naabu_report(self, naabu_data: Dict, targets_scanned: int) -> str:
+    def _generate_naabu_report(self, scan_data: Dict, targets_scanned: int) -> str:
         """
-        Generate programmatic report for Naabu scan results
+        Generate programmatic report for batch port scan results
+        Compatible with both Naabu and Nmap stealth batch scans
 
         Args:
-            naabu_data: Naabu scan result dict
+            scan_data: Scan result dict (from naabu_batch_scan or nmap_stealth_batch_scan)
             targets_scanned: Number of targets in scan
 
         Returns:
             Formatted report string
         """
-        success = naabu_data.get("success", False)
-        error = naabu_data.get("error")
+        success = scan_data.get("success", False)
+        error = scan_data.get("error")
 
         # Handle scan failure
         if not success:
             return self._generate_naabu_error_report(error, targets_scanned)
 
         # Extract data
-        results = naabu_data.get("results", {})
-        total_open_ports = naabu_data.get("total_open_ports", 0)
-        targets_with_ports = naabu_data.get("targets_with_open_ports", 0)
-        scan_duration = naabu_data.get("scan_duration", 0)
-        scan_rate = naabu_data.get("scan_rate", 0)
-        ports_scanned = naabu_data.get("ports_scanned", "unknown")
+        results = scan_data.get("results", {})
+        total_open_ports = scan_data.get("total_open_ports", 0)
+        targets_with_ports = scan_data.get("targets_with_open_ports", 0)
+        scan_duration = scan_data.get("scan_duration", 0)
+        scan_rate = scan_data.get("scan_rate", 0)
+        ports_scanned = scan_data.get("ports_scanned", "unknown")
+        hostname_to_ip = scan_data.get("hostname_to_ip", {})
 
         # Handle zero results
         if total_open_ports == 0:

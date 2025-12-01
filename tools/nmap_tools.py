@@ -1087,3 +1087,205 @@ def execute_tool(tool_name, tool_args):
         return f"Error: Invalid arguments for {tool_name}: {e}"
     except Exception as e:
         return f"Error executing {tool_name}: {e}"
+
+
+def nmap_stealth_batch_scan(targets, ports="top-1000", timing="T3", max_rate=300):
+    """
+    Stealth batch scan for multiple targets using Nmap.
+    Designed to be less noisy than Naabu while still being reasonably fast.
+
+    Features:
+    - Stealth SYN scan (-sS) if admin, TCP connect (-sT) otherwise
+    - Timing control to reduce noise (default T3 = "Normal")
+    - Rate limiting to avoid detection
+    - Top ports for speed, or custom port specification
+    - Batch processing with single Nmap invocation
+
+    Args:
+        targets: Comma-separated list of targets (hostnames or IPs)
+        ports: Port specification:
+            - "top-100", "top-1000" (common ports)
+            - "1-65535" (all ports)
+            - "80,443,8080" (specific ports)
+        timing: Nmap timing template:
+            - "T0" = Paranoid (slowest, stealthiest)
+            - "T1" = Sneaky (very slow)
+            - "T2" = Polite (slow)
+            - "T3" = Normal (balanced - default)
+            - "T4" = Aggressive (fast)
+            - "T5" = Insane (fastest, noisiest)
+        max_rate: Maximum packets per second (default 300 for stealth)
+
+    Returns:
+        dict: Scan results with per-host port information
+    """
+    import tempfile
+    import time
+
+    # Parse targets
+    target_list = [t.strip() for t in targets.split(",") if t.strip()]
+    if not target_list:
+        return {
+            "success": False,
+            "error": "No valid targets provided",
+            "targets": []
+        }
+
+    # Create temporary target file
+    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as f:
+        targets_file = f.name
+        for target in target_list:
+            f.write(f"{target}\n")
+
+    try:
+        # Parse port specification
+        if ports.startswith("top-"):
+            top_count = ports.split("-")[1]
+            port_option = f"--top-ports {top_count}"
+            ports_display = f"top-{top_count}"
+        else:
+            port_option = f"-p {ports}"
+            ports_display = ports
+
+        # Check if running as admin for SYN scan
+        try:
+            import sys
+            if sys.platform == 'win32':
+                import ctypes
+                is_admin = ctypes.windll.shell32.IsUserAnAdmin()
+            else:
+                import os as os_module
+                is_admin = os_module.geteuid() == 0
+        except:
+            is_admin = False
+
+        # Build Nmap command
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = "/tmp/nmap_scans"
+        os.makedirs(output_dir, exist_ok=True)
+        xml_output = os.path.join(output_dir, f"nmap_batch_{timestamp}.xml")
+
+        cmd = ["nmap"]
+
+        # Scan type
+        if is_admin:
+            cmd.append("-sS")  # SYN scan (stealthy)
+            scan_type = "SYN (stealth)"
+        else:
+            cmd.append("-sT")  # TCP connect (fallback)
+            scan_type = "TCP connect"
+
+        # Add stealth options
+        cmd.extend([
+            f"-{timing}",  # Timing template
+            f"--max-rate={max_rate}",  # Rate limiting
+            "-Pn",  # Skip host discovery (assume hosts are up)
+            "--disable-arp-ping",  # More stealthy
+            "-iL", targets_file,  # Input target list
+            "-oX", xml_output  # XML output
+        ])
+
+        # Add port specification
+        cmd.extend(shlex.split(port_option))
+
+        print(f"  🎯 Nmap stealth batch scan")
+        print(f"     Targets: {len(target_list)} hosts")
+        print(f"     Ports: {ports_display}")
+        print(f"     Scan type: {scan_type}")
+        print(f"     Timing: {timing} (max rate: {max_rate} pps)")
+
+        # Calculate estimated time
+        if ports.startswith("top-"):
+            port_count = int(top_count)
+        elif "-" in ports:
+            parts = ports.split("-")
+            port_count = int(parts[1]) - int(parts[0]) + 1
+        else:
+            port_count = len(ports.split(","))
+
+        estimated_seconds = (len(target_list) * port_count) / max_rate
+        print(f"     Estimated time: {int(estimated_seconds // 60)}m {int(estimated_seconds % 60)}s")
+
+        # Run scan
+        start_time = time.time()
+
+        # Dynamic timeout based on workload
+        timeout = max(600, int(estimated_seconds * 2))  # 2x safety factor
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False
+        )
+
+        elapsed_seconds = time.time() - start_time
+
+        if result.returncode != 0:
+            return {
+                "success": False,
+                "error": f"Nmap returned exit code {result.returncode}",
+                "stderr": result.stderr,
+                "stdout": result.stdout,
+                "targets": target_list,
+                "targets_count": len(target_list)
+            }
+
+        # Parse results
+        stdout = result.stdout
+        results = {}  # {IP/hostname: [ports]}
+        hostname_to_ip = {}
+        current_host = None
+        current_ip = None
+        total_open_ports = 0
+
+        for line in stdout.splitlines():
+            # Extract host info
+            host_match = re.search(r'Nmap scan report for ([\w\.\-]+)(?: \((\d+\.\d+\.\d+\.\d+)\))?', line)
+            if host_match:
+                current_host = host_match.group(1)
+                current_ip = host_match.group(2) or current_host
+                hostname_to_ip[current_host] = current_ip
+                results[current_ip] = []
+
+            # Extract open ports
+            port_match = re.match(r'^(\d+)/(tcp|udp)\s+open\s*(.*)?$', line)
+            if port_match and current_ip:
+                port_num = int(port_match.group(1))
+                results[current_ip].append(port_num)
+                total_open_ports += 1
+
+        # Count targets with open ports
+        targets_with_open_ports = sum(1 for ports in results.values() if len(ports) > 0)
+
+        print(f"  ✅ Scan complete: {targets_with_open_ports}/{len(target_list)} hosts have open ports ({total_open_ports} total)")
+        print(f"     Duration: {int(elapsed_seconds // 60)}m {int(elapsed_seconds % 60)}s")
+
+        return {
+            "success": True,
+            "tool": "nmap_stealth_batch_scan",
+            "targets": target_list,
+            "targets_count": len(target_list),
+            "results": results,
+            "hostname_to_ip": hostname_to_ip,
+            "total_hosts_scanned": len(target_list),
+            "hosts_with_ports": targets_with_open_ports,
+            "targets_with_open_ports": targets_with_open_ports,
+            "total_open_ports": total_open_ports,
+            "scan_duration": int(elapsed_seconds),
+            "elapsed_seconds": elapsed_seconds,
+            "scan_rate": max_rate,
+            "ports_scanned": ports_display,
+            "timing": timing,
+            "output_xml": xml_output,
+            "stdout": stdout,
+            "stderr": result.stderr
+        }
+
+    finally:
+        # Cleanup temp file
+        try:
+            os.unlink(targets_file)
+        except:
+            pass
