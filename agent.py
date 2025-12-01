@@ -1835,28 +1835,37 @@ Be specific, actionable, and prioritize by risk level. Reference specific findin
                 return analysis
 
 
-        # NMAP PORT SCAN: Generate programmatic report for better accuracy
+        # NMAP PORT SCAN: Disabled programmatic report - let LLM analyze for contextual insights
+        # User prefers LLM analysis similar to subdomain discovery reports
         if scan_type == "port_scan":
             # Check if it's a batch scan (nmap_stealth_batch_scan)
-            batch_scan_data = None
-            for r in results_for_llm:
-                if r.get("tool", "") == "nmap_stealth_batch_scan":
-                    batch_scan_data = r
-                    break
+            # batch_scan_data = None
+            # for r in results_for_llm:
+            #     if r.get("tool", "") == "nmap_stealth_batch_scan":
+            #         batch_scan_data = r
+            #         break
 
-            # If batch scan, use the programmatic batch report (like naabu)
-            if batch_scan_data:
-                print(f"  📊 Generating programmatic Nmap batch scan report")
-                targets_scanned = batch_scan_data.get("targets_count", 0)
-
-                # DEBUG: Print what we actually have
-                print(f"  🔍 DEBUG: targets_count = {targets_scanned}")
-                print(f"  🔍 DEBUG: total_open_ports = {batch_scan_data.get('total_open_ports', 0)}")
-                print(f"  🔍 DEBUG: batch_scan_data keys = {list(batch_scan_data.keys())}")
-
-                # Reuse the naabu report generator (compatible format)
-                analysis = self._generate_naabu_report(batch_scan_data, targets_scanned, tool_name="nmap_stealth_batch_scan")
-                return analysis
+            # # If batch scan, use the programmatic batch report (like naabu)
+            # if batch_scan_data:
+            #     print(f"  📊 Generating programmatic Nmap batch scan report")
+            #
+            #     # Get target count - try multiple sources for accuracy
+            #     targets_scanned = (
+            #         len(batch_scan_data.get("targets", [])) or  # Try actual target list first
+            #         batch_scan_data.get("targets_count", 0) or  # Then the count field
+            #         batch_scan_data.get("total_hosts_scanned", 0) or # Alternative field name
+            #         0
+            #     )
+            #
+            #     # DEBUG: Print what we actually have
+            #     print(f"  🔍 DEBUG: targets_scanned = {targets_scanned} (from targets list)")
+            #     print(f"  🔍 DEBUG: total_open_ports = {batch_scan_data.get('total_open_ports', 0)}")
+            #     print(f"  🔍 DEBUG: batch_scan_data keys = {list(batch_scan_data.keys())}")
+            #
+            #     # Reuse the n aabu report generator (compatible format)
+            #     analysis = self._generate_naabu_report(batch_scan_data, targets_scanned, tool_name="nmap_stealth_batch_scan")
+            #     return analysis
+            pass  # Let LLM handle port scan analysis
 
             # Extract traditional single-target nmap data
             nmap_data = None
