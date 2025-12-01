@@ -1364,9 +1364,22 @@ Select the most appropriate tool for the user's request."""
 
             # Include ALL scan data (no truncation!)
             result = r["result"]
-            
+
+            # For Nmap stealth batch scan - treat like masscan/naabu (batch format)
+            if r["tool"] == "nmap_stealth_batch_scan":
+                # Copy all batch scan data directly
+                tool_result["targets_count"] = result.get("targets_count", 0)
+                tool_result["results"] = result.get("results", {})
+                tool_result["hostname_to_ip"] = result.get("hostname_to_ip", {})
+                tool_result["targets_with_open_ports"] = result.get("targets_with_open_ports", 0)
+                tool_result["total_open_ports"] = result.get("total_open_ports", 0)
+                tool_result["scan_duration"] = result.get("scan_duration", 0)
+                tool_result["scan_rate"] = result.get("scan_rate", 0)
+                tool_result["ports_scanned"] = result.get("ports_scanned", "unknown")
+                tool_result["timing"] = result.get("timing", "unknown")
+
             # For Nmap scans - include everything
-            if "nmap" in r["tool"].lower():
+            elif "nmap" in r["tool"].lower():
                 tool_result["scan_summary"] = result.get("summary", "")
                 tool_result["hosts_discovered"] = result.get("hosts_discovered", 0)
                 tool_result["open_ports"] = result.get("open_ports", [])  # All ports!
