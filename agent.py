@@ -1820,7 +1820,7 @@ Be specific, actionable, and prioritize by risk level. Reference specific findin
             # Generate programmatic report
             if naabu_data:
                 print(f"  📊 Generating programmatic Naabu report for {targets_scanned} targets")
-                analysis = self._generate_naabu_report(naabu_data, targets_scanned)
+                analysis = self._generate_naabu_report(naabu_data, targets_scanned, tool_name="naabu")
                 return analysis
             else:
                 # Fallback for edge cases
@@ -1850,7 +1850,7 @@ Be specific, actionable, and prioritize by risk level. Reference specific findin
                 targets_scanned = batch_scan_data.get("targets_count", 0)
 
                 # Reuse the naabu report generator (compatible format)
-                analysis = self._generate_naabu_report(batch_scan_data, targets_scanned)
+                analysis = self._generate_naabu_report(batch_scan_data, targets_scanned, tool_name="nmap_stealth_batch_scan")
                 return analysis
 
             # Extract traditional single-target nmap data
@@ -2331,7 +2331,7 @@ Be specific about CVEs, provide CVSS scores if known, and reference specific vul
 
         return {"cves": list(set(cves)), "count": len(set(cves))}
 
-    def _generate_naabu_report(self, scan_data: Dict, targets_scanned: int) -> str:
+    def _generate_naabu_report(self, scan_data: Dict, targets_scanned: int, tool_name: str = "naabu") -> str:
         """
         Generate programmatic report for batch port scan results
         Compatible with both Naabu and Nmap stealth batch scans
@@ -2339,6 +2339,7 @@ Be specific about CVEs, provide CVSS scores if known, and reference specific vul
         Args:
             scan_data: Scan result dict (from naabu_batch_scan or nmap_stealth_batch_scan)
             targets_scanned: Number of targets in scan
+            tool_name: Name of the tool used ("naabu" or "nmap_stealth_batch_scan")
 
         Returns:
             Formatted report string
@@ -2348,7 +2349,7 @@ Be specific about CVEs, provide CVSS scores if known, and reference specific vul
 
         # Handle scan failure
         if not success:
-            return self._generate_naabu_error_report(error, targets_scanned)
+            return self._generate_naabu_error_report(error, targets_scanned, tool_name)
 
         # Extract data
         results = scan_data.get("results", {})
@@ -2361,16 +2362,18 @@ Be specific about CVEs, provide CVSS scores if known, and reference specific vul
 
         # Handle zero results
         if total_open_ports == 0:
-            return self._generate_naabu_zero_ports_report(targets_scanned, scan_duration, scan_rate, ports_scanned)
+            return self._generate_naabu_zero_ports_report(targets_scanned, scan_duration, scan_rate, ports_scanned, tool_name)
 
         # Generate full report with results
         return self._generate_naabu_success_report(
             results, targets_scanned, total_open_ports, targets_with_ports,
-            scan_duration, scan_rate, ports_scanned
+            scan_duration, scan_rate, ports_scanned, tool_name
         )
 
-    def _generate_naabu_error_report(self, error: str, targets_scanned: int) -> str:
-        """Generate report for failed Naabu scan"""
+    def _generate_naabu_error_report(self, error: str, targets_scanned: int, tool_name: str = "naabu") -> str:
+        """Generate report for failed scan"""
+        # Determine tool display name
+        tool_display = "NMAP STEALTH" if "nmap" in tool_name.lower() else "NAABU"
         # Parse common errors and provide context
         error_explanations = {
             "invalid literal": "Port range parsing error - check port specification format",
@@ -2386,7 +2389,7 @@ Be specific about CVEs, provide CVSS scores if known, and reference specific vul
 
         return f"""
 ════════════════════════════════════════════════════════════
-📋 NAABU PORT SCAN REPORT
+📋 {tool_display} PORT SCAN REPORT
 ════════════════════════════════════════════════════════════
 
 ## SCAN SUMMARY
@@ -2405,24 +2408,25 @@ Possible causes:
 3. Network/permissions problem
 
 ## RECOMMENDATIONS
-- Check Naabu version: naabu -version
+- Check tool version: {'nmap --version' if 'nmap' in tool_name.lower() else 'naabu -version'}
 - Verify port range syntax is correct
 - Review scan arguments in Phase 1
 - Check system permissions for port scanning
 - Consult error message above for specific details
 
 ════════════════════════════════════════════════════════════
-Session: {self.db_session_id or 'N/A'} | Type: Port Scan (Naabu) | Status: FAILED
+Session: {self.db_session_id or 'N/A'} | Type: Port Scan ({tool_display}) | Status: FAILED
 ════════════════════════════════════════════════════════════
 """
 
-    def _generate_naabu_zero_ports_report(self, targets_scanned: int, scan_duration: float, scan_rate: int, ports_scanned: str) -> str:
-        """Generate report when Naabu finds no open ports"""
+    def _generate_naabu_zero_ports_report(self, targets_scanned: int, scan_duration: float, scan_rate: int, ports_scanned: str, tool_name: str = "naabu") -> str:
+        """Generate report when no open ports found"""
+        tool_display = "NMAP STEALTH" if "nmap" in tool_name.lower() else "NAABU"
         duration_str = f"{int(scan_duration//60)}m {int(scan_duration%60)}s" if scan_duration else "N/A"
 
         return f"""
 ════════════════════════════════════════════════════════════
-📋 NAABU PORT SCAN REPORT
+📋 {tool_display} PORT SCAN REPORT
 ════════════════════════════════════════════════════════════
 
 ## SCAN SUMMARY
@@ -2440,7 +2444,7 @@ Session: {self.db_session_id or 'N/A'} | Type: Port Scan (Naabu) | Status: FAILE
 ## ANALYSIS
 This could indicate:
 1. All targets are properly firewalled
-2. No services running on scanned ports (top-{ports_scanned})
+2. No services running on scanned ports ({ports_scanned})
 3. Targets may be offline or non-responsive
 4. DNS resolution may have failed for some targets
 5. Network filtering blocking scan traffic
@@ -2453,14 +2457,16 @@ This could indicate:
 - Consider slower scan rate if IDS/IPS may be blocking
 
 ════════════════════════════════════════════════════════════
-Session: {self.db_session_id or 'N/A'} | Type: Port Scan (Naabu) | Time: {duration_str}
+Session: {self.db_session_id or 'N/A'} | Type: Port Scan ({tool_display}) | Time: {duration_str}
 ════════════════════════════════════════════════════════════
 """
 
     def _generate_naabu_success_report(self, results: Dict, targets_scanned: int,
                                       total_open_ports: int, targets_with_ports: int,
-                                      scan_duration: float, scan_rate: int, ports_scanned: str) -> str:
-        """Generate detailed report when Naabu finds open ports"""
+                                      scan_duration: float, scan_rate: int, ports_scanned: str,
+                                      tool_name: str = "naabu") -> str:
+        """Generate detailed report when open ports found"""
+        tool_display = "NMAP STEALTH" if "nmap" in tool_name.lower() else "NAABU"
         duration_str = f"{int(scan_duration//60)}m {int(scan_duration%60)}s" if scan_duration else "N/A"
         percentage = round((targets_with_ports / targets_scanned * 100), 1) if targets_scanned > 0 else 0
 
@@ -2476,7 +2482,7 @@ Session: {self.db_session_id or 'N/A'} | Type: Port Scan (Naabu) | Time: {durati
         # Start report
         report = f"""
 ════════════════════════════════════════════════════════════
-📋 NAABU PORT SCAN REPORT
+📋 {tool_display} PORT SCAN REPORT
 ════════════════════════════════════════════════════════════
 
 ## SCAN SUMMARY
@@ -2564,7 +2570,7 @@ Session: {self.db_session_id or 'N/A'} | Type: Port Scan (Naabu) | Time: {durati
 4. Review non-standard ports for unauthorized services
 
 ════════════════════════════════════════════════════════════
-Session: """ + (self.db_session_id or 'N/A') + f""" | Type: Port Scan (Naabu) | Time: {duration_str}
+Session: """ + (self.db_session_id or 'N/A') + f""" | Type: Port Scan ({tool_display}) | Time: {duration_str}
 ════════════════════════════════════════════════════════════
 """
 
