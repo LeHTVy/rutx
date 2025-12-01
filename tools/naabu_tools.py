@@ -218,7 +218,7 @@ def naabu_critical_ports(targets: Union[str, List[str]]) -> Dict[str, Any]:
     return naabu_scan(targets, ports=critical_ports, rate=5000)
 
 
-def naabu_batch_scan(targets: str, ports: str = "1-65535", rate: int = 1000, timeout: int = 1800) -> Dict[str, Any]:
+def naabu_batch_scan(targets: str, ports: str = "1-65535", rate: int = 1000, timeout: int = None) -> Dict[str, Any]:
     """
     Batch scan multiple targets with Naabu (for medium/low priority targets)
 
@@ -226,13 +226,46 @@ def naabu_batch_scan(targets: str, ports: str = "1-65535", rate: int = 1000, tim
         targets: Comma-separated list of targets
         ports: Port range (default: 1-65535 for comprehensive)
         rate: Scan rate in packets/sec (default: 1000 for stealth)
-        timeout: Timeout in seconds (default: 1800 = 30 minutes)
+        timeout: Timeout in seconds (default: auto-calculated based on targets/ports)
 
     Returns:
         dict: Scan results with all targets
     """
     # Convert comma-separated string to list
     target_list = [t.strip() for t in targets.split(",")]
+
+    # Calculate dynamic timeout if not provided
+    if timeout is None:
+        # Calculate port count
+        if "-" in ports:
+            parts = ports.split("-")
+            port_count = int(parts[1]) - int(parts[0]) + 1
+        elif "," in ports:
+            port_count = len(ports.split(","))
+        elif ports.startswith("top-"):
+            port_count = int(ports.split("-")[1])
+        else:
+            port_count = 1000  # Default estimate
+
+        # Formula: (targets * ports / rate) * safety_factor
+        # Safety factor accounts for DNS resolution, retries, network delays
+        num_targets = len(target_list)
+
+        # Higher safety factor for batch scans (many targets = more DNS lookups, retries)
+        if num_targets > 100:
+            safety_factor = 3.0  # Large batches need more overhead time
+        elif num_targets > 50:
+            safety_factor = 2.5
+        else:
+            safety_factor = 2.0
+
+        estimated_time = (num_targets * port_count / rate) * safety_factor
+
+        # Minimum 10 minutes, maximum 6 hours
+        timeout = max(600, min(21600, int(estimated_time)))
+
+        print(f"    ⏱️  Auto-calculated timeout: {timeout}s ({timeout//60} minutes) for {num_targets} targets")
+        print(f"       Formula: {num_targets} targets × {port_count} ports / {rate} pps × {safety_factor}x safety")
 
     # Use the base naabu_scan function
     return naabu_scan(target_list, ports=ports, rate=rate, timeout=timeout)
@@ -327,7 +360,7 @@ NAABU_TOOLS = [
         "type": "function",
         "function": {
             "name": "naabu_batch_scan",
-            "description": "Batch scan multiple targets with comprehensive port coverage. Use for: medium/low priority targets, batch subdomain scanning, large-scale port discovery. Scans all 65535 ports by default at stealthy rate (1000 pps). Takes 10-30 minutes for 100-200 targets.",
+            "description": "Batch scan multiple targets with comprehensive port coverage. Use for: medium/low priority targets, batch subdomain scanning, large-scale port discovery. Scans all 65535 ports by default at stealthy rate (1000 pps). Timeout is auto-calculated based on number of targets and port range (typically 20-180 minutes for 100-200 targets).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -345,7 +378,7 @@ NAABU_TOOLS = [
                     },
                     "timeout": {
                         "type": "integer",
-                        "description": "Timeout in seconds (default: 1800 = 30 minutes)"
+                        "description": "Timeout in seconds (default: auto-calculated based on targets/ports/rate). Override only if needed."
                     }
                 },
                 "required": ["targets"]

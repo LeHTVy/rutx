@@ -683,20 +683,20 @@ Select the most appropriate tool for the user's request."""
                     }
                 })
             
-            # MEDIUM/LOW: Comprehensive two-stage scan for rich LLM analysis
+            # MEDIUM/LOW: Fast adaptive scan strategy (30-45 min for 200+ targets)
             medium_low = intelligence.get("medium_value", []) + intelligence.get("low_value", [])
             if medium_low:
                 medium_low_targets = [t["subdomain"] for t in medium_low]
-                print(f"\n  ⚡ MEDIUM/LOW ({len(medium_low_targets)}) → COMPREHENSIVE SCAN:")
-                print(f"     → Stage 1: Naabu full port scan (1-65535, stealthy)")
-                print(f"     → Stage 2: Nmap service detection (auto-triggered)")
+                print(f"\n  ⚡ MEDIUM/LOW ({len(medium_low_targets)}) → FAST ADAPTIVE SCAN:")
+                print(f"     → Strategy: Top 1000 ports (fast) + full scan on interesting targets")
+                print(f"     → Estimated time: 30-45 minutes for {len(medium_low_targets)} targets")
 
                 selected_tools.append({
                     "name": "naabu_batch_scan",
                     "arguments": {
                         "targets": ",".join(medium_low_targets),
-                        "ports": "1-65535",  # Comprehensive scan
-                        "rate": 1000  # Slower rate to avoid IDS/IPS detection
+                        "ports": "top-1000",  # Fast: scan top 1000 ports only
+                        "rate": 3000  # Faster rate (3x speed, still reasonable)
                     }
                 })
             
@@ -1448,6 +1448,50 @@ Select the most appropriate tool for the user's request."""
                 db_context = query_database("stats")
             except:
                 db_context = {"note": "Database query unavailable"}
+
+        # CVE ENRICHMENT: Extract and enrich CVEs from scan results
+        try:
+            from utils.cve_utils import extract_cves_from_scan_results, summarize_cve_severity
+
+            cve_summary = extract_cves_from_scan_results(scan_results)
+            cve_stats = summarize_cve_severity(cve_summary["total_unique"])
+
+            # Enrich CVEs with OSV + ExploitDB
+            if cve_summary["total_unique"]:
+                from services.cve_sync_service import CVESyncService
+
+                syncer = CVESyncService()
+                cve_enrichment = syncer.enrich_found_cves(cve_summary["total_unique"])
+
+                # Add enriched data to LLM context
+                db_context["cve_details"] = {
+                    cve_id: {
+                        "cvss_score": data.get("cvss_v3_score"),
+                        "severity": data.get("cvss_v3_severity"),
+                        "description": data.get("description", "")[:200],
+                        "exploit_available": data.get("exploit_available", False),
+                        "exploit_count": data.get("exploit_count", 0),
+                        "has_metasploit": data.get("has_metasploit", False),
+                        "affected_packages": data.get("affected_packages", [])
+                    }
+                    for cve_id, data in cve_enrichment.items()
+                }
+
+                # Calculate risk score based on CVEs
+                critical_cves = [cve for cve, data in cve_enrichment.items()
+                                if data.get("cvss_v3_score", 0) >= 9.0]
+                high_cves = [cve for cve, data in cve_enrichment.items()
+                            if 7.0 <= data.get("cvss_v3_score", 0) < 9.0]
+                exploitable_cves = [cve for cve, data in cve_enrichment.items()
+                                    if data.get("exploit_available", False)]
+
+                print(f"  🚨 {len(critical_cves)} CRITICAL, {len(high_cves)} HIGH severity CVEs")
+                print(f"  💣 {len(exploitable_cves)} CVEs have PUBLIC EXPLOITS")
+
+                # Cleanup
+                syncer.close()
+        except Exception as e:
+            print(f"  ⚠️  CVE enrichment error: {e}")
 
         # Detect scan type for appropriate report format
         scan_type = self._detect_scan_type(scan_results)

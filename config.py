@@ -41,6 +41,7 @@ USE_NATIVE_TOOLS = True  # Tools run with native output formats, LLM chooses bes
 
 # API Keys
 SHODAN_API_KEY = "GOcpJ7gEk2IKfLr8N9500eyXjJ7vva2G"
+#NVD_API_KEY = "bb6c9838-ede9-4ed8-903e-66ffd4715fe5"
 
 # Security Settings
 REQUIRE_AUTHORIZATION_PROMPT = True  

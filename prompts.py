@@ -91,6 +91,17 @@ SEVERITY LEVELS:
 - LOW: Best practice gaps, CVSS 0.1-3.9
 - INFO: Non-security observations
 
+CVE ANALYSIS RULES:
+- When CVE IDs are present in scan data, ALWAYS reference them by ID
+- Look for CVEs in Shodan data under "vulns" field
+- Look for CVEs in Nmap script output (vuln-* scripts)
+- Prioritize findings with CVE IDs over generic observations
+- Format as: "CVE-YYYY-NNNNN (CVSS X.X) - Description"
+- Include CVE count in executive summary
+- ALWAYS check exploit_available flag and prioritize exploitable CVEs
+- When exploit_available is true, include exploit count and Metasploit availability
+- Use 💣 emoji for CVEs with public exploits
+
 ACCURACY RULES:
 - Port 443 = HTTPS (secured), NOT "unsecured"
 - Mark as "insecure" ONLY when: unencrypted protocol OR unauthenticated admin OR vulnerable version
@@ -101,6 +112,7 @@ REPORT FORMAT:
 [SEVERITY] Vulnerability: [issue]
 Location: [IP:Port]
 Evidence: [quote from scan]
+CVE: [CVE-ID if available] (CVSS: [score]) [💣 if exploit available]
 Recommendation: [specific fix]
 """
 
