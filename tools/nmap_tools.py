@@ -1031,6 +1031,35 @@ NMAP_TOOLS = [
                 "required": ["target"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "nmap_stealth_batch_scan",
+            "description": "Stealth batch scan for multiple targets using Nmap. Designed to be less noisy than Naabu. Features: SYN scan if admin, rate limiting (default 300 pps), timing control (T0-T5), batch processing.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "targets": {
+                        "type": "string",
+                        "description": "Comma-separated list of targets (hostnames or IPs)"
+                    },
+                    "ports": {
+                        "type": "string",
+                        "description": "Port specification: 'top-100', 'top-1000', '1-65535', or specific ports like '80,443' (default: top-1000)"
+                    },
+                    "timing": {
+                        "type": "string",
+                        "description": "Nmap timing: T0=Paranoid, T1=Sneaky, T2=Polite, T3=Normal (default), T4=Aggressive, T5=Insane"
+                    },
+                    "max_rate": {
+                        "type": "integer",
+                        "description": "Maximum packets per second (default: 300)"
+                    }
+                },
+                "required": ["targets"]
+            }
+        }
     }
 ]
 
@@ -1065,6 +1094,7 @@ def execute_tool(tool_name, tool_args):
         "nmap_os_detection": nmap_os_detection,
         "nmap_aggressive_scan": nmap_aggressive_scan,
         "nmap_stealth_scan": nmap_stealth_scan,
+        "nmap_stealth_batch_scan": nmap_stealth_batch_scan,
         "nmap_udp_scan": nmap_udp_scan,
         "nmap_tcp_connect_scan": nmap_tcp_connect_scan,
         "nmap_script_scan": nmap_script_scan,
