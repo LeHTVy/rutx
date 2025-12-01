@@ -1849,6 +1849,11 @@ Be specific, actionable, and prioritize by risk level. Reference specific findin
                 print(f"  📊 Generating programmatic Nmap batch scan report")
                 targets_scanned = batch_scan_data.get("targets_count", 0)
 
+                # DEBUG: Print what we actually have
+                print(f"  🔍 DEBUG: targets_count = {targets_scanned}")
+                print(f"  🔍 DEBUG: total_open_ports = {batch_scan_data.get('total_open_ports', 0)}")
+                print(f"  🔍 DEBUG: batch_scan_data keys = {list(batch_scan_data.keys())}")
+
                 # Reuse the naabu report generator (compatible format)
                 analysis = self._generate_naabu_report(batch_scan_data, targets_scanned, tool_name="nmap_stealth_batch_scan")
                 return analysis
