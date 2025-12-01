@@ -250,14 +250,14 @@ def naabu_batch_scan(targets: str, ports: str = "1-65535", rate: int = 1000, tim
 
     # Calculate dynamic timeout if not provided
     if timeout is None:
-        # Calculate port count
-        if "-" in ports:
+        # Calculate port count - check top-X format FIRST before generic dash check
+        if ports.startswith("top-"):
+            port_count = int(ports.split("-")[1])
+        elif "-" in ports:
             parts = ports.split("-")
             port_count = int(parts[1]) - int(parts[0]) + 1
         elif "," in ports:
             port_count = len(ports.split(","))
-        elif ports.startswith("top-"):
-            port_count = int(ports.split("-")[1])
         else:
             port_count = 1000  # Default estimate
 
@@ -278,8 +278,8 @@ def naabu_batch_scan(targets: str, ports: str = "1-65535", rate: int = 1000, tim
         # Minimum 10 minutes, maximum 6 hours
         timeout = max(600, min(21600, int(estimated_time)))
 
-        print(f"    ⏱️  Auto-calculated timeout: {timeout}s ({timeout//60} minutes) for {num_targets} targets")
-        print(f"       Formula: {num_targets} targets × {port_count} ports / {rate} pps × {safety_factor}x safety")
+        print(f"    Auto-calculated timeout: {timeout}s ({timeout//60} minutes) for {num_targets} targets")
+        print(f"       Formula: {num_targets} targets x {port_count} ports / {rate} pps x {safety_factor}x safety")
 
     # Use the base naabu_scan function
     return naabu_scan(target_list, ports=ports, rate=rate, timeout=timeout)

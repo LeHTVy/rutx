@@ -1395,12 +1395,17 @@ Select the most appropriate tool for the user's request."""
                 naabu_result = result
                 tool_result["naabu_data"] = {
                     "targets": naabu_result.get("targets", []),
+                    "targets_count": len(naabu_result.get("targets", [])),
                     "results": naabu_result.get("results", {}),  # {IP: [ports]}
+                    "hostname_to_ip": naabu_result.get("hostname_to_ip", {}),  # {hostname: IP} mapping
                     "total_hosts_scanned": naabu_result.get("total_hosts_scanned", 0),
-                    "hosts_with_ports": naabu_result.get("hosts_with_ports", 0),
+                    "targets_with_open_ports": naabu_result.get("hosts_with_ports", 0),
                     "total_open_ports": naabu_result.get("total_open_ports", 0),
-                    "scan_duration": naabu_result.get("scan_duration", 0),
-                    "scan_rate": naabu_result.get("scan_rate", 1000)
+                    "scan_duration": naabu_result.get("elapsed_seconds", 0),
+                    "scan_rate": naabu_result.get("scan_rate", 1000),
+                    "ports_scanned": naabu_result.get("ports_scanned", "unknown"),
+                    "success": naabu_result.get("success", True),
+                    "error": naabu_result.get("error", None)
                 }
 
             # For Shodan - include complete data
@@ -1781,7 +1786,37 @@ Be specific, actionable, and prioritize by risk level. Reference specific findin
                         print(f"  ⚠️  Cyber analyst LLM error: {llm_response.get('error', 'unknown')}")
                 except Exception as e:
                     print(f"  ⚠️  Cyber analyst failed: {e}")
-                
+
+                return analysis
+
+
+        # NAABU PORT SCAN: Generate programmatic report (like Masscan)
+        if scan_type == "naabu":
+            # Extract naabu data from results
+            naabu_data = None
+            targets_scanned = 0
+
+            for r in results_for_llm:
+                if "naabu" in r.get("tool", "").lower() and "naabu_data" in r:
+                    naabu_data = r["naabu_data"]
+                    targets_scanned = naabu_data.get("targets_count", 0)
+                    break
+
+            # Generate programmatic report
+            if naabu_data:
+                print(f"  📊 Generating programmatic Naabu report for {targets_scanned} targets")
+                analysis = self._generate_naabu_report(naabu_data, targets_scanned)
+                return analysis
+            else:
+                # Fallback for edge cases
+                print(f"  ⚠️  No Naabu data available to generate report")
+                analysis = "## NAABU SCAN REPORT\n\n"
+                analysis += "⚠️  No Naabu scan data found in results.\n\n"
+                analysis += "This could indicate:\n"
+                analysis += "- Scan did not execute properly\n"
+                analysis += "- Data extraction error\n"
+                analysis += "- Tool execution failed silently\n\n"
+                analysis += "**Recommendation:** Check Phase 2 execution logs for errors.\n"
                 return analysis
 
 
@@ -2206,6 +2241,301 @@ Be specific about CVEs, provide CVSS scores if known, and reference specific vul
                 pass
 
         return analysis
+
+    # ========================================================================
+    # NAABU REPORT GENERATION (Programmatic)
+    # ========================================================================
+
+    # Common port service mappings
+    COMMON_PORTS = {
+        21: ("FTP", "File Transfer Protocol"),
+        22: ("SSH", "Secure Shell"),
+        23: ("Telnet", "Unencrypted remote access"),
+        25: ("SMTP", "Email server"),
+        53: ("DNS", "Domain Name System"),
+        80: ("HTTP", "Web server"),
+        110: ("POP3", "Email retrieval"),
+        143: ("IMAP", "Email retrieval"),
+        443: ("HTTPS", "Secure web server"),
+        445: ("SMB", "Windows file sharing"),
+        1433: ("MSSQL", "Microsoft SQL Server"),
+        3306: ("MySQL", "MySQL database server"),
+        3389: ("RDP", "Remote Desktop Protocol"),
+        5432: ("PostgreSQL", "PostgreSQL database"),
+        5900: ("VNC", "Virtual Network Computing"),
+        6379: ("Redis", "Redis cache/database"),
+        8000: ("HTTP-Alt", "Alternative web server"),
+        8080: ("HTTP-Proxy", "HTTP proxy/alternative"),
+        8443: ("HTTPS-Alt", "Alternative HTTPS"),
+        9200: ("Elasticsearch", "Elasticsearch database"),
+        27017: ("MongoDB", "MongoDB NoSQL database"),
+    }
+
+    def _format_port_info(self, port: int) -> str:
+        """Format port with service name and description"""
+        if port in self.COMMON_PORTS:
+            service, desc = self.COMMON_PORTS[port]
+            return f"{port}/tcp - {service} - {desc}"
+        else:
+            return f"{port}/tcp - Unknown service"
+
+    def _get_cve_data_for_target(self, target: str) -> Dict:
+        """
+        Retrieve CVE data for target from enriched context (Shodan scans)
+
+        Args:
+            target: Target hostname
+
+        Returns:
+            {"cves": [list of CVE IDs], "count": number of CVEs}
+        """
+        cves = []
+
+        # Check enriched context from Shodan
+        if hasattr(self, 'enriched_context') and self.enriched_context:
+            threat_intel = self.enriched_context.get('threat_intel', {})
+            for intel in threat_intel.values():
+                if target in str(intel.get('target', '')):
+                    cves.extend(intel.get('vulns', []))
+
+        return {"cves": list(set(cves)), "count": len(set(cves))}
+
+    def _generate_naabu_report(self, naabu_data: Dict, targets_scanned: int) -> str:
+        """
+        Generate programmatic report for Naabu scan results
+
+        Args:
+            naabu_data: Naabu scan result dict
+            targets_scanned: Number of targets in scan
+
+        Returns:
+            Formatted report string
+        """
+        success = naabu_data.get("success", False)
+        error = naabu_data.get("error")
+
+        # Handle scan failure
+        if not success:
+            return self._generate_naabu_error_report(error, targets_scanned)
+
+        # Extract data
+        results = naabu_data.get("results", {})
+        total_open_ports = naabu_data.get("total_open_ports", 0)
+        targets_with_ports = naabu_data.get("targets_with_open_ports", 0)
+        scan_duration = naabu_data.get("scan_duration", 0)
+        scan_rate = naabu_data.get("scan_rate", 0)
+        ports_scanned = naabu_data.get("ports_scanned", "unknown")
+
+        # Handle zero results
+        if total_open_ports == 0:
+            return self._generate_naabu_zero_ports_report(targets_scanned, scan_duration, scan_rate, ports_scanned)
+
+        # Generate full report with results
+        return self._generate_naabu_success_report(
+            results, targets_scanned, total_open_ports, targets_with_ports,
+            scan_duration, scan_rate, ports_scanned
+        )
+
+    def _generate_naabu_error_report(self, error: str, targets_scanned: int) -> str:
+        """Generate report for failed Naabu scan"""
+        # Parse common errors and provide context
+        error_explanations = {
+            "invalid literal": "Port range parsing error - check port specification format",
+            "timed out": "Scan exceeded time limit - consider reducing targets or increasing timeout",
+            "not found": "Naabu tool not installed or not in PATH",
+            "permission denied": "Insufficient permissions to run port scan",
+        }
+
+        explanation = next(
+            (exp for pattern, exp in error_explanations.items() if pattern in str(error).lower()),
+            "Unexpected error occurred"
+        )
+
+        return f"""
+════════════════════════════════════════════════════════════
+📋 NAABU PORT SCAN REPORT
+════════════════════════════════════════════════════════════
+
+## SCAN SUMMARY
+- Targets: {targets_scanned} subdomains
+- Status: ⚠️  FAILED
+
+## ERROR
+{error}
+
+## TROUBLESHOOTING
+{explanation}
+
+Possible causes:
+1. Tool configuration issue
+2. Invalid scan parameters
+3. Network/permissions problem
+
+## RECOMMENDATIONS
+- Check Naabu version: naabu -version
+- Verify port range syntax is correct
+- Review scan arguments in Phase 1
+- Check system permissions for port scanning
+- Consult error message above for specific details
+
+════════════════════════════════════════════════════════════
+Session: {self.db_session_id or 'N/A'} | Type: Port Scan (Naabu) | Status: FAILED
+════════════════════════════════════════════════════════════
+"""
+
+    def _generate_naabu_zero_ports_report(self, targets_scanned: int, scan_duration: float, scan_rate: int, ports_scanned: str) -> str:
+        """Generate report when Naabu finds no open ports"""
+        duration_str = f"{int(scan_duration//60)}m {int(scan_duration%60)}s" if scan_duration else "N/A"
+
+        return f"""
+════════════════════════════════════════════════════════════
+📋 NAABU PORT SCAN REPORT
+════════════════════════════════════════════════════════════
+
+## SCAN SUMMARY
+- Targets scanned: {targets_scanned} subdomains
+- Targets with open ports: 0 (0%)
+- Total open ports found: 0
+- Scan duration: {duration_str}
+- Scan rate: {scan_rate} pps
+- Port range: {ports_scanned}
+
+## RESULT
+✓ Scan completed successfully
+✗ No open ports found on any target
+
+## ANALYSIS
+This could indicate:
+1. All targets are properly firewalled
+2. No services running on scanned ports (top-{ports_scanned})
+3. Targets may be offline or non-responsive
+4. DNS resolution may have failed for some targets
+5. Network filtering blocking scan traffic
+
+## RECOMMENDATIONS
+- Verify targets are reachable (ping/ICMP check)
+- Try comprehensive scan (1-65535) on high-priority targets
+- Check if targets require specific source IP/VPN access
+- Review DNS resolution for failed targets
+- Consider slower scan rate if IDS/IPS may be blocking
+
+════════════════════════════════════════════════════════════
+Session: {self.db_session_id or 'N/A'} | Type: Port Scan (Naabu) | Time: {duration_str}
+════════════════════════════════════════════════════════════
+"""
+
+    def _generate_naabu_success_report(self, results: Dict, targets_scanned: int,
+                                      total_open_ports: int, targets_with_ports: int,
+                                      scan_duration: float, scan_rate: int, ports_scanned: str) -> str:
+        """Generate detailed report when Naabu finds open ports"""
+        duration_str = f"{int(scan_duration//60)}m {int(scan_duration%60)}s" if scan_duration else "N/A"
+        percentage = round((targets_with_ports / targets_scanned * 100), 1) if targets_scanned > 0 else 0
+
+        # Build port statistics
+        port_counts = {}
+        for target, ports in results.items():
+            for port in ports:
+                port_counts[port] = port_counts.get(port, 0) + 1
+
+        # Sort by frequency
+        top_ports = sorted(port_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+
+        # Start report
+        report = f"""
+════════════════════════════════════════════════════════════
+📋 NAABU PORT SCAN REPORT
+════════════════════════════════════════════════════════════
+
+## SCAN SUMMARY
+- Targets scanned: {targets_scanned} subdomains
+- Targets with open ports: {targets_with_ports} ({percentage}%)
+- Total open ports found: {total_open_ports}
+- Scan duration: {duration_str}
+- Scan rate: {scan_rate} pps
+- Port range: {ports_scanned}
+
+## DETAILED RESULTS
+
+"""
+
+        # Add per-target details (limit to first 50 for readability)
+        targets_list = list(results.items())[:50]
+        for target, ports in targets_list:
+            port_count = len(ports)
+            report += f"### {target}\n"
+            report += f"**Open Ports ({port_count}):**\n"
+
+            for port in sorted(ports):
+                report += f"- {self._format_port_info(port)}\n"
+
+            # Check for CVE data
+            cve_data = self._get_cve_data_for_target(target)
+            if cve_data["count"] > 0:
+                report += f"\n**CVE Intelligence:**\n"
+                for cve in cve_data["cves"][:3]:  # Limit to 3 CVEs
+                    report += f"- {cve}\n"
+
+            # Add security notes for concerning ports
+            if 3306 in ports or 5432 in ports or 27017 in ports or 1433 in ports:
+                report += f"\n**Security Alert:**\n"
+                report += f"🚨 Database server exposed to internet!\n"
+                report += f"   Immediate action required - restrict access or add firewall rules\n"
+            elif 3389 in ports:
+                report += f"\n**Security Alert:**\n"
+                report += f"⚠️  RDP exposed - high risk of brute-force attacks\n"
+
+            report += "\n"
+
+        if len(results) > 50:
+            report += f"[... and {len(results) - 50} more targets with open ports ...]\n\n"
+
+        # Port statistics
+        report += "## PORT STATISTICS\n"
+        report += "Most common open ports:\n"
+        for i, (port, count) in enumerate(top_ports, 1):
+            service_name = self.COMMON_PORTS.get(port, ("Unknown", ""))[0]
+            pct = round((count / targets_with_ports * 100), 0) if targets_with_ports > 0 else 0
+            warning = ""
+            if port in [3306, 5432, 27017, 1433]:
+                warning = "  ⚠️  Database exposure"
+            elif port in [3389, 23]:
+                warning = "  ⚠️  High-risk protocol"
+            elif port > 8000:
+                warning = "  ⚠️  Non-standard port"
+
+            report += f"{i}. {port} ({service_name})   - {count} hosts ({int(pct)}%){warning}\n"
+
+        # Recommendations
+        report += f"""
+## SECURITY RECOMMENDATIONS
+
+### Next Steps
+✓ Automatic Nmap service detection triggered for all {targets_with_ports} targets
+✓ Detailed service version analysis will be available shortly
+✓ CVE enrichment will be performed on identified services
+
+### High Priority Actions
+"""
+
+        # Add specific recommendations based on findings
+        db_count = sum(1 for ports in results.values() if any(p in ports for p in [3306, 5432, 27017, 1433]))
+        rdp_count = sum(1 for ports in results.values() if 3389 in ports)
+
+        if db_count > 0:
+            report += f"1. 🚨 Review {db_count} database servers exposed to internet - implement firewall rules\n"
+        if rdp_count > 0:
+            report += f"2. ⚠️  Secure {rdp_count} RDP instances - enable NLA, use strong passwords, consider VPN\n"
+
+        report += """
+3. Monitor service detection results for vulnerable versions
+4. Review non-standard ports for unauthorized services
+
+════════════════════════════════════════════════════════════
+Session: """ + (self.db_session_id or 'N/A') + f""" | Type: Port Scan (Naabu) | Time: {duration_str}
+════════════════════════════════════════════════════════════
+"""
+
+        return report
 
     def phase_4_report_generation(self, scan_results: List[Dict]) -> str:
         """
