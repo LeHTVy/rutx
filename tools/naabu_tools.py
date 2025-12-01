@@ -62,18 +62,32 @@ def naabu_scan(
     output_file = os.path.join(output_dir, f"naabu_{timestamp}.txt")
     
     try:
-        # Build command
+        # Build command - handle top-ports syntax
         cmd = [
             "naabu",
-            "-list", targets_file,
-            "-p", ports,
+            "-list", targets_file
+        ]
+
+        # Handle different port specification formats
+        if ports.startswith("top-"):
+            # Extract number from "top-1000" format and use -top-ports flag
+            top_count = ports.split("-")[1]
+            cmd.extend(["-top-ports", top_count])
+            ports_display = f"top-{top_count}"
+        else:
+            # Regular port range or list
+            cmd.extend(["-p", ports])
+            ports_display = ports
+
+        # Add remaining flags
+        cmd.extend([
             "-rate", str(rate),
             "-o", output_file,
             "-silent",
             "-json"  # JSON output
-        ]
-        
-        print(f"    Running: naabu -list {targets_file} -p {ports} -rate {rate}")
+        ])
+
+        print(f"    Running: naabu -list {targets_file} -p {ports_display} -rate {rate}")
         
         import time
         start_time = time.time()

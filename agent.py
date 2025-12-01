@@ -759,8 +759,7 @@ Select the most appropriate tool for the user's request."""
                     soup = BeautifulSoup(response.text, 'html.parser')
                     homepage_text = soup.get_text(separator=' ', strip=True)[:2000]
                 else:
-                    # Regex fallback if bs4 missing
-                    print("  ⚠️  bs4 not found, using regex scraping")
+                    # Regex fallback (works fine without bs4)
                     text = re.sub(r'<[^>]+>', ' ', response.text)
                     homepage_text = re.sub(r'\s+', ' ', text).strip()[:2000]
                 
@@ -1233,9 +1232,12 @@ Select the most appropriate tool for the user's request."""
                 self.enriched_context = None
 
         # AUTO NMAP FOLLOW-UP: Check for Naabu results and trigger service detection
+        naabu_scan_executed = False
         naabu_results_found = False
+
         for scan_result in results:
             if "naabu" in scan_result["tool"].lower():
+                naabu_scan_executed = True
                 naabu_data = scan_result["result"]
 
                 if naabu_data.get("success"):
@@ -1280,7 +1282,8 @@ Select the most appropriate tool for the user's request."""
                         except Exception as e:
                             print(f"  ⚠️  Nmap follow-up error: {e}")
 
-        if not naabu_results_found:
+        # Only show message if Naabu was actually executed
+        if naabu_scan_executed and not naabu_results_found:
             print("  ℹ️  No Naabu results to follow up on")
 
         return results
