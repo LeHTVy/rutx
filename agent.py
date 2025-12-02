@@ -1166,8 +1166,9 @@ Select the most appropriate tool for the user's request."""
                 reasoning = f"Port scan detected for {target}."
                 print(f"  🔍 Port scan detected for: {target}")
                 for tool in selected_tools:
-                    if 'nmap' in tool['name']:
-                        print(f"  ✓ Selected: {tool['name']}")
+                    # Print all selected tools (not just nmap)
+                    print(f"  ✓ Selected: {tool['name']}")
+                return selected_tools, reasoning
 
         #  5. LLM fallback for unrecognized requests
         # Build system prompt with effectiveness guidance

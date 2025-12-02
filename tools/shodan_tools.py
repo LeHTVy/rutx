@@ -14,12 +14,36 @@ def shodan_lookup(ip):
     """
     Look up an IP address in Shodan to get host information and threat intelligence.
 
+    Now supports domains! Automatically resolves domain names to IP addresses.
+
     Args:
-        ip: IP address to look up
+        ip: IP address or domain name to look up
 
     Returns:
         dict: Shodan host information including open ports, services, vulnerabilities, and tags
     """
+    import socket
+    import re
+
+    # Store original input for error messages
+    original_input = ip
+
+    # Check if input is a domain name (not an IP address)
+    ip_pattern = r'^(?:\d{1,3}\.){3}\d{1,3}$'
+    if not re.match(ip_pattern, ip):
+        # It's a domain, resolve it to IP
+        print(f"  [DNS] Resolving {ip} to IP address...")
+        try:
+            resolved_ip = socket.gethostbyname(ip)
+            print(f"  [DNS] Resolved {ip} → {resolved_ip}")
+            ip = resolved_ip
+        except socket.gaierror as e:
+            return {
+                "success": False,
+                "error": f"DNS resolution failed for '{original_input}': {e}",
+                "summary": f"Could not resolve domain '{original_input}' to IP address"
+            }
+
     try:
         url = f"{SHODAN_API_BASE}/shodan/host/{ip}?key={SHODAN_API_KEY}"
         response = requests.get(url, timeout=30)
@@ -30,6 +54,7 @@ def shodan_lookup(ip):
             # Extract key information
             result = {
                 "ip": data.get("ip_str", ip),
+                "queried_domain": original_input if original_input != ip else None,  # Track if domain was queried
                 "organization": data.get("org", "Unknown"),
                 "isp": data.get("isp", "Unknown"),
                 "asn": data.get("asn", "Unknown"),
@@ -69,18 +94,22 @@ def shodan_lookup(ip):
             result["threat_indicators"] = threat_indicators
             result["threat_level"] = "HIGH" if threat_indicators else "UNKNOWN"
 
+            # Build summary message
+            target_desc = f"{original_input} ({ip})" if original_input != ip else ip
+
             return {
                 "success": True,
                 "data": result,
-                "summary": f"Shodan lookup for {ip}: {len(result['ports'])} ports, {len(result['services'])} services, "
+                "summary": f"Shodan lookup for {target_desc}: {len(result['ports'])} ports, {len(result['services'])} services, "
                           f"{len(result['vulns'])} known CVEs, Threat level: {result['threat_level']}"
             }
 
         elif response.status_code == 404:
+            target_desc = f"{original_input} ({ip})" if original_input != ip else ip
             return {
                 "success": True,
-                "data": {"ip": ip, "status": "not_found"},
-                "summary": f"IP {ip} not found in Shodan database (may indicate low internet exposure)"
+                "data": {"ip": ip, "queried_domain": original_input if original_input != ip else None, "status": "not_found"},
+                "summary": f"{target_desc} not found in Shodan database (may indicate low internet exposure)"
             }
 
         else:
