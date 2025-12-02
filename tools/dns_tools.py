@@ -16,6 +16,73 @@ from typing import List, Dict, Set, Tuple
 from collections import defaultdict
 
 
+def resolve_dns(domain: str) -> dict:
+    """
+    Simple DNS resolution for a single domain (for tool registry compatibility).
+
+    Args:
+        domain: Domain name to resolve
+
+    Returns:
+        Dict with resolution results
+
+    Example:
+        >>> resolve_dns("example.com")
+        {'domain': 'example.com', 'ip': '93.184.216.34', 'success': True, 'A': ['93.184.216.34']}
+    """
+    result = dnsx_bulk_resolve([domain])
+    ip = result.get(domain)
+
+    return {
+        "domain": domain,
+        "ip": ip,
+        "A": [ip] if ip else [],
+        "AAAA": [],  # IPv6 not implemented yet
+        "CNAME": [],  # CNAME not implemented yet
+        "success": domain in result
+    }
+
+
+def reverse_dns_lookup(ip: str) -> dict:
+    """
+    Reverse DNS lookup (PTR record) to find hostname from IP.
+
+    Args:
+        ip: IP address for reverse lookup
+
+    Returns:
+        Dict with reverse lookup results
+
+    Example:
+        >>> reverse_dns_lookup("8.8.8.8")
+        {'ip': '8.8.8.8', 'hostname': 'dns.google', 'ptr': 'dns.google', 'success': True}
+    """
+    try:
+        hostname = socket.gethostbyaddr(ip)[0]
+        return {
+            "ip": ip,
+            "hostname": hostname,
+            "ptr": hostname,
+            "success": True
+        }
+    except socket.herror:
+        return {
+            "ip": ip,
+            "hostname": None,
+            "ptr": None,
+            "success": False,
+            "error": "No PTR record found"
+        }
+    except Exception as e:
+        return {
+            "ip": ip,
+            "hostname": None,
+            "ptr": None,
+            "success": False,
+            "error": str(e)
+        }
+
+
 def dnsx_bulk_resolve(subdomains: List[str], timeout: int = 30) -> Dict[str, str]:
     """
     Bulk resolve subdomains using dnsx (much faster than one-by-one)
@@ -39,7 +106,7 @@ def dnsx_bulk_resolve(subdomains: List[str], timeout: int = 30) -> Dict[str, str
         subprocess.run(["dnsx", "-version"], capture_output=True, check=True, timeout=5)
         use_dnsx = True
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
-        print("  ⚠️  dnsx not found, falling back to Python DNS (slower)")
+        print("  [WARNING] dnsx not found, falling back to Python DNS (slower)")
         use_dnsx = False
     
     if use_dnsx:
@@ -81,8 +148,8 @@ def _dnsx_resolve(subdomains: List[str], timeout: int) -> Dict[str, str]:
         )
         
         if result.returncode != 0:
-            print(f"  ⚠️  dnsx failed with code {result.returncode}")
-            print(f"  ⚠️  stderr: {result.stderr}")
+            print(f"  [WARNING] dnsx failed with code {result.returncode}")
+            print(f"  [WARNING] stderr: {result.stderr}")
         
         # Parse JSON output
         import json
@@ -110,18 +177,18 @@ def _dnsx_resolve(subdomains: List[str], timeout: int) -> Dict[str, str]:
                         continue
         
         if not mapping:
-            print("  ⚠️  dnsx returned no results (empty output or parsing failed)")
+            print("  [WARNING] dnsx returned no results (empty output or parsing failed)")
             # print(f"DEBUG: Raw output was: {content if 'content' in locals() else 'N/A'}")
-            print("  ⚠️  Falling back to Python DNS")
+            print("  [WARNING] Falling back to Python DNS")
             return _fallback_resolve(subdomains)
             
         return mapping
         
     except subprocess.TimeoutExpired:
-        print(f"  ⚠️  dnsx timed out after {timeout}s")
+        print(f"  [WARNING] dnsx timed out after {timeout}s")
         return _fallback_resolve(subdomains)
     except Exception as e:
-        print(f"  ⚠️  dnsx error: {e}")
+        print(f"  [WARNING] dnsx error: {e}")
         return _fallback_resolve(subdomains)
     finally:
         # Cleanup temp files
@@ -215,17 +282,17 @@ def print_deduplication_stats(subdomains: List[str], unique_ips: List[str], ip_t
     savings = len(subdomains) - len(unique_ips)
     savings_pct = (savings / len(subdomains) * 100) if subdomains else 0
     
-    print(f"\n  📊 DNS Resolution & Deduplication:")
-    print(f"     • Total subdomains: {len(subdomains)}")
-    print(f"     • Unique IPs: {len(unique_ips)}")
-    print(f"     • Saved scans: {savings} ({savings_pct:.1f}%)")
-    
+    print(f"\n  [DNS Resolution & Deduplication]")
+    print(f"     - Total subdomains: {len(subdomains)}")
+    print(f"     - Unique IPs: {len(unique_ips)}")
+    print(f"     - Saved scans: {savings} ({savings_pct:.1f}%)")
+
     # Show IPs with most subdomains
     sorted_ips = sorted(ip_to_subdomains.items(), key=lambda x: len(x[1]), reverse=True)
     if len(sorted_ips) > 0:
         top_ip = sorted_ips[0]
         if len(top_ip[1]) > 1:
-            print(f"     • Most shared IP: {top_ip[0]} ({len(top_ip[1])} subdomains)")
+            print(f"     - Most shared IP: {top_ip[0]} ({len(top_ip[1])} subdomains)")
 
 
 # ============================================================================
@@ -250,7 +317,7 @@ if __name__ == "__main__":
     
     print_deduplication_stats(test_subs, unique_ips, ip_to_subs)
     
-    print("\n✅ DNS Tools working!")
+    print("\n[OK] DNS Tools working!")
     print("\nResolution results:")
     for sub, ip in sorted(sub_to_ip.items()):
         print(f"  {sub} → {ip}")

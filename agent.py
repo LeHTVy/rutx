@@ -30,8 +30,11 @@ from database import (
     save_scan_result, get_llm_context, query_database,
     # Enhanced persistence imports
     ScanSessionManager, ToolResultPersister, LLMContextBuilder,
-    persist_tool_results, build_and_cache_context, get_cached_context
+    persist_tool_results, build_and_cache_context, get_cached_context,
+    # Programmatic report imports
+    ProgrammaticReportService
 )
+from database.programmatic_report_generator import ProgrammaticReportGenerator
 from prompts import get_phase1_prompt, get_phase3_prompt, get_phase4_prompt
 
 # SNODE Integration (Tracing + Guardrails)
@@ -1520,6 +1523,12 @@ Select the most appropriate tool for the user's request."""
         scan_type = self._detect_scan_type(scan_results)
         print(f"  📋 Report format: {scan_type}")
 
+        # NEW FLOW: Generate and store programmatic report FIRST
+        # This ensures we have structured data before LLM analysis
+        programmatic_report_id = self._generate_and_store_programmatic_report(
+            scan_results, scan_type
+        )
+
         # SPECIAL HANDLING: Check if masscan found zero results
         # Generate report programmatically instead of relying on LLM
         if scan_type == "masscan":
@@ -2212,11 +2221,23 @@ Be specific about CVEs, provide CVSS scores if known, and reference specific vul
                 return analysis
 
 
-        # Send COMPLETE scan data to LLM
+        # Retrieve programmatic report from database if it was generated
+        programmatic_report_content = ""
+        if programmatic_report_id:
+            try:
+                prog_report = ProgrammaticReportService.get_programmatic_report(programmatic_report_id)
+                if prog_report:
+                    programmatic_report_content = prog_report.get("content", "")
+                    print(f"  📄 Retrieved programmatic report ({len(programmatic_report_content)} chars)")
+            except Exception as e:
+                print(f"  ⚠️  Could not retrieve programmatic report: {e}")
+
+        # Send COMPLETE scan data to LLM with programmatic report
         system_prompt = get_phase3_prompt(
             json.dumps(results_for_llm, indent=2),
             json.dumps(db_context, indent=2),
-            scan_type=scan_type
+            scan_type=scan_type,
+            programmatic_report=programmatic_report_content
         )
 
         messages = [
@@ -2224,7 +2245,7 @@ Be specific about CVEs, provide CVSS scores if known, and reference specific vul
             {"role": "user", "content": "Analyze the scan results and provide a comprehensive security report."}
         ]
 
-        print("\n🔍 Analyzing results with enriched context...")
+        print("\n🔍 Analyzing results with enriched context (programmatic report + DB data)...")
 
         # Use config timeout (TIMEOUT_OLLAMA) for LLM analysis
         response = self._call_ollama(messages, timeout=TIMEOUT_OLLAMA)
@@ -2589,6 +2610,106 @@ Session: """ + (self.db_session_id or 'N/A') + f""" | Type: Port Scan ({tool_dis
 """
 
         return report
+
+    # ========================================================================
+    # PROGRAMMATIC REPORT GENERATION (New Flow)
+    # ========================================================================
+
+    def _generate_and_store_programmatic_report(
+        self,
+        scan_results: List[Dict],
+        scan_type: str
+    ) -> Optional[str]:
+        """
+        Generate programmatic report from scan results and store in database.
+
+        This is Step 1 of the new 2-step Phase 3 flow:
+        Step 1: Generate programmatic report (this function)
+        Step 2: LLM analyzes programmatic report + DB context
+
+        Args:
+            scan_results: List of tool execution results
+            scan_type: Detected scan type (masscan, naabu, nmap, subdomain, etc.)
+
+        Returns:
+            Report ID if successful, None if failed
+        """
+        try:
+            print("\n  📝 Generating programmatic report...")
+
+            report_data = None
+            target = "unknown"
+
+            # Generate report based on scan type
+            if scan_type == "masscan":
+                # Find masscan result
+                for r in scan_results:
+                    if "masscan" in r.get("tool", "").lower():
+                        report_data = ProgrammaticReportGenerator.generate_masscan_report(r)
+                        target = r.get("args", {}).get("targets", ["unknown"])[0]
+                        break
+
+            elif scan_type == "naabu":
+                # Find naabu result
+                for r in scan_results:
+                    if "naabu" in r.get("tool", "").lower():
+                        report_data = ProgrammaticReportGenerator.generate_naabu_report(r)
+                        target = r.get("args", {}).get("targets", ["unknown"])[0]
+                        break
+
+            elif scan_type == "port_scan":
+                # Find nmap result
+                for r in scan_results:
+                    if "nmap" in r.get("tool", "").lower():
+                        report_data = ProgrammaticReportGenerator.generate_nmap_report(r)
+                        target = r.get("args", {}).get("target", "unknown")
+                        break
+
+            elif scan_type == "subdomain":
+                # Find amass and bbot results
+                amass_result = None
+                bbot_result = None
+
+                for r in scan_results:
+                    tool = r.get("tool", "")
+                    if "amass" in tool.lower():
+                        amass_result = r
+                        target = r.get("args", {}).get("domain", "unknown")
+                    elif "bbot" in tool.lower():
+                        bbot_result = r
+                        if target == "unknown":
+                            target = r.get("args", {}).get("target", "unknown")
+
+                report_data = ProgrammaticReportGenerator.generate_subdomain_report(
+                    amass_result, bbot_result
+                )
+
+            elif scan_type == "shodan":
+                # Find shodan result
+                for r in scan_results:
+                    if "shodan" in r.get("tool", "").lower():
+                        report_data = ProgrammaticReportGenerator.generate_shodan_report(r)
+                        target = r.get("args", {}).get("ip", "unknown")
+                        break
+
+            # Save to database if report was generated
+            if report_data and self.db_session_id:
+                report_id = ProgrammaticReportService.save_programmatic_report(
+                    session_id=self.db_session_id,
+                    report_data=report_data,
+                    target=target
+                )
+                print(f"  ✅ Programmatic report saved (ID: {report_id[:8]}...)")
+                return report_id
+            else:
+                print(f"  ⚠️  No programmatic report generated for scan type: {scan_type}")
+                return None
+
+        except Exception as e:
+            print(f"  ⚠️  Failed to generate programmatic report: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
 
     def phase_4_report_generation(self, scan_results: List[Dict]) -> str:
         """

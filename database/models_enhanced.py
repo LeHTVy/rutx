@@ -577,22 +577,42 @@ class LLMContextCache(Base):
         }
 
 
+class ReportCategory(PyEnum):
+    """Distinguishes between programmatic and analysis reports."""
+    PROGRAMMATIC = "programmatic"  # Raw tool output formatted consistently
+    ANALYSIS = "analysis"  # LLM-enriched cybersecurity analysis
+
+
 class GeneratedReport(Base):
     """
-    Stores LLM-generated reports (Phase 4 output).
+    Stores both programmatic reports (raw tool data) and analysis reports (LLM insights).
+
+    PROGRAMMATIC reports:
+        - Generated in Phase 3 from raw tool outputs
+        - Structured, consistent format across all tools
+        - No LLM involvement
+        - Stored in DB before analysis
+
+    ANALYSIS reports:
+        - Generated in Phase 3 by LLM
+        - Uses programmatic report + DB context as input
+        - Enriched with threat intelligence and recommendations
+        - Final output to user
     """
     __tablename__ = 'generated_reports'
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
     session_id = Column(String(36), ForeignKey('scan_sessions.id'), nullable=True, index=True)
 
-    # Report metadata
-    report_type = Column(String(50), nullable=False)  # executive, technical, compliance
+    # Report classification
+    report_category = Column(Enum(ReportCategory), nullable=False, default=ReportCategory.ANALYSIS)
+    report_type = Column(String(50), nullable=False)  # executive, technical, compliance, nmap_scan, masscan_scan, subdomain_enum
     title = Column(String(255), nullable=True)
     target = Column(String(255), nullable=True, index=True)
 
     # Content
     content = Column(Text, nullable=False)  # Full report (Markdown)
+    structured_data = Column(JSON, nullable=True)  # For programmatic reports: structured scan data
     executive_summary = Column(Text, nullable=True)
     format = Column(String(20), default="markdown")  # markdown, html, json
 
@@ -603,10 +623,13 @@ class GeneratedReport(Base):
     critical_count = Column(Integer, default=0)
     high_count = Column(Integer, default=0)
 
-    # LLM metadata
+    # LLM metadata (only for ANALYSIS reports)
     model_used = Column(String(100), nullable=True)
     prompt_tokens = Column(Integer, nullable=True)
     completion_tokens = Column(Integer, nullable=True)
+
+    # Link to programmatic report (for ANALYSIS reports)
+    programmatic_report_id = Column(String(36), ForeignKey('generated_reports.id'), nullable=True)
 
     # Relationships
     session = relationship("ScanSession", back_populates="generated_reports")
@@ -620,12 +643,15 @@ class GeneratedReport(Base):
     def to_dict(self) -> Dict[str, Any]:
         return {
             "id": self.id,
+            "report_category": self.report_category.value if self.report_category else None,
             "report_type": self.report_type,
             "title": self.title,
             "target": self.target,
             "risk_level": self.risk_level,
             "findings_count": self.findings_count,
             "executive_summary": self.executive_summary,
+            "structured_data": self.structured_data,
+            "programmatic_report_id": self.programmatic_report_id,
             "generated_at": self.generated_at.isoformat() if self.generated_at else None
         }
 

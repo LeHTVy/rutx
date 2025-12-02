@@ -536,8 +536,19 @@ Detected Target Type: {target_type}
     return base_prompt
 
 
-def get_phase3_prompt(scan_results: str, db_context: str = "{}", scan_type: str = "generic") -> str:
-    """Build Phase 3 (Analysis) prompt with scan-type specific format"""
+def get_phase3_prompt(scan_results: str, db_context: str = "{}", scan_type: str = "generic", programmatic_report: str = "") -> str:
+    """
+    Build Phase 3 (Analysis) prompt with scan-type specific format.
+
+    Args:
+        scan_results: Raw tool execution results
+        db_context: Database context (previous findings, enriched data)
+        scan_type: Type of scan (masscan, nmap, subdomain, etc.)
+        programmatic_report: Formatted programmatic report (NEW - structured scan data)
+
+    Returns:
+        Complete Phase 3 analysis prompt
+    """
 
     # Select appropriate format based on scan type
     if scan_type == "masscan" or "masscan" in scan_results.lower():
@@ -553,27 +564,40 @@ def get_phase3_prompt(scan_results: str, db_context: str = "{}", scan_type: str 
     else:
         output_format = GENERIC_FORMAT
 
+    # Build programmatic report section if provided
+    programmatic_section = ""
+    if programmatic_report:
+        programmatic_section = f"""
+PROGRAMMATIC REPORT (Structured Scan Data):
+{programmatic_report}
+
+This programmatic report contains formatted scan data. Use it as the PRIMARY source for your analysis.
+Cross-reference with the database context below for enriched threat intelligence.
+
+"""
+
     # Build the complete Phase 3 prompt
-    prompt = f"""You are SNODE AI, a security analysis agent.
+    prompt = f"""You are SNODE AI, a senior cybersecurity analyst.
 
-PHASE 3: ANALYSIS
+PHASE 3: INTELLIGENCE ANALYSIS
 
-SCAN RESULTS:
-{scan_results}
-
-DATABASE CONTEXT (previous findings):
+{programmatic_section}DATABASE CONTEXT (Enriched Findings & Threat Intelligence):
 {db_context}
+
+RAW SCAN RESULTS (Reference Only):
+{scan_results}
 
 {VULNERABILITY_ANALYSIS}
 
 {output_format}
 
 CRITICAL RULES:
-- Analyze the ACTUAL scan data provided above
-- Cross-reference with database context if relevant
+- Use the PROGRAMMATIC REPORT as your primary data source for analysis
+- Cross-reference with DATABASE CONTEXT for CVE details, threat intelligence, and historical findings
+- The RAW SCAN RESULTS are provided for reference only
 - Follow the output format for scan type: {scan_type}
-- Be specific and evidence-based
-- Provide actionable recommendations
+- Be specific, evidence-based, and actionable
+- Focus on cybersecurity risk assessment and remediation guidance
 """
 
     return prompt

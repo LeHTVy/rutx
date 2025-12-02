@@ -404,6 +404,116 @@ def save_scan_result(
     )
 
 
+class ProgrammaticReportService:
+    """
+    Service for managing programmatic reports.
+
+    Programmatic reports are raw tool outputs formatted consistently.
+    They are generated BEFORE LLM analysis and stored in the database.
+    """
+
+    @staticmethod
+    def save_programmatic_report(
+        session_id: str,
+        report_data: Dict[str, Any],
+        target: str
+    ) -> str:
+        """
+        Save a programmatic report to the database.
+
+        Args:
+            session_id: Associated session ID
+            report_data: Report data from ProgrammaticReportGenerator
+            target: Scan target
+
+        Returns:
+            Report ID
+        """
+        from .models_enhanced import GeneratedReport, ReportCategory
+
+        with db_session_scope() as session:
+            report = GeneratedReport(
+                session_id=session_id,
+                report_category=ReportCategory.PROGRAMMATIC,
+                report_type=report_data.get("report_type", "unknown"),
+                title=report_data.get("title", "Programmatic Report"),
+                target=target,
+                content=report_data.get("content", ""),
+                structured_data=report_data.get("structured_data"),
+                format="markdown"
+            )
+
+            session.add(report)
+            session.commit()
+
+            return report.id
+
+    @staticmethod
+    def get_programmatic_report(report_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve a programmatic report by ID.
+
+        Args:
+            report_id: Report ID
+
+        Returns:
+            Report data or None if not found
+        """
+        from .models_enhanced import GeneratedReport, ReportCategory
+
+        with db_session_scope() as session:
+            report = session.query(GeneratedReport).filter(
+                GeneratedReport.id == report_id,
+                GeneratedReport.report_category == ReportCategory.PROGRAMMATIC
+            ).first()
+
+            if report:
+                return {
+                    "id": report.id,
+                    "session_id": report.session_id,
+                    "report_type": report.report_type,
+                    "title": report.title,
+                    "target": report.target,
+                    "content": report.content,
+                    "structured_data": report.structured_data,
+                    "generated_at": report.generated_at.isoformat() if report.generated_at else None
+                }
+
+            return None
+
+    @staticmethod
+    def get_programmatic_reports_for_session(session_id: str) -> List[Dict[str, Any]]:
+        """
+        Get all programmatic reports for a session.
+
+        Args:
+            session_id: Session ID
+
+        Returns:
+            List of programmatic reports
+        """
+        from .models_enhanced import GeneratedReport, ReportCategory
+
+        with db_session_scope() as session:
+            reports = session.query(GeneratedReport).filter(
+                GeneratedReport.session_id == session_id,
+                GeneratedReport.report_category == ReportCategory.PROGRAMMATIC
+            ).all()
+
+            return [
+                {
+                    "id": r.id,
+                    "report_type": r.report_type,
+                    "title": r.title,
+                    "target": r.target,
+                    "content": r.content,
+                    "structured_data": r.structured_data,
+                    "generated_at": r.generated_at.isoformat() if r.generated_at else None
+                }
+                for r in reports
+            ]
+
+
 def get_context_for_llm(session_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Get structured context for LLM report generation.
