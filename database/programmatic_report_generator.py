@@ -45,9 +45,17 @@ class ProgrammaticReportGenerator:
         scan_type = args.get("scan_type", "Unknown")
 
         # Extract structured data
-        hosts_discovered = scan_data.get("hosts_discovered", [])
+        hosts_discovered_raw = scan_data.get("hosts_discovered", [])
         open_ports_summary = scan_data.get("open_ports_summary", {})
         services_detected = scan_data.get("services_detected", [])
+
+        # Handle both int (batch scan count) and list (detailed host data) cases
+        if isinstance(hosts_discovered_raw, int):
+            hosts_count = hosts_discovered_raw
+            hosts_list = []
+        else:
+            hosts_count = len(hosts_discovered_raw) if hosts_discovered_raw else 0
+            hosts_list = hosts_discovered_raw
 
         # Build structured data
         structured_data = {
@@ -58,11 +66,11 @@ class ProgrammaticReportGenerator:
                 "timestamp": datetime.utcnow().isoformat(),
                 "command": scan_data.get("command_executed", "")
             },
-            "hosts": hosts_discovered,
+            "hosts": hosts_list,
             "open_ports": open_ports_summary,
             "services": services_detected,
             "statistics": {
-                "total_hosts": len(hosts_discovered),
+                "total_hosts": hosts_count,
                 "total_open_ports": sum(len(ports) for ports in open_ports_summary.values()),
                 "total_services": len(services_detected)
             }
@@ -77,17 +85,17 @@ class ProgrammaticReportGenerator:
 - **Timestamp**: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}
 
 ### Summary
-- **Hosts Discovered**: {len(hosts_discovered)}
+- **Hosts Discovered**: {hosts_count}
 - **Total Open Ports**: {structured_data['statistics']['total_open_ports']}
 - **Services Detected**: {len(services_detected)}
 
 ### Discovered Hosts
 """
 
-        if not hosts_discovered:
-            content += "\nNo hosts discovered.\n"
+        if not hosts_list:
+            content += "\nNo detailed host data available.\n"
         else:
-            for host in hosts_discovered:
+            for host in hosts_list:
                 ip = host.get("ip", "Unknown")
                 state = host.get("state", "unknown")
                 hostname = host.get("hostname", "")
