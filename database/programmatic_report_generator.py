@@ -44,10 +44,30 @@ class ProgrammaticReportGenerator:
         target = args.get("target", "Unknown")
         scan_type = args.get("scan_type", "Unknown")
 
-        # Extract structured data
-        hosts_discovered_raw = scan_data.get("hosts_discovered", [])
-        open_ports_summary = scan_data.get("open_ports_summary", {})
-        services_detected = scan_data.get("services_detected", [])
+        # Handle batch scan vs single scan data structures
+        # Batch scan returns: {"results": {ip: [ports]}, "total_open_ports": int}
+        # Single scan returns: {"hosts_discovered": list, "open_ports_summary": dict}
+
+        if "results" in scan_data and "total_open_ports" in scan_data:
+            # Batch scan format
+            batch_results = scan_data.get("results", {})
+            hosts_discovered_raw = scan_data.get("targets_with_open_ports", len(batch_results))
+
+            # Convert batch results to open_ports_summary format
+            open_ports_summary = {}
+            for ip, ports in batch_results.items():
+                if ports:  # Only include IPs with open ports
+                    open_ports_summary[ip] = [
+                        {"port": port, "protocol": "tcp", "service": "unknown", "version": ""}
+                        for port in ports
+                    ]
+
+            services_detected = []  # Batch scans don't detect services
+        else:
+            # Single scan format
+            hosts_discovered_raw = scan_data.get("hosts_discovered", [])
+            open_ports_summary = scan_data.get("open_ports_summary", {})
+            services_detected = scan_data.get("services_detected", [])
 
         # Handle both int (batch scan count) and list (detailed host data) cases
         if isinstance(hosts_discovered_raw, int):
@@ -57,6 +77,11 @@ class ProgrammaticReportGenerator:
             hosts_count = len(hosts_discovered_raw) if hosts_discovered_raw else 0
             hosts_list = hosts_discovered_raw
 
+        # For batch scans, update target to reflect multiple targets
+        if "results" in scan_data:
+            total_targets = scan_data.get("targets_count", scan_data.get("total_hosts_scanned", 0))
+            target = f"{total_targets} targets (batch scan)"
+
         # Build structured data
         structured_data = {
             "scan_metadata": {
@@ -64,7 +89,8 @@ class ProgrammaticReportGenerator:
                 "target": target,
                 "scan_type": scan_type,
                 "timestamp": datetime.utcnow().isoformat(),
-                "command": scan_data.get("command_executed", "")
+                "command": scan_data.get("command_executed", ""),
+                "total_targets_scanned": scan_data.get("targets_count", scan_data.get("total_hosts_scanned", 0))
             },
             "hosts": hosts_list,
             "open_ports": open_ports_summary,
@@ -92,9 +118,23 @@ class ProgrammaticReportGenerator:
 ### Discovered Hosts
 """
 
-        if not hosts_list:
-            content += "\nNo detailed host data available.\n"
-        else:
+        if not hosts_list and open_ports_summary:
+            # Batch scan: display results from open_ports_summary
+            content += "\n"
+            for ip, port_list in sorted(open_ports_summary.items()):
+                content += f"\n#### Host: {ip}\n"
+                content += f"- **Open Ports**: {len(port_list)}\n"
+                content += "- **Ports**:\n"
+                for port_info in port_list:
+                    port = port_info.get("port", "?")
+                    protocol = port_info.get("protocol", "tcp")
+                    service = port_info.get("service", "unknown")
+                    content += f"  - `{port}/{protocol}`"
+                    if service and service != "unknown":
+                        content += f" - {service}"
+                    content += "\n"
+        elif hosts_list:
+            # Single scan: display detailed host data
             for host in hosts_list:
                 ip = host.get("ip", "Unknown")
                 state = host.get("state", "unknown")
@@ -119,6 +159,8 @@ class ProgrammaticReportGenerator:
                         if version:
                             content += f" ({version})"
                         content += "\n"
+        else:
+            content += "\nNo hosts with open ports discovered.\n"
 
         return {
             "content": content,
