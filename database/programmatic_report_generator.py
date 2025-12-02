@@ -499,6 +499,15 @@ class ProgrammaticReportGenerator:
         hostnames = scan_data.get("hostnames", [])
         org = scan_data.get("org", "Unknown")
         isp = scan_data.get("isp", "Unknown")
+        country = scan_data.get("country_name", scan_data.get("country", "Unknown"))
+        city = scan_data.get("city", "Unknown")
+        asn = scan_data.get("asn", "Unknown")
+        last_update = scan_data.get("last_update", "Unknown")
+
+        # Debug: Show what data we got from Shodan
+        print(f"  [DEBUG SHODAN] Target: {target}")
+        print(f"  [DEBUG SHODAN] Ports: {len(ports)}, Vulns: {len(vulns)}, Hostnames: {len(hostnames)}")
+        print(f"  [DEBUG SHODAN] Org: {org}, ISP: {isp}")
 
         # Build structured data
         structured_data = {
@@ -529,6 +538,9 @@ class ProgrammaticReportGenerator:
 - **IP Address**: {target}
 - **Organization**: {org}
 - **ISP**: {isp}
+- **Location**: {city}, {country}
+- **ASN**: {asn}
+- **Last Updated**: {last_update}
 - **Timestamp**: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}
 
 ### Summary
@@ -543,20 +555,24 @@ class ProgrammaticReportGenerator:
             for hostname in hostnames:
                 content += f"- {hostname}\n"
             content += "\n"
+        else:
+            content += "### Hostnames\n\nNo hostnames found in Shodan database.\n\n"
 
         if ports:
-            content += "### Open Ports\n"
+            content += "### Open Ports (from Shodan)\n"
             for port in sorted(ports):
                 content += f"- `{port}`\n"
             content += "\n"
+        else:
+            content += "### Open Ports\n\nNo open ports found in Shodan database for this IP.\n\n"
 
         if vulns:
-            content += "### Known Vulnerabilities\n"
+            content += "### Known Vulnerabilities (CVEs from Shodan)\n"
             for vuln in vulns:
                 content += f"- {vuln}\n"
             content += "\n"
         else:
-            content += "### Vulnerabilities\n\nNo known vulnerabilities found in Shodan database.\n\n"
+            content += "### Vulnerabilities\n\n**No known vulnerabilities found in Shodan database.**\n\nThis means:\n- Either the target has no publicly known vulnerabilities\n- Or Shodan hasn't scanned this IP recently\n- This is NOT a guarantee the target is secure - only that no CVEs are in Shodan's database\n\n"
 
         return {
             "content": content,

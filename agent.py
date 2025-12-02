@@ -686,22 +686,21 @@ Select the most appropriate tool for the user's request."""
                     }
                 })
             
-            # MEDIUM/LOW: Fast stealth scan with Nmap (balanced speed + stealth)
+            # MEDIUM/LOW: Fast batch scan with Naabu (fast + low noise)
             medium_low = intelligence.get("medium_value", []) + intelligence.get("low_value", [])
             if medium_low:
                 medium_low_targets = [t["subdomain"] for t in medium_low]
-                print(f"\n  ⚡ MEDIUM/LOW ({len(medium_low_targets)}) → STEALTH SCAN:")
-                print(f"     → Strategy: Nmap stealth scan (top 1000 ports)")
-                print(f"     → Timing: T3 (Normal) - balanced speed/stealth")
-                print(f"     → Rate: 300 pps (low noise)")
+                print(f"\n  ⚡ MEDIUM/LOW ({len(medium_low_targets)}) → FAST BATCH SCAN:")
+                print(f"     → Strategy: Naabu batch scan (top 1000 ports)")
+                print(f"     → Rate: 3000 pps (fast + low noise)")
+                print(f"     → Est. time: ~3-5 minutes for {len(medium_low_targets)} targets")
 
                 selected_tools.append({
-                    "name": "nmap_stealth_batch_scan",
+                    "name": "naabu_top_ports",
                     "arguments": {
                         "targets": ",".join(medium_low_targets),
-                        "ports": "top-1000",  # Top 1000 common ports
-                        "timing": "T3",  # Normal timing (balanced)
-                        "max_rate": 300  # Low rate for stealth (vs 3000 pps in Naabu)
+                        "top": 1000,  # Top 1000 common ports
+                        "rate": 3000  # Fast rate (Naabu is less noisy than Masscan)
                     }
                 })
             
@@ -709,19 +708,128 @@ Select the most appropriate tool for the user's request."""
             print(f"\n  ✅ Strategy: {len(crown_jewels)} comprehensive + {len(high_value)} detailed + {len(medium_low)} quick = {total} targets")
             
         else:
-            # Fallback: No OSINT intelligence - use batch scan on all subdomains
-            print("\n  ⚡ STAGE 1: Batch Scan (No OSINT)")
-            print(f"     → Scanning {len(subdomains)} subdomains")
+            # Fallback: No OSINT intelligence - use TWO-PHASE approach
+            print("\n  ⚡ TWO-PHASE SCANNING STRATEGY (No OSINT)")
+            print(f"     → Phase 1: Naabu quick scan on {len(subdomains)} subdomains (find live ports)")
+            print(f"     → Phase 2: Nmap detailed scan (only on hosts with open ports)")
+            print(f"     → Expected savings: 10-20x faster than pure nmap")
 
-            # Use masscan batch scan (it handles DNS resolution + deduplication internally)
+            # PHASE 1: Fast discovery with Naabu
             selected_tools.append({
-                "name": "masscan_batch_scan",
+                "name": "naabu_batch_scan",
                 "arguments": {
-                    "targets": ",".join(subdomains)
+                    "targets": ",".join(subdomains),
+                    "ports": "top-1000",
+                    "rate": 5000
                 }
             })
-        
+
+            # PHASE 2 will be added after Phase 1 completes
+            # (See phase_2_execution for post-processing)
+
         return selected_tools
+
+    def _execute_phase2_if_needed(self, results: List[Dict], selected_tools: List[Dict]):
+        """
+        TWO-PHASE SCANNING: After Naabu quick scan, run detailed Nmap on hosts with open ports
+
+        Args:
+            results: Results from Phase 1 execution
+            selected_tools: Original tool selection (to check if this was a batch scan)
+        """
+        # Check if we just ran a naabu_batch_scan or masscan_batch_scan
+        batch_scan_tools = ["naabu_batch_scan", "naabu_top_ports", "masscan_batch_scan"]
+
+        naabu_results = []
+        for r in results:
+            tool_name = r.get("tool", "")
+            if any(batch_tool in tool_name for batch_tool in batch_scan_tools):
+                if r["result"].get("success"):
+                    naabu_results.append(r)
+
+        if not naabu_results:
+            return  # No batch scan results to process
+
+        # Extract hosts with open ports from Naabu/Masscan
+        hosts_with_ports = set()
+        total_open_ports = 0
+
+        for r in naabu_results:
+            scan_data = r["result"]
+
+            # Handle both naabu and masscan result formats
+            if "results" in scan_data:  # Batch scan format: {ip: [ports]}
+                for ip, ports in scan_data["results"].items():
+                    if ports:  # Has open ports
+                        hosts_with_ports.add(ip)
+                        total_open_ports += len(ports)
+
+        if not hosts_with_ports:
+            print("\n  ℹ️  Phase 2 skipped: No hosts with open ports found")
+            return
+
+        # Run Phase 2: Detailed Nmap scan on hosts with open ports
+        print(f"\n{'='*60}")
+        print(f"🔬 PHASE 2: DETAILED ANALYSIS")
+        print(f"{'='*60}")
+        print(f"  Found {len(hosts_with_ports)} hosts with {total_open_ports} open ports")
+        print(f"  Running detailed Nmap scans for service detection...")
+        print()
+
+        # Group hosts for efficient scanning (max 10 at a time)
+        hosts_list = list(hosts_with_ports)
+        batch_size = 10
+
+        for i in range(0, len(hosts_list), batch_size):
+            batch = hosts_list[i:i+batch_size]
+            batch_num = (i // batch_size) + 1
+            total_batches = (len(hosts_list) + batch_size - 1) // batch_size
+
+            print(f"[Batch {batch_num}/{total_batches}] Scanning {len(batch)} hosts: {', '.join(batch[:3])}{'...' if len(batch) > 3 else ''}")
+
+            # Run Nmap service detection
+            tool_name = "nmap_service_detection"
+            tool_args = {
+                "target": ",".join(batch),
+                "ports": ""  # Scan default ports, or you could pass discovered ports
+            }
+
+            try:
+                result = execute_tool(tool_name, tool_args)
+
+                if isinstance(result, str):
+                    try:
+                        result = json.loads(result)
+                    except:
+                        result = {"success": False, "error": result, "output": result}
+
+                if "tool" not in result:
+                    result["tool"] = tool_name
+
+                # Add to results
+                results.append({
+                    "tool": tool_name,
+                    "args": tool_args,
+                    "result": result
+                })
+
+                # Update self.scan_results for Phase 3
+                self.scan_results = results
+
+                if result.get("success"):
+                    print(f"    ✅ Detected services on {len(batch)} hosts")
+                else:
+                    print(f"    ⚠️  {result.get('error', 'Unknown error')}")
+
+            except Exception as e:
+                print(f"    ❌ Error: {e}")
+                results.append({
+                    "tool": tool_name,
+                    "args": tool_args,
+                    "result": {"success": False, "error": str(e)}
+                })
+
+        print(f"\n  ✅ Phase 2 complete: Detailed analysis on {len(hosts_with_ports)} hosts")
 
     def _gather_osint_intelligence(self, domain: str, subdomains: List[str]) -> Dict[str, Any]:
         """
@@ -1216,6 +1324,9 @@ Select the most appropriate tool for the user's request."""
                 })
 
         self.scan_results = results
+
+        # TWO-PHASE SCANNING: Check if we need Phase 2 (detailed nmap scan)
+        self._execute_phase2_if_needed(results, selected_tools)
 
         # Build and cache context for Phase 3 - only if there's successful data
         if ENABLE_DATABASE and self.context_builder and self.db_session_id:

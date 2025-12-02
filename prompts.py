@@ -591,13 +591,30 @@ RAW SCAN RESULTS (Reference Only):
 
 {output_format}
 
-CRITICAL RULES:
-- Use the PROGRAMMATIC REPORT as your primary data source for analysis
-- Cross-reference with DATABASE CONTEXT for CVE details, threat intelligence, and historical findings
-- The RAW SCAN RESULTS are provided for reference only
+CRITICAL RULES - ANTI-HALLUCINATION:
+1. **USE ONLY PROGRAMMATIC REPORT DATA**: The programmatic report is your ONLY source of scan data
+2. **NEVER INVENT CVEs**: If no CVE IDs are in the data, write "No CVEs detected"
+3. **NEVER INVENT VERSIONS**: If no version numbers are in the data, write "Version: Unknown"
+4. **NEVER INVENT SERVICES**: If no services are in the data, write "No services detected"
+5. **NEVER INVENT PORTS**: If no ports are in the data, write "No open ports detected"
+6. **DETECT SCAN FAILURES**: If programmatic report shows "0 hosts scanned" when many targets were requested, state "Scan failed or returned no results - cannot provide analysis"
+7. **ZERO TOLERANCE FOR FABRICATION**: Any invented data will be flagged as hallucination
+
+ANALYSIS RULES:
+- Use the PROGRAMMATIC REPORT as your ONLY data source for scan findings
+- Cross-reference DATABASE CONTEXT only for historical context, NOT new findings
+- RAW SCAN RESULTS are for reference only, use programmatic report instead
+- If programmatic report is minimal (<500 chars) for large scans, the scan likely failed
 - Follow the output format for scan type: {scan_type}
 - Be specific, evidence-based, and actionable
-- Focus on cybersecurity risk assessment and remediation guidance
+- If data is missing, explicitly state "Data not available" instead of guessing
+
+OUTPUT REQUIREMENTS:
+- Every statement must cite the programmatic report
+- If programmatic report is empty/minimal (especially for batch scans), state "SCAN FAILED - Insufficient data for analysis"
+- Do not fill report with generic advice when no findings exist
+- Do not suggest "next steps" if the current scan didn't work
+- Be concise - quality over quantity
 """
 
     return prompt

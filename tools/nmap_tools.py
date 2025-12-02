@@ -1114,9 +1114,17 @@ def execute_tool(tool_name, tool_args):
         result = func(**tool_args)
         return result
     except TypeError as e:
-        return f"Error: Invalid arguments for {tool_name}: {e}"
+        return {
+            "success": False,
+            "error": f"Invalid arguments for {tool_name}: {e}",
+            "tool": tool_name
+        }
     except Exception as e:
-        return f"Error executing {tool_name}: {e}"
+        return {
+            "success": False,
+            "error": f"Error executing {tool_name}: {e}",
+            "tool": tool_name
+        }
 
 
 def nmap_stealth_batch_scan(targets, ports="top-1000", timing="T3", max_rate=300):
@@ -1241,6 +1249,7 @@ def nmap_stealth_batch_scan(targets, ports="top-1000", timing="T3", max_rate=300
 
         # Dynamic timeout based on workload
         timeout = max(600, int(estimated_seconds * 2))  # 2x safety factor
+        print(f"     Timeout set to: {int(timeout // 60)}m {int(timeout % 60)}s")
 
         result = subprocess.run(
             cmd,
@@ -1251,8 +1260,12 @@ def nmap_stealth_batch_scan(targets, ports="top-1000", timing="T3", max_rate=300
         )
 
         elapsed_seconds = time.time() - start_time
+        print(f"     Scan completed in: {int(elapsed_seconds // 60)}m {int(elapsed_seconds % 60)}s")
+        print(f"     Nmap return code: {result.returncode}")
 
         if result.returncode != 0:
+            print(f"     [ERROR] Nmap failed with return code {result.returncode}")
+            print(f"     [ERROR] stderr: {result.stderr[:200]}")
             return {
                 "success": False,
                 "error": f"Nmap returned exit code {result.returncode}",
@@ -1291,6 +1304,9 @@ def nmap_stealth_batch_scan(targets, ports="top-1000", timing="T3", max_rate=300
 
         print(f"  ✅ Scan complete: {targets_with_open_ports}/{len(target_list)} hosts have open ports ({total_open_ports} total)")
         print(f"     Duration: {int(elapsed_seconds // 60)}m {int(elapsed_seconds % 60)}s")
+        print(f"     [DEBUG] Parsed {len(results)} results entries")
+        if len(results) > 0:
+            print(f"     [DEBUG] Sample result: {list(results.items())[0] if results else 'none'}")
 
         return {
             "success": True,
@@ -1313,6 +1329,25 @@ def nmap_stealth_batch_scan(targets, ports="top-1000", timing="T3", max_rate=300
             "stderr": result.stderr
         }
 
+    except subprocess.TimeoutExpired:
+        timeout_mins = timeout // 60
+        print(f"     [ERROR] Scan timed out after {timeout_mins} minutes")
+        return {
+            "success": False,
+            "error": f"Nmap batch scan timed out after {timeout_mins} minutes",
+            "targets": target_list,
+            "targets_count": len(target_list),
+            "estimated_seconds": estimated_seconds,
+            "timeout_seconds": timeout
+        }
+    except Exception as e:
+        print(f"     [ERROR] Unexpected error: {e}")
+        return {
+            "success": False,
+            "error": f"Unexpected error during batch scan: {e}",
+            "targets": target_list,
+            "targets_count": len(target_list)
+        }
     finally:
         # Cleanup temp file
         try:
