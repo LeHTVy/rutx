@@ -689,3 +689,256 @@ ONLY provide security analysis and recommendations.
     
     return prompt
 
+
+# ============================================================================
+# FAILURE HANDLING & PROMPT SUGGESTIONS
+# ============================================================================
+
+def generate_next_step_suggestions(scan_results: list, failure_reason: str = "") -> list:
+    """
+    Generate contextual prompt suggestions based on scan results and failure context.
+    
+    Args:
+        scan_results: List of scan result dictionaries
+        failure_reason: Reason for failure (timeout, no_data, etc.)
+    
+    Returns:
+        List of suggested prompts for the user to try next
+    """
+    suggestions = []
+    
+    # Extract context from scan results
+    tools_attempted = [r.get("tool", "") for r in scan_results]
+    targets_attempted = []
+    for r in scan_results:
+        args = r.get("args", {})
+        target = args.get("target") or args.get("domain") or args.get("targets") or args.get("ip")
+        if target:
+            targets_attempted.append(target)
+    
+    # Get first target for suggestions
+    first_target = targets_attempted[0] if targets_attempted else "example.com"
+    
+    # Subdomain enumeration failed/timeout - suggest alternatives
+    if any("bbot" in tool or "amass" in tool for tool in tools_attempted):
+        suggestions.extend([
+            "Try a faster subdomain scan with passive mode only",
+            f"Run quick port scan on {first_target} to check connectivity",
+            "Use Shodan to find known subdomains instead",
+        ])
+    
+    # Port scan timeout - suggest faster alternatives
+    elif any("nmap" in tool for tool in tools_attempted):
+        suggestions.extend([
+            f"Run a quick scan on {first_target} (top 100 ports only)",
+            f"Use masscan for faster scanning on {first_target}",
+            "Try scanning with lower timeout or fewer ports",
+        ])
+    
+    # Masscan/naabu batch scan - suggest analyzing subdomains
+    elif any("masscan" in tool or "naabu" in tool for tool in tools_attempted):
+        # Check if we have subdomain data from database
+        suggestions.extend([
+            "Check which specific subdomains are actually reachable",
+            "Run detailed nmap service detection on high-priority targets",
+            "Verify network connectivity to targets first",
+            "Try scanning with lower rate to avoid firewall blocks",
+        ])
+    
+    # Generic failure - provide general suggestions
+    else:
+        suggestions.extend([
+            "Start with a quick reconnaissance scan",
+            f"Check network connectivity to {first_target}",
+            "Try a simpler scan with shorter timeout",
+        ])
+    
+    # Add contextual suggestions based on failure reason
+    if "timeout" in failure_reason.lower():
+        suggestions.insert(0, "Increase timeout or reduce scan scope")
+    elif "dns" in failure_reason.lower():
+        suggestions.insert(0, "Check DNS resolution for  targets")
+    elif "connection" in failure_reason.lower():
+        suggestions.insert(0, "Verify network connectivity and firewall rules")
+    
+    # Limit to top 5 suggestions
+    return suggestions[:5]
+
+
+def generate_failure_report(scan_results: list) -> str:
+    """
+    Generate helpful failure report when scans produce no usable data.
+    
+    Args:
+        scan_results: List of scan result dictionaries from Phase 2
+    
+    Returns:
+        Markdown-formatted failure report with diagnostics and next steps
+    """
+    # Analyze failures
+    total_scans = len(scan_results)
+    failed_scans = []
+    timeout_scans = []
+    no_data_scans = []
+    
+    for r in scan_results:
+        tool = r.get("tool", "unknown")
+        result = r.get("result", {})
+        
+        if not result.get("success"):
+            failed_scans.append(tool)
+            error = result.get("error", "")
+            
+            if "timeout" in error.lower() or "timed out" in error.lower():
+                timeout_scans.append(tool)
+            elif "no" in error.lower() and ("data" in error.lower() or "results" in error.lower()):
+                no_data_scans.append(tool)
+    
+    # Build failure report
+    report = f"""
+═══════════════════════════════════════════════════════════
+📋 SCAN EXECUTION REPORT
+════════════════════════════════════════════════════════════
+
+## SCAN STATUS
+
+**Total Scans Attempted:** {total_scans}
+**Failed Scans:** {len(failed_scans)}
+**Status:** ⚠️ **All scans failed or returned no data**
+
+---
+
+## FAILURE ANALYSIS
+
+"""
+    
+    # Timeout analysis
+    if timeout_scans:
+        report += f"""### ⏱️ Timeouts ({len(timeout_scans)} scans)
+
+The following scans exceeded their time limits:
+"""
+        for tool in timeout_scans:
+            # Get timeout duration from results
+            for r in scan_results:
+                if r.get("tool") == tool:
+                    args = r.get("args", {})
+                    target = args.get("target") or args.get("domain") or args.get("targets", "unknown")
+                    report += f"- **{tool}** on `{target}`\n"
+        
+        report += """
+**Why this happened:**
+- Scan scope too large for timeout duration
+- Network latency or slow target responses
+- Target filtering/dropping scan packets
+- Resource constraints on scan host
+
+"""
+    
+    # No data analysis
+    if no_data_scans:
+        report += f"""### 📊 No Data Returned ({len(no_data_scans)} scans)
+
+These scans completed but found no results:
+"""
+        for tool in no_data_scans:
+            for r in scan_results:
+                if r.get("tool") == tool:
+                    args = r.get("args", {})
+                    target = args.get("target") or args.get("domain") or args.get("targets", "unknown")
+                    report += f"- **{tool}** on `{target}`\n"
+        
+        report += """
+**Possible reasons:**
+- Targets are unreachable or down
+- Heavy firewall filtering blocking scans
+- DNS resolution issues
+- No services running on scanned ports
+
+"""
+    
+    # Other failures
+    other_failures = [t for t in failed_scans if t not in timeout_scans and t not in no_data_scans]
+    if other_failures:
+        report += f"""### ❌ Other Failures ({len(other_failures)} scans)
+
+"""
+        for tool in other_failures:
+            for r in scan_results:
+                if r.get("tool") == tool:
+                    error = r.get("result", {}).get("error", "Unknown error")
+                    report += f"- **{tool}**: {error}\n"
+        report += "\n"
+    
+    # Generate suggestions
+    failure_reason = "timeout" if timeout_scans else "no_data" if no_data_scans else "other"
+    suggestions = generate_next_step_suggestions(scan_results, failure_reason)
+    
+    report += """---
+
+## 💡 SUGGESTED NEXT STEPS
+
+Here are some alternative approaches to try:
+
+"""
+    for i, suggestion in enumerate(suggestions, 1):
+        report += f"{i}. {suggestion}\n"
+    
+    report += """
+---
+
+## 🔍 DIAGNOSTIC CHECKLIST
+
+Before retrying, verify:
+- [ ] Target is reachable (ping, traceroute)
+- [ ] DNS resolution is working
+- [ ] No firewall blocking outbound scans
+- [ ] Sufficient timeout for scan scope
+- [ ] Tool is installed and working (`nmap -version`, `masscan --version`)
+
+---
+
+## 📝 EXAMPLE PROMPTS TO TRY
+
+"""
+    
+    # Generate specific example prompts
+    if scan_results:
+        tool_name = scan_results[0].get("tool", "")
+        args = scan_results[0].get("args", {})
+        target = args.get("target") or args.get("domain") or args.get("targets", "example.com")
+        
+        if isinstance(target, list):
+            target = target[0] if target else "example.com"
+        
+        if "subdomain" in tool_name.lower() or "bbot" in tool_name.lower() or "amass" in tool_name.lower():
+            report += f"""- `Quick scan on {target}`
+- `Find subdomains for {target} (passive mode only)`
+- `Check if {target} is up`
+"""
+        elif "port" in tool_name.lower() or "nmap" in tool_name.lower():
+            report += f"""- `Quick port scan on {target}`
+- `Scan top 1000 ports on {target}`
+- `Check if port 80 and 443 are open on {target}`
+"""
+        elif "masscan" in tool_name.lower() or "naabu" in tool_name.lower():
+            report += f"""- `Scan web ports on {target}`
+- `Quick masscan on {target}`
+- `Check connectivity to {target}`
+"""
+        else:
+            report += f"""- `Quick scan on {target}`
+- `Check {target} status`
+- `Find information about {target}`
+"""
+    
+    report += """
+════════════════════════════════════════════════════════════
+
+**Note:** This report was generated because no scans returned usable data.
+Try the suggested approaches above, or ask for help with a specific error.
+
+"""
+    
+    return report
+

@@ -1403,6 +1403,38 @@ Select the most appropriate tool for the user's request."""
         if naabu_scan_executed and not naabu_results_found:
             print("  ℹ️  No Naabu results to follow up on")
 
+        # AUTO PORT SCAN SUGGESTION: After subdomain enumeration, offer to scan discovered subdomains
+        subdomain_scan_executed = False
+        discovered_subdomains = []
+
+        for scan_result in results:
+            tool = scan_result.get("tool", "")
+            if "subdomain" in tool.lower() or "amass" in tool.lower() or "bbot" in tool.lower():
+                subdomain_scan_executed = True
+                subdomain_data = scan_result.get("result", {})
+                
+                if subdomain_data.get("success"):
+                    subdomains = subdomain_data.get("subdomains", [])
+                    discovered_subdomains.extend(subdomains)
+        
+        # Remove duplicates
+        discovered_subdomains = sorted(set(discovered_subdomains))
+        
+        if subdomain_scan_executed and discovered_subdomains:
+            print(f"\n  🎯 Subdomain enumeration completed: {len(discovered_subdomains)} subdomains discovered")
+            print(f"  💡 SUGGESTION: Check which subdomains have open ports")
+            print(f"\n  📝 Try these commands:")
+            
+            if len(discovered_subdomains) >= 10:
+                print(f"     • \"Use masscan to scan those {len(discovered_subdomains)} subdomains for open ports\"")
+                print(f"     • \"Scan web ports on those subdomains\"")
+                print(f"     • \"Check which subdomains have active web services\"")
+            else:
+                print(f"     • \"Scan those subdomains for open ports\"")
+                print(f"     • \"Check which subdomains are alive\"")
+            
+            print(f"\n  ℹ️  You can scan these subdomains by referencing 'those subdomains' or 'these subdomains'")
+
         return results
 
 
@@ -1466,6 +1498,82 @@ Select the most appropriate tool for the user's request."""
                 self.session_manager.update_phase(self.db_session_id, 3)
             except Exception:
                 pass
+
+        # EARLY FAILURE DETECTION: Check if all scans failed before calling LLM
+        # This prevents generating generic "I'd be happy to help" responses
+        def has_actual_results(scan_result: Dict) -> bool:
+            """Check if scan result contains actual usable data"""
+            result = scan_result.get("result", {})
+            
+            # Check success flag
+            if not result.get("success"):
+                return False
+            
+            # Check for actual data in different scan types
+            tool = scan_result.get("tool", "")
+            
+            # Subdomain scans
+            if "subdomain" in tool.lower() or "bbot" in tool.lower() or "amass" in tool.lower():
+                subdomains = result.get("subdomains", [])
+                return len(subdomains) > 0
+            
+            # Port scans (nmap, masscan, naabu)
+            if "nmap" in tool.lower():
+                # Check multiple possible result formats
+                open_ports = result.get("open_ports_count", 0)
+                hosts = result.get("hosts_discovered", 0)
+                total_ports = result.get("total_open_ports", 0)
+                return open_ports > 0 or hosts > 0 or total_ports > 0
+            
+            if "masscan" in tool.lower():
+                total_ports = result.get("total_open_ports", 0)
+                results_dict = result.get("results", {})
+                return total_ports > 0 or len(results_dict) > 0
+            
+            if "naabu" in tool.lower():
+                total_ports = result.get("total_open_ports", 0)
+                results_dict = result.get("results", {})
+                return total_ports > 0 or len(results_dict) > 0
+            
+            # Shodan scans
+            if "shodan" in tool.lower():
+                data = result.get("data", {})
+                return data and len(data) > 0
+            
+            # Default: assume success means we have data
+            return True
+        
+        # Check if we have ANY successful scans with actual results
+        successful_scans_with_data = [
+            r for r in scan_results 
+            if has_actual_results(r)
+        ]
+        
+        if not successful_scans_with_data:
+            # ALL SCANS FAILED - Generate failure report instead of calling LLM
+            print("  ⚠️  All scans failed or returned no data")
+            print("  📋 Generating failure report with diagnostics...")
+            
+            from prompts import generate_failure_report
+            failure_report = generate_failure_report(scan_results)
+            
+            # Save to database if available
+            if self.session_manager and self.db_session_id:
+                try:
+                    self.session_manager.set_analysis_results(
+                        self.db_session_id,
+                        {"analysis": failure_report[:5000]},
+                        0,  # risk_score = 0 for failed scans
+                        "UNKNOWN"  # risk_level unknown
+                    )
+                except Exception:
+                    pass
+            
+            return failure_report
+        
+        # Continue with normal analysis if we have data...
+        print(f"  ✅ {len(successful_scans_with_data)}/{len(scan_results)} scans have usable data")
+
 
         # Prepare COMPLETE scan results for LLM (no truncation!)
         results_for_llm = []
