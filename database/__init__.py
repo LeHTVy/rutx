@@ -53,7 +53,7 @@ from .parsers import (
     get_parser, parse_scan_output
 )
 from .service import (
-    ScanService, ReportingService,
+    ScanService, ReportingService, ProgrammaticReportService,
     save_scan_result, get_context_for_llm
 )
 from .reporting import (
@@ -120,6 +120,7 @@ __all__ = [
     # Services
     'ScanService',
     'ReportingService',
+    'ProgrammaticReportService',
     'save_scan_result',
     'get_context_for_llm',
 
