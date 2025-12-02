@@ -44,6 +44,10 @@ class ProgrammaticReportGenerator:
         target = args.get("target", "Unknown")
         scan_type = args.get("scan_type", "Unknown")
 
+        # Debug: Print what we received
+        print(f"  [DEBUG GENERATOR] Scan data keys: {list(scan_data.keys())}")
+        print(f"  [DEBUG GENERATOR] Scan data sample: {str(scan_data)[:200]}...")
+
         # Handle batch scan vs single scan data structures
         # Batch scan returns: {"results": {ip: [ports]}, "total_open_ports": int}
         # Single scan returns: {"hosts_discovered": list, "open_ports_summary": dict}
@@ -111,7 +115,8 @@ class ProgrammaticReportGenerator:
 - **Timestamp**: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}
 
 ### Summary
-- **Hosts Discovered**: {hosts_count}
+- **Hosts Scanned**: {structured_data['scan_metadata'].get('total_targets_scanned', hosts_count)}
+- **Hosts with Open Ports**: {hosts_count}
 - **Total Open Ports**: {structured_data['statistics']['total_open_ports']}
 - **Services Detected**: {len(services_detected)}
 
@@ -160,7 +165,13 @@ class ProgrammaticReportGenerator:
                             content += f" ({version})"
                         content += "\n"
         else:
-            content += "\nNo hosts with open ports discovered.\n"
+            # No hosts with open ports
+            total_scanned = structured_data['scan_metadata'].get('total_targets_scanned', hosts_count)
+            content += f"\n**Result**: All {total_scanned} hosts scanned had no open ports in the scanned range (top-1000 ports).\n"
+            content += "\nThis could indicate:\n"
+            content += "- Hosts are properly firewalled\n"
+            content += "- Hosts are down or unreachable\n"
+            content += "- Ports outside the scanned range are open\n"
 
         return {
             "content": content,

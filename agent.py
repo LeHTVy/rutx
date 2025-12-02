@@ -2661,6 +2661,15 @@ Session: """ + (self.db_session_id or 'N/A') + f""" | Type: Port Scan ({tool_dis
                 # Find nmap result
                 for r in scan_results:
                     if "nmap" in r.get("tool", "").lower():
+                        # Debug: Check what data we're passing to the generator
+                        result_data = r.get("result", {})
+                        print(f"  [DEBUG] Tool: {r.get('tool')}")
+                        print(f"  [DEBUG] Result keys: {list(result_data.keys())}")
+                        if "results" in result_data:
+                            print(f"  [DEBUG] Batch scan detected with {len(result_data.get('results', {}))} IPs")
+                        elif "hosts_discovered" in result_data:
+                            print(f"  [DEBUG] Single scan with hosts_discovered type: {type(result_data.get('hosts_discovered'))}")
+
                         report_data = ProgrammaticReportGenerator.generate_nmap_report(r)
                         target = r.get("args", {}).get("target", "unknown")
                         break
@@ -2684,10 +2693,39 @@ Session: """ + (self.db_session_id or 'N/A') + f""" | Type: Port Scan ({tool_dis
                     amass_result, bbot_result
                 )
 
-            elif scan_type == "shodan":
-                # Find shodan result
+            elif scan_type == "shodan" or scan_type == "osint":
+                # Find shodan result (osint type uses shodan tools)
                 for r in scan_results:
                     if "shodan" in r.get("tool", "").lower():
+                        report_data = ProgrammaticReportGenerator.generate_shodan_report(r)
+                        target = r.get("args", {}).get("ip", "unknown")
+                        break
+
+            elif scan_type == "vuln_scan":
+                # Vulnerability scans use nmap vuln scan tool
+                for r in scan_results:
+                    if "nmap" in r.get("tool", "").lower():
+                        report_data = ProgrammaticReportGenerator.generate_nmap_report(r)
+                        target = r.get("args", {}).get("target", "unknown")
+                        break
+
+            elif scan_type == "generic":
+                # Generic: try to find any supported tool
+                for r in scan_results:
+                    tool = r.get("tool", "").lower()
+                    if "nmap" in tool:
+                        report_data = ProgrammaticReportGenerator.generate_nmap_report(r)
+                        target = r.get("args", {}).get("target", "unknown")
+                        break
+                    elif "masscan" in tool:
+                        report_data = ProgrammaticReportGenerator.generate_masscan_report(r)
+                        target = r.get("args", {}).get("targets", ["unknown"])[0]
+                        break
+                    elif "naabu" in tool:
+                        report_data = ProgrammaticReportGenerator.generate_naabu_report(r)
+                        target = r.get("args", {}).get("targets", ["unknown"])[0]
+                        break
+                    elif "shodan" in tool:
                         report_data = ProgrammaticReportGenerator.generate_shodan_report(r)
                         target = r.get("args", {}).get("ip", "unknown")
                         break
