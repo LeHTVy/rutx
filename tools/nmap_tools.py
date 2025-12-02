@@ -1161,7 +1161,20 @@ def nmap_stealth_batch_scan(targets, ports="top-1000", timing="T3", max_rate=300
     import time
 
     # Parse targets
-    target_list = [t.strip() for t in targets.split(",") if t.strip()]
+    # Handle malformed input: LLM sometimes passes string representation of list
+    if isinstance(targets, str) and targets.startswith('[') and targets.endswith(']'):
+        import ast
+        try:
+            parsed = ast.literal_eval(targets)
+            if isinstance(parsed, list):
+                target_list = [str(t).strip() for t in parsed if str(t).strip()]
+            else:
+                target_list = [t.strip() for t in targets.split(",") if t.strip()]
+        except (ValueError, SyntaxError):
+            target_list = [t.strip() for t in targets.split(",") if t.strip()]
+    else:
+        target_list = [t.strip() for t in targets.split(",") if t.strip()]
+
     if not target_list:
         return {
             "success": False,

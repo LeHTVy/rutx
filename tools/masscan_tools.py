@@ -34,7 +34,7 @@ def _resolve_hostname_to_ip(hostname: str) -> str:
     # Try to resolve hostname to IP
     try:
         ip = socket.gethostbyname(hostname)
-        print(f"    [DNS] Resolved {hostname} → {ip}")
+        print(f"    [DNS] Resolved {hostname} -> {ip}")
         return ip
     except socket.gaierror:
         print(f"    [DNS] Warning: Could not resolve {hostname}, using as-is")
@@ -63,7 +63,24 @@ def masscan_scan(
     
     # Convert targets to list if single string
     if isinstance(targets, str):
-        targets = [targets]
+        # Handle malformed input: LLM sometimes passes string representation of list
+        # e.g., "['api.example.com', 'web.example.com']" instead of actual list
+        if targets.startswith('[') and targets.endswith(']'):
+            # Try to parse as Python list literal
+            import ast
+            try:
+                parsed = ast.literal_eval(targets)
+                if isinstance(parsed, list):
+                    targets = parsed
+                    print(f"    [PARSE] Converted string representation of list to actual list")
+                else:
+                    targets = [targets]
+            except (ValueError, SyntaxError):
+                # Not a valid Python list literal, treat as single target
+                targets = [targets]
+        else:
+            # Normal case: single target
+            targets = [targets]
     
     # Resolve hostnames to IPs (masscan requires IPs)
     # Also deduplicate to avoid scanning same IP multiple times
@@ -445,8 +462,25 @@ def execute_masscan_tool(tool_name: str, tool_args: dict) -> Dict[str, Any]:
         
         # Handle targets argument - convert string to list if needed
         if 'targets' in tool_args and isinstance(tool_args['targets'], str):
-            # Split comma-separated targets
-            tool_args['targets'] = [t.strip() for t in tool_args['targets'].split(',')]
+            targets_str = tool_args['targets']
+
+            # Check if it's a string representation of a Python list
+            if targets_str.startswith('[') and targets_str.endswith(']'):
+                # Try to parse as Python list literal first
+                import ast
+                try:
+                    parsed = ast.literal_eval(targets_str)
+                    if isinstance(parsed, list):
+                        tool_args['targets'] = parsed
+                    else:
+                        # Not a list, split by comma
+                        tool_args['targets'] = [t.strip() for t in targets_str.split(',')]
+                except (ValueError, SyntaxError):
+                    # Parse failed, split by comma
+                    tool_args['targets'] = [t.strip() for t in targets_str.split(',')]
+            else:
+                # Normal case: split comma-separated targets
+                tool_args['targets'] = [t.strip() for t in targets_str.split(',')]
         
         result = func(**tool_args)
         return result
