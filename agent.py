@@ -452,7 +452,13 @@ Select the most appropriate tool for the user's request."""
             
             auto_shodan = False  # Auto-enable Shodan for certain scan types
             
-            if "comprehensive" in prompt_lower or "complete" in prompt_lower:
+            # IMPORTANT: Check "full assessment" BEFORE checking just "full"
+            # "Full assessment" means comprehensive analysis (OSINT + service scan), NOT all ports
+            if "full assessment" in prompt_lower or "complete assessment" in prompt_lower:
+                nmap_tool = "nmap_service_detection"  # Top 1000 ports + versions (5-10 min)
+                auto_shodan = True  # Add Shodan for complete picture
+                print(f"  🎯 Full assessment detected → Smart scan (service detection + OSINT)")
+            elif "comprehensive" in prompt_lower or "complete" in prompt_lower:
                 nmap_tool = "nmap_comprehensive_scan"
                 auto_shodan = True  # Comprehensive scans get Shodan automatically
             elif "aggressive" in prompt_lower:
@@ -462,8 +468,10 @@ Select the most appropriate tool for the user's request."""
                 nmap_tool = "nmap_stealth_scan"
             elif "service" in prompt_lower or "version" in prompt_lower:
                 nmap_tool = "nmap_service_detection"
-            elif "full" in prompt_lower or "all ports" in prompt_lower or "all port" in prompt_lower:
+            # Only select nmap_all_ports if user EXPLICITLY says "all ports" (not just "full")
+            elif "all ports" in prompt_lower or "all port" in prompt_lower or "full port scan" in prompt_lower:
                 nmap_tool = "nmap_all_ports"
+                print(f"  ⚠️  WARNING: All-ports scan (65,535 ports) - this will take 60+ minutes")
             elif "fast" in prompt_lower and "scan" in prompt_lower:
                 nmap_tool = "nmap_fast_scan"
             elif "quick" in prompt_lower or "rapid" in prompt_lower:
@@ -1140,8 +1148,18 @@ Select the most appropriate tool for the user's request."""
                 selected_tools = self._get_subdomain_tools(domain, user_prompt)
                 reasoning = f"Subdomain enumeration detected. Using Amass and BBOT for comprehensive coverage on {domain}."
                 print(f"  🔍 Subdomain scan detected for: {domain}")
+                
+                # Add justification for Phase 1 validation
                 for tool in selected_tools:
                     tool_name = tool['name']
+                    if 'justification' not in tool:
+                        if 'amass' in tool_name:
+                            tool['justification'] = "Comprehensive subdomain enumeration using OWASP Amass"
+                        elif 'bbot' in tool_name:
+                            tool['justification'] = "Advanced subdomain discovery using BBOT framework"
+                        else:
+                            tool['justification'] = f"Subdomain enumeration for {domain}"
+                    
                     mode_info = ""
                     if 'passive' in tool.get('arguments', {}):
                         mode_info = f" ({'passive' if tool['arguments']['passive'] else 'active'} mode)"
@@ -1158,6 +1176,17 @@ Select the most appropriate tool for the user's request."""
                 selected_tools = self._get_vuln_scan_tools(target, with_osint=with_osint)
                 reasoning = f"Vulnerability scan detected for {target}."
                 print(f"  🔍 Vulnerability scan detected for: {target}")
+                
+                # Add justification for Phase 1 validation
+                for tool in selected_tools:
+                    if 'justification' not in tool:
+                        if 'vuln_scan' in tool['name']:
+                            tool['justification'] = "Nmap vulnerability scan with NSE scripts for CVE detection"
+                        elif 'shodan' in tool['name']:
+                            tool['justification'] = "OSINT enrichment with Shodan for CVE intelligence"
+                        else:
+                            tool['justification'] = f"Vulnerability assessment for {target}"
+                
                 print(f"  ✓ Selected: nmap_vuln_scan")
                 if with_osint and self._is_ip_address(target):
                     print(f"  ✓ Selected: shodan_lookup (CVE enrichment)")
@@ -1176,6 +1205,12 @@ Select the most appropriate tool for the user's request."""
                 selected_tools = self._get_masscan_tools(target, ports, user_prompt)
                 reasoning = f"Masscan scan detected for {target}."
                 print(f"  🔍 Masscan scan detected for: {target}")
+                
+                # Add justification for Phase 1 validation
+                for tool in selected_tools:
+                    if 'justification' not in tool:
+                        tool['justification'] = "Ultra-fast port scanner for high-speed network discovery"
+                
                 print(f"  ✓ Selected: {selected_tools[0]['name']}")
                 
                 # Show actual command that will be executed
@@ -1195,8 +1230,25 @@ Select the most appropriate tool for the user's request."""
                 selected_tools = self._get_port_scan_tools(target, user_prompt, with_osint=with_osint)
                 reasoning = f"Port scan detected for {target}."
                 print(f"  🔍 Port scan detected for: {target}")
+                
+                # Add justification to each tool for Phase 1 validation
                 for tool in selected_tools:
-                    # Print all selected tools (not just nmap)
+                    if 'justification' not in tool:
+                        # Generate justification based on tool name
+                        tool_name = tool['name']
+                        if 'service_detection' in tool_name:
+                            tool['justification'] = "Scans top 1000 ports with service/version detection for comprehensive analysis"
+                        elif 'quick_scan' in tool_name:
+                            tool['justification'] = "Quick scan of top 100 most common ports"
+                        elif 'fast_scan' in tool_name:
+                            tool['justification'] = "Fast scan optimized for speed"
+                        elif 'all_ports' in tool_name:
+                            tool['justification'] = "Full port scan of all 65,535 ports (user explicitly requested)"
+                        elif 'shodan' in tool_name:
+                            tool['justification'] = "OSINT enrichment with Shodan threat intelligence"
+                        else:
+                            tool['justification'] = f"Selected based on keyword detection for {user_prompt[:50]}"
+                    
                     print(f"  ✓ Selected: {tool['name']}")
                 return selected_tools, reasoning
 
