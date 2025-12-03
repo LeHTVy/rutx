@@ -981,6 +981,10 @@ Select the most appropriate tool for the user's request."""
         print("\n" + "="*60)
         print("📦 PHASE 1: TOOL SELECTION")
         print("="*60)
+        
+        # Log phase start for audit trail
+        if self.audit_logger:
+            self.audit_logger.log_event('phase_start', {'phase': 'phase1_tool_selection', 'user_prompt': user_prompt})
 
         # Check if user is referencing previous scan results
         if self._detect_context_reference(user_prompt):
@@ -1138,6 +1142,24 @@ Select the most appropriate tool for the user's request."""
                 self.persister = ToolResultPersister(session_id=session.id)
                 self.context_builder = LLMContextBuilder(session_id=session.id)
                 print(f"  📝 Created session: {session.id[:8]}...")
+                
+                # Initialize audit logging for crash recovery
+                from audit.logger import create_audit_logger, SessionMetrics
+                try:
+                    self.audit_logger = create_audit_logger(
+                        session_id=session.id,
+                        target=target or "unknown"
+                    )
+                    self.metrics = SessionMetrics(self.audit_logger)
+                    
+                    # Initialize exploit queue (multi-phase orchestration)
+                    if self.audit_logger:
+                        self.exploit_queue = create_exploit_queue(self.audit_logger)
+                    
+                    print(f"  📋 Audit logging enabled: {self.audit_logger.session_dir}")
+                except Exception as audit_err:
+                    print(f"  ⚠️  Audit logger failed (non-critical): {audit_err}")
+                    
             except Exception as e:
                 print(f"  ⚠️  Session creation failed: {e}")
 
@@ -1254,6 +1276,15 @@ Select the most appropriate tool for the user's request."""
                             tool['justification'] = f"Selected based on keyword detection for {user_prompt[:50]}"
                     
                     print(f"  ✓ Selected: {tool['name']}")
+                    
+                # Log phase 1 completion
+                if self.audit_logger:
+                    self.audit_logger.log_event('phase_end', {
+                        'phase': 'phase1_tool_selection',
+                        'success': True,
+                        'tools_selected': [t['name'] for t in selected_tools]
+                    })
+                    
                 return selected_tools, reasoning
 
         #  5. LLM fallback for unrecognized requests
@@ -1358,6 +1389,13 @@ Select the most appropriate tool for the user's request."""
         print("\n" + "="*60)
         print("⚙️  PHASE 2: EXECUTION & PERSISTENCE")
         print("="*60)
+        
+        # Log phase start
+        if self.audit_logger:
+            self.audit_logger.log_event('phase_start', {
+                'phase': 'phase2_execution',
+                'tools_count': len(selected_tools)
+            })
 
         # Update session phase
         if self.session_manager and self.db_session_id:
@@ -1369,13 +1407,10 @@ Select the most appropriate tool for the user's request."""
         results = []
 
 
-        for i, tool in enumerate(selected_tools, 1):
-            tool_name = tool["name"]
-            tool_args = tool["arguments"]
-
-            print(f"\n[{i}/{len(selected_tools)}] Running: {tool_name}")
-            print(f"    Args: {json.dumps(tool_args, indent=2)[:100]}...")
-
+        for i, tool_info in enumerate(selected_tools, 1):
+            tool_name = tool_info['name']
+            tool_args = tool_info.get('arguments', {})
+            
             # Log tool start
             if self.audit_logger:
                 self.audit_logger.log_event('tool_start', {
