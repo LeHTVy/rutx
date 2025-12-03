@@ -207,11 +207,14 @@ def print_system_info():
     right_lines.append(f"  {Colors.DIM}»{Colors.RESET} Full assessment of 192.168.1.1")
     right_lines.append("")
     right_lines.append(f"{Colors.CYAN}> QUICK COMMANDS{Colors.RESET}")
-    right_lines.append(f"  {Colors.DIM}help{Colors.RESET}    Help & tips")
-    right_lines.append(f"  {Colors.DIM}tools{Colors.RESET}   List 39 tools")
-    right_lines.append(f"  {Colors.DIM}clear{Colors.RESET}   Clear screen")
-    right_lines.append(f"  {Colors.DIM}sudo{Colors.RESET}    Run as admin")
-    right_lines.append(f"  {Colors.DIM}quit{Colors.RESET}    Exit SNODE")
+    right_lines.append(f"  {Colors.DIM}help{Colors.RESET}       Help & tips")
+    right_lines.append(f"  {Colors.DIM}tools{Colors.RESET}      List 39 tools")
+    right_lines.append(f"  {Colors.DIM}models{Colors.RESET}     List LLM models")
+    right_lines.append(f"  {Colors.DIM}switch{Colors.RESET}     Switch model")
+    right_lines.append(f"  {Colors.DIM}use <m>{Colors.RESET}    Quick switch")
+    right_lines.append(f"  {Colors.DIM}clear{Colors.RESET}      Clear screen")
+    right_lines.append(f"  {Colors.DIM}sudo{Colors.RESET}       Run as admin")
+    right_lines.append(f"  {Colors.DIM}quit{Colors.RESET}       Exit SNODE")
 
     # Print side by side
     max_lines = max(len(left_lines), len(right_lines))
@@ -294,6 +297,9 @@ def print_help():
   • help      - Show this help message
   • clear     - Clear the screen
   • tools     - List all available scanning tools
+  • models    - List available LLM models
+  • switch    - Switch to a different LLM model (interactive)
+  • use <m>   - Quick switch to model (e.g., 'use llama3', 'use mistral')
   • history   - Show command history (last 20 commands)
   • verify    - Show security configuration (local storage paths)
   • sudo      - Restart as Administrator (Windows UAC)
@@ -305,6 +311,17 @@ def print_help():
   • ← / →     - Move cursor left/right
   • Ctrl+C    - Interrupt current operation
   • Tab       - Auto-complete (when available)
+
+{Colors.YELLOW}> Model Switching (NEW){Colors.RESET}
+  If the LLM is not following instructions properly:
+  • "models"           - List all available LLM models
+  • "switch"           - Interactive model configuration wizard
+  • "use llama3"       - Quick switch to llama3 model
+  • "use mistral"      - Quick switch to mistral model
+  • "use qwen"         - Quick switch to qwen model
+
+  Try different models if you get repeated hallucinations or
+  if the AI asks for data that was already provided.
 
 {Colors.YELLOW}> Tips{Colors.RESET}
   • Be specific about targets (IP, domain, URL)
@@ -393,6 +410,124 @@ def main():
                 print(f"   {Colors.GREEN}✓{Colors.RESET} Scan results:      {SCAN_RESULTS_DIR}")
                 print(f"\n   {Colors.DIM}All directories auto-created and .gitignore protected{Colors.RESET}")
                 print(f"   {Colors.DIM}Run 'python verify_security.py' for full verification{Colors.RESET}\n")
+                continue
+
+            elif prompt.lower() in ['model', 'models', 'list models']:
+                print(f"\n{Colors.CYAN}🤖 Available LLM Models:{Colors.RESET}\n")
+
+                # Show current model
+                from llm_config import LLMConfig
+                llm_cfg = LLMConfig()
+                current_config = llm_cfg.get_config()
+                current_provider = current_config.get("provider", "unknown")
+                current_model = current_config.get("model", "unknown")
+
+                print(f"   {Colors.GREEN}▶{Colors.RESET} Current: {Colors.BOLD}{current_model}{Colors.RESET} ({current_provider})")
+                print()
+
+                # Show Ollama models if available
+                if current_provider == "ollama":
+                    models = llm_cfg.detect_ollama_models()
+                    if models:
+                        print(f"   {Colors.YELLOW}Ollama Models:{Colors.RESET}")
+                        for i, model in enumerate(models, 1):
+                            marker = "▶" if model == current_model else "•"
+                            color = Colors.GREEN if model == current_model else Colors.DIM
+                            print(f"   {color}{marker}{Colors.RESET} {model}")
+                    else:
+                        print(f"   {Colors.RED}✗{Colors.RESET} No Ollama models detected")
+                        print(f"   {Colors.DIM}Run: ollama pull <model-name>{Colors.RESET}")
+                else:
+                    print(f"   {Colors.DIM}Using cloud provider: {current_provider}{Colors.RESET}")
+                    print(f"   {Colors.DIM}Model: {current_model}{Colors.RESET}")
+
+                print(f"\n   {Colors.CYAN}Commands:{Colors.RESET}")
+                print(f"   {Colors.DIM}switch{Colors.RESET}        Switch to a different model")
+                print(f"   {Colors.DIM}use <model>{Colors.RESET}  Switch to specific model (e.g., 'use llama3')")
+                print()
+                continue
+
+            elif prompt.lower() == 'switch' or prompt.lower() == 'switch model':
+                print(f"\n{Colors.CYAN}🔄 Switching LLM Model...{Colors.RESET}\n")
+
+                from llm_config import LLMConfig
+                llm_cfg = LLMConfig()
+
+                # Show current model
+                current_config = llm_cfg.get_config()
+                print(f"   Current: {Colors.GREEN}{current_config.get('model', 'unknown')}{Colors.RESET} ({current_config.get('provider', 'unknown')})")
+                print()
+
+                # Interactive model selection
+                new_config = llm_cfg.interactive_setup()
+
+                # Reinitialize agent with new model
+                print(f"\n   {Colors.GREEN}✓{Colors.RESET} Reinitializing agent with new model...")
+                agent = SNODEAgent()
+
+                print(f"   {Colors.GREEN}✓{Colors.RESET} Model switched successfully!")
+                print(f"   {Colors.BOLD}Now using: {new_config.get('model', 'unknown')}{Colors.RESET}\n")
+                continue
+
+            elif prompt.lower().startswith('use '):
+                # Quick switch to specific model (Ollama only)
+                model_name = prompt[4:].strip()
+
+                if not model_name:
+                    print(f"\n{Colors.RED}✗{Colors.RESET} Usage: use <model-name>\n")
+                    print(f"   Example: use llama3\n")
+                    continue
+
+                print(f"\n{Colors.CYAN}🔄 Switching to: {model_name}...{Colors.RESET}\n")
+
+                from llm_config import LLMConfig
+                llm_cfg = LLMConfig()
+
+                # Check if it's an Ollama model
+                current_config = llm_cfg.get_config()
+
+                if current_config.get("provider") != "ollama":
+                    print(f"   {Colors.YELLOW}⚠{Colors.RESET}  Quick switch only works with Ollama provider")
+                    print(f"   {Colors.DIM}Use 'switch' for full configuration{Colors.RESET}\n")
+                    continue
+
+                # Verify model exists
+                available_models = llm_cfg.detect_ollama_models()
+
+                # Check exact match or partial match
+                matching_model = None
+                for m in available_models:
+                    if m == model_name or m.startswith(model_name):
+                        matching_model = m
+                        break
+
+                if not matching_model:
+                    print(f"   {Colors.RED}✗{Colors.RESET} Model '{model_name}' not found")
+                    print(f"\n   {Colors.DIM}Available models:{Colors.RESET}")
+                    for m in available_models:
+                        print(f"   {Colors.DIM}•{Colors.RESET} {m}")
+                    print(f"\n   {Colors.DIM}Run: ollama pull {model_name}{Colors.RESET}\n")
+                    continue
+
+                # Update config
+                current_config["model"] = matching_model
+                llm_cfg._save_config(current_config)
+
+                # Reinitialize agent
+                print(f"   {Colors.GREEN}✓{Colors.RESET} Found: {matching_model}")
+                print(f"   {Colors.GREEN}✓{Colors.RESET} Updating configuration...")
+
+                # Reload config module to pick up changes
+                import importlib
+                import config
+                importlib.reload(config)
+                from config import MODEL_NAME
+
+                # Reinitialize agent with new model
+                agent = SNODEAgent()
+
+                print(f"   {Colors.GREEN}✓{Colors.RESET} Agent reinitialized!")
+                print(f"   {Colors.BOLD}Now using: {matching_model}{Colors.RESET}\n")
                 continue
 
             # Run the 3-phase scan
