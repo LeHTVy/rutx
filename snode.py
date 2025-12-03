@@ -159,7 +159,7 @@ def main():
 
     # Import and run the main agent
     try:
-        from integrated_security_agent import main as agent_main
+        from main import main as agent_main
         agent_main()
     except KeyboardInterrupt:
         print("\n\n👋 SNODE AI terminated by user")
