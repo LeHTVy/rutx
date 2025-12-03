@@ -347,7 +347,7 @@ def nmap_top_ports(target, num_ports):
 # SERVICE & VERSION DETECTION
 # ============================================================================
 
-def nmap_service_detection(target, ports=""):
+def nmap_service_detection(target, ports="", timeout=600):
     """
     Perform service version detection on the target.
     Uses -Pn to skip host discovery (treats host as online).
@@ -356,6 +356,7 @@ def nmap_service_detection(target, ports=""):
     Args:
         target: The target to scan
         ports: Optional port specification (if not provided, scans default ports)
+        timeout: Timeout in seconds (default: 600)
 
     Returns:
         dict: Structured scan result with services detected
@@ -363,7 +364,7 @@ def nmap_service_detection(target, ports=""):
     options = "-Pn -sV"
     if ports:
         options += f" -p {ports}"
-    return nmap_scan(target, options)
+    return nmap_scan(target, options, timeout=timeout)
 
 
 def nmap_intense_service_scan(target, ports=""):
@@ -577,7 +578,7 @@ def nmap_default_scripts(target):
     return nmap_scan(target, "-Pn -sC")
 
 
-def nmap_vuln_scan(target):
+def nmap_vuln_scan(target, timeout=900):
     """
     Scan for common vulnerabilities using NSE vuln scripts.
     Uses -Pn to skip host discovery (treats host as online).
@@ -585,14 +586,15 @@ def nmap_vuln_scan(target):
 
     Args:
         target: The target to scan
+        timeout: Timeout in seconds (default: 900)
 
     Returns:
         dict: Structured scan result with vulnerabilities detected
     """
-    return nmap_scan(target, "-Pn --script vuln")
+    return nmap_scan(target, "-Pn --script vuln", timeout=timeout)
 
 
-def nmap_web_scan(target, ports="80,443,8080,8443"):
+def nmap_web_scan(target, ports="80,443,8080,8443", timeout=600):
     """
     Scan for web services and gather information.
     Uses -Pn to skip host discovery (treats host as online).
@@ -601,11 +603,12 @@ def nmap_web_scan(target, ports="80,443,8080,8443"):
     Args:
         target: The target to scan
         ports: Web ports to scan (default: 80,443,8080,8443)
+        timeout: Timeout in seconds (default: 600)
 
     Returns:
         dict: Web service information
     """
-    return nmap_scan(target, f"-Pn -p {ports} --script http-enum,http-title,http-headers,http-methods")
+    return nmap_scan(target, f"-Pn -p {ports} --script http-enum,http-title,http-headers,http-methods", timeout=timeout)
 
 
 # ============================================================================
