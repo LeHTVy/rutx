@@ -97,25 +97,37 @@ class PhaseValidator:
                     'hosts',            # Nmap
                     'ports',            # Port lists
                     'open_ports',       # Open ports
+                    'total_open_ports', # Port count (can be 0 = valid)
+                    'targets_scanned',  # Target count (can be 0 = valid)
                 ]
                 
+                # IMPORTANT: Empty results (0 ports, 0 subdomains) is VALID output
+                # Only flag as "no output" if the tool returned NO structure at all
                 for field in data_fields:
-                    if field in tool_result and tool_result[field]:
-                        # Check if it's actually populated (not empty list/dict/string)
+                    if field in tool_result:
+                        # Field exists - this means we have structured output
+                        # Even if it's empty (0 ports found), it's still valid
                         value = tool_result[field]
+                        
+                        # For lists/dicts: existence means we have structure (even if empty)
                         if isinstance(value, (list, dict)):
-                            if len(value) > 0:
-                                has_data = True
-                                break
+                            has_data = True  # Empty list/dict is still structured output
+                            break
+                        # For numbers: 0 is valid (e.g., 0 open ports found)
+                        elif isinstance(value, (int, float)):
+                            has_data = True  # 0 ports found is valid output
+                            break
+                        # For strings: non-empty string is valid
                         elif isinstance(value, str):
                             if value.strip():
                                 has_data = True
                                 break
+                        # Other types
                         else:
-                            # Other types (int, bool, etc.)
                             has_data = True
                             break
                 
+                # Only flag as error if tool has ZERO data fields (truly no output structure)
                 if not has_data:
                     errors.append(f"Tool '{tool_name}' succeeded but has no output")
 
