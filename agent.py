@@ -2714,6 +2714,17 @@ Be specific about CVEs, provide CVSS scores if known, and reference specific vul
             programmatic_report=programmatic_report_content
         )
 
+        # DEBUG: Check if programmatic report is in the prompt
+        if programmatic_report_content:
+            print(f"  🔍 DEBUG: Programmatic report passed to prompt: {len(programmatic_report_content)} chars")
+            if "## SUBDOMAIN ENUMERATION REPORT" in programmatic_report_content:
+                print(f"  🔍 DEBUG: ✅ Contains subdomain report header")
+            if programmatic_report_content in system_prompt:
+                print(f"  🔍 DEBUG: ✅ Programmatic report IS in system prompt")
+            else:
+                print(f"  🔍 DEBUG: ❌ Programmatic report NOT in system prompt!")
+                print(f"  🔍 DEBUG: System prompt length: {len(system_prompt)}")
+
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": "Analyze the scan results and provide a comprehensive security report."}
