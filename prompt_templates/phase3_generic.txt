@@ -60,28 +60,179 @@ Generate a comprehensive security analysis report based on the PROGRAMMATIC REPO
 
 ---
 
-### OUTPUT FORMAT:
+### OUTPUT FORMAT (REQUIRED):
+
+You MUST structure your analysis following this format:
+
+## ANALYSIS PROCESS (Show Your Work):
+
+### Step 1: Data Extraction
+List key data from programmatic report:
+- Targets found: [list]
+- Ports discovered: [list with services]
+- CVEs found: [list or "None"]
+
+### Step 2: Risk Assessment
+For each finding, assess severity:
+- [Service/Port] → [Risk Level] because [reason]
+
+### Step 3: Prioritization
+Rank by severity: [CRITICAL → HIGH → MEDIUM → LOW]
+
+---
 
 ## EXECUTIVE SUMMARY
-- Overall risk level: [CRITICAL/HIGH/MEDIUM/LOW]
-- Targets scanned: [list]
-- Key findings: [brief summary]
+- **Overall Risk Level**: [CRITICAL/HIGH/MEDIUM/LOW]
+- **Targets Scanned**: [specific IPs/domains from report]
+- **Key Findings**:
+  - Critical: X findings
+  - High: X findings
+  - Medium: X findings
+  - Low: X findings
 
 ## FINDINGS
 
 ### Critical/High Severity
-[List each finding with evidence from scan data]
+For EACH finding, you MUST include:
+- **Title**: [Clear finding name]
+- **Affected Target**: [Specific IP/domain from report]
+- **Affected Port**: [Port number from report]
+- **Service**: [Service name and version from report]
+- **Evidence**: "[Direct quote from programmatic report]"
+- **CVE IDs**: [List CVEs from report, or "None detected"]
+- **Impact**: [What this means for security]
+- **Recommendation**: [Specific action with timeline]
 
 ### Medium Severity
-[List medium findings]
+[Same structure as above]
 
 ### Low/Informational
-[List low findings]
+[Same structure as above]
 
 ## RECOMMENDATIONS
-1. [Immediate actions - 0-24h]
-2. [Short-term fixes - 1-7d]
-3. [Long-term improvements - 1-30d]
+
+### Immediate (0-24h)
+1. [Specific action] - [Reason]
+2. [Specific action] - [Reason]
+
+### Short-term (1-7d)
+1. [Specific action] - [Reason]
+2. [Specific action] - [Reason]
+
+### Long-term (1-30d)
+1. [Specific action] - [Reason]
+2. [Specific action] - [Reason]
+
+---
+
+### GOOD vs BAD EXAMPLES:
+
+**Example Programmatic Report**:
+```
+Target: 192.168.1.100
+Open Ports:
+- Port 22: OpenSSH 7.4p1
+- Port 80: nginx 1.10.3
+- Port 3306: MySQL 5.5.62
+```
+
+✅ **GOOD Analysis Example**:
+```
+## EXECUTIVE SUMMARY
+- **Overall Risk Level**: HIGH
+- **Targets Scanned**: 192.168.1.100
+- **Key Findings**:
+  - Critical: 0 findings
+  - High: 2 findings
+  - Medium: 1 finding
+
+## FINDINGS
+
+### High Severity
+
+**Title**: Outdated MySQL 5.5.62 Exposed to Network
+**Affected Target**: 192.168.1.100
+**Affected Port**: 3306
+**Service**: MySQL 5.5.62
+**Evidence**: "Port 3306: MySQL 5.5.62" (from programmatic report, line 5)
+**CVE IDs**: None detected in scan
+**Impact**: MySQL 5.5 reached end-of-life in December 2018. Database exposed on port 3306 allows potential brute-force attacks, exploitation of unpatched vulnerabilities, and data exfiltration.
+**Recommendation**: Immediate (0-24h) - Restrict MySQL port 3306 to internal network using firewall. Upgrade to MySQL 8.0+ within 7 days.
+
+**Title**: Severely Outdated nginx 1.10.3
+**Affected Target**: 192.168.1.100
+**Affected Port**: 80
+**Service**: nginx 1.10.3
+**Evidence**: "Port 80: nginx 1.10.3" (from programmatic report, line 4)
+**CVE IDs**: None detected in scan (requires manual CVE database lookup)
+**Impact**: nginx 1.10.3 is from 2016 and contains multiple known security vulnerabilities affecting HTTP request handling.
+**Recommendation**: Immediate (0-24h) - Update to nginx 1.24+ or latest stable version.
+
+### Medium Severity
+
+**Title**: Outdated OpenSSH 7.4p1
+**Affected Target**: 192.168.1.100
+**Affected Port**: 22
+**Service**: OpenSSH 7.4p1
+**Evidence**: "Port 22: OpenSSH 7.4p1" (from programmatic report, line 3)
+**CVE IDs**: None detected in scan
+**Impact**: OpenSSH 7.4 is from 2016. While SSH is hardened, outdated versions may contain privilege escalation vulnerabilities.
+**Recommendation**: Short-term (1-7d) - Upgrade to OpenSSH 9.x. Ensure key-based authentication is enforced.
+
+## RECOMMENDATIONS
+
+### Immediate (0-24h)
+1. **Firewall MySQL** - Block external access to port 3306 immediately
+2. **Update nginx** - Upgrade to latest stable version (1.24+)
+
+### Short-term (1-7d)
+1. **Upgrade OpenSSH** - Update to version 9.x for latest security patches
+2. **Security Audit** - Review all exposed services for business necessity
+
+### Long-term (1-30d)
+1. **Implement Patch Management** - Establish automated update process
+2. **Network Segmentation** - Move database to private subnet
+```
+→ **Why this is GOOD**:
+- ✅ Cites specific evidence from programmatic report
+- ✅ No invented data (CVEs, versions, services)
+- ✅ Specific, actionable recommendations with timelines
+- ✅ Clear risk assessment with impact explanation
+
+---
+
+❌ **BAD Analysis Example 1** (Asking for Data):
+```
+I can definitely help you analyze scan results and generate a security report.
+
+**However, you need to provide me with the scan results first.**
+
+Please share the scan results or a summary so I can analyze them.
+```
+→ **Why this is BAD**: ❌ Data was already provided in programmatic report! LLM should analyze immediately, not ask for data.
+
+---
+
+❌ **BAD Analysis Example 2** (Hallucination):
+```
+## FINDINGS
+
+**Title**: Critical MySQL RCE Vulnerability
+**Affected Port**: 3306
+**Service**: MySQL 5.5.62
+**CVE IDs**: CVE-2023-99999, CVE-2024-12345
+**Impact**: These CVEs allow remote code execution
+**Recommendation**: Patch immediately
+```
+→ **Why this is BAD**: ❌ Invented CVE IDs that were NOT in the programmatic report! This is hallucination.
+
+---
+
+❌ **BAD Analysis Example 3** (Too Generic):
+```
+The system has some services running that may have vulnerabilities. It's important to conduct further investigation and additional testing. You should consider implementing security best practices and performing regular updates. It's advisable to conduct a comprehensive security audit.
+```
+→ **Why this is BAD**: ❌ No specific findings, no evidence, too vague, no actionable steps. This is generic advice, not analysis.
 
 ---
 
@@ -92,6 +243,9 @@ Generate a comprehensive security analysis report based on the PROGRAMMATIC REPO
 - If programmatic report is minimal (<500 chars) for large scans, the scan likely failed
 - Be specific, evidence-based, and actionable
 - If data is missing, explicitly state "Data not available" instead of guessing
+- **DO NOT ASK FOR SCAN RESULTS** - they are already provided above
+- **DO NOT INVENT CVEs** - only use CVEs present in programmatic report
+- **DO NOT BE GENERIC** - provide specific, actionable recommendations
 
 ### OUTPUT REQUIREMENTS:
 - Every statement must cite the programmatic report

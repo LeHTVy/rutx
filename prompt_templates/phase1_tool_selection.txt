@@ -45,6 +45,54 @@
 
 ---
 
+### INTENT RECOGNITION PATTERNS:
+
+**Pattern 1: OS Detection / Fingerprinting**
+Keywords: "os detection", "fingerprint", "what os", "operating system"
+Workflow:
+1. FIRST: Discover live hosts (nmap_ping_scan OR nmap_list_scan)
+2. THEN: Run OS detection on discovered hosts (nmap_os_detection)
+Example: "OS Detection on example.com" → nmap_ping_scan THEN nmap_os_detection
+
+**Pattern 2: Vulnerability Scanning**
+Keywords: "vuln scan", "vulnerability", "check for vulns", "cve"
+Workflow:
+1. FIRST: Service detection (nmap_service_detection)
+2. THEN: Vulnerability scan (nmap_vuln_scan)
+3. OPTIONAL: Shodan lookup for known CVEs
+Example: "Vulnerability scan on 192.168.1.1" → nmap_service_detection THEN nmap_vuln_scan
+
+**Pattern 3: Port Scanning Subdomains**
+Keywords: "port scan", "scan ports on subdomains", "open ports on those subdomains"
+Workflow: Use 4-stage workflow (automatic if subdomains detected)
+1. DNS resolution & deduplication
+2. Shodan OSINT enrichment
+3. Naabu fast port discovery
+4. Nmap service detection (SOURCE OF TRUTH)
+Example: "Port scan those subdomains" → 4-stage workflow
+
+**Pattern 4: Subdomain Enumeration**
+Keywords: "find subdomains", "enumerate subdomains", "subdomain discovery"
+Workflow: Choose ONE tool (don't use both):
+- amass_enum (comprehensive, slower)
+- bbot_subdomain_enum (fast, modern)
+Example: "Find subdomains of example.com" → bbot_subdomain_enum
+
+**Pattern 5: Quick Reconnaissance**
+Keywords: "quick scan", "fast scan", "quick recon"
+Workflow: Fast tools only
+- nmap_fast_scan (100 top ports, 1-2 min)
+- OR masscan (very fast, 30 sec)
+Example: "Quick scan on 192.168.1.1" → nmap_fast_scan
+
+**Pattern 6: Service Detection**
+Keywords: "service detection", "version detection", "what services"
+Workflow: Service-focused scan
+- nmap_service_detection (detailed version info)
+Example: "Detect services on 192.168.1.1:80,443" → nmap_service_detection
+
+---
+
 ### YOUR TASK:
 
 Analyze the user request and select the most appropriate tool(s):

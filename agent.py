@@ -1320,14 +1320,14 @@ Select the most appropriate tool for the user's request."""
         # Build system prompt with effectiveness guidance
         from prompts import get_phase1_prompt
         from tools import get_all_tool_names
-        
+
         # Format tool list for LLM
         tool_names = get_all_tool_names()
         tool_list_str = "\\n".join([f"- {tool}" for tool in tool_names])
-        
+
         # Get enhanced Phase 1 prompt with effectiveness + patterns
         system_prompt = get_phase1_prompt(tool_list_str, user_request=user_prompt)
-        
+
         # Call LLM with enhanced guidance
         messages = [
             {"role": "system", "content": system_prompt},
@@ -1372,6 +1372,42 @@ Select the most appropriate tool for the user's request."""
             
             selected_tools.append(tool_info)
             print(f"  ✓ Selected: {tool_info['name']}")
+
+        # FALLBACK VALIDATION: Check if LLM selection is valid or needs override
+        from intent_mapper import IntentMapper
+
+        # Check if we should use fallback instead of LLM selection
+        should_use_fallback = IntentMapper.should_use_fallback(selected_tools, user_prompt)
+
+        if should_use_fallback:
+            print("  ⚠️  LLM tool selection needs override - using intent-based fallback")
+
+            # Extract target from prompt
+            target = self._extract_target_from_prompt(user_prompt)
+            if not target:
+                target = IntentMapper.extract_target(user_prompt)
+
+            if target:
+                # Get fallback tools from intent mapper
+                fallback_tools, fallback_reasoning = IntentMapper.get_fallback_tools(
+                    user_prompt, target
+                )
+
+                if fallback_tools:
+                    # Check for 4-stage workflow special case
+                    if fallback_tools[0].get("name") == "_4stage_workflow":
+                        # Use the existing 4-stage workflow logic
+                        subdomains = fallback_tools[0]["arguments"].get("subdomains", [])
+                        selected_tools = self._get_intelligent_port_scan_strategy(subdomains)
+                        reasoning = fallback_reasoning
+                        print(f"  ✓ Fallback: Using 4-stage workflow for {len(subdomains)} subdomains")
+                    else:
+                        selected_tools = fallback_tools
+                        reasoning = fallback_reasoning
+                        print(f"  ✓ Fallback: {fallback_reasoning}")
+
+                        for tool in selected_tools:
+                            print(f"  ✓ Selected: {tool['name']}")
 
         # SAFETY FILTER: Block forbidden tools for "full assessment" requests
         full_assessment_keywords = ['full assessment', 'comprehensive scan', 'complete scan', 'full scan']
@@ -2737,6 +2773,34 @@ Be specific about CVEs, provide CVSS scores if known, and reference specific vul
             # Show first 300 chars to diagnose issues without overwhelming output
             preview = analysis[:300].replace("\n", "\\n")
             print(f"  🔍 DEBUG: Preview: {preview}...")
+
+        # VALIDATION: Validate LLM Phase 3 output for quality and accuracy
+        print("\n  📋 Validating LLM response quality...")
+        from response_validator import ResponseValidator
+
+        try:
+            is_valid, issues, quality_score = ResponseValidator.validate_phase3_output(
+                analysis,
+                programmatic_report_content or ""
+            )
+
+            # Print validation report
+            validation_report = ResponseValidator.format_validation_report(is_valid, issues, quality_score)
+            print(validation_report)
+
+            # If quality is too low (grade D or F), warn user
+            if quality_score.get("grade") in ["D", "F"]:
+                print(f"  ⚠️  WARNING: Response quality is {quality_score['grade']} - consider reviewing manually")
+
+            # If critical issues found, warn user
+            critical_issues = [i for i in issues if "CRITICAL" in i]
+            if critical_issues:
+                print(f"  🚨 CRITICAL ISSUES DETECTED:")
+                for issue in critical_issues:
+                    print(f"     {issue}")
+
+        except Exception as val_err:
+            print(f"  ⚠️  Validation error (non-critical): {val_err}")
 
         # Handle invalid LLM responses or generic templates
         invalid_responses = ["", "None", "No analysis generated", "null", "N/A"]
