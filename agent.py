@@ -1228,13 +1228,63 @@ Select the most appropriate tool for the user's request."""
         reasoning = message.get("content", "")
 
         selected_tools = []
+        
+        # Parse reasoning to extract per-tool justifications
+        # Expected format: "1. tool_name - justification text"
+        tool_justifications = {}
+        if reasoning:
+            import re
+            # Try to extract numbered justifications (e.g., "1. nmap_service_detection - ...")
+            pattern = r'(\d+)\.\s*([a-z_]+)\s*[-:]\s*([^\n]+)'
+            matches = re.findall(pattern, reasoning, re.IGNORECASE)
+            for num, tool_name, justification in matches:
+                tool_justifications[tool_name.lower()] = justification.strip()
+        
         for call in tool_calls:
+            tool_name = call.get("function", {}).get("name")
             tool_info = {
-                "name": call.get("function", {}).get("name"),
+                "name": tool_name,
                 "arguments": call.get("function", {}).get("arguments", {})
             }
+            
+            # Add justification from parsed reasoning
+            if tool_name and tool_name.lower() in tool_justifications:
+                tool_info["justification"] = tool_justifications[tool_name.lower()]
+            else:
+                # Fallback: use generic reasoning or extract from full reasoning
+                tool_info["justification"] = reasoning[:200] if reasoning else f"Selected for {user_prompt[:50]}"
+            
             selected_tools.append(tool_info)
             print(f"  ✓ Selected: {tool_info['name']}")
+
+        # SAFETY FILTER: Block forbidden tools for "full assessment" requests
+        full_assessment_keywords = ['full assessment', 'comprehensive scan', 'complete scan', 'full scan']
+        is_full_assessment = any(keyword in user_prompt.lower() for keyword in full_assessment_keywords)
+        
+        if is_full_assessment:
+            forbidden_tools = ['nmap_all_ports', 'nmap_comprehensive_scan']
+            filtered_tools = []
+            replaced_tools = []
+            
+            for tool in selected_tools:
+                if tool['name'] in forbidden_tools:
+                    # Replace with smart alternative
+                    print(f"  ⚠️  BLOCKED: {tool['name']} (forbidden for 'full assessment' - would timeout)")
+                    print(f"  ✅ AUTO-REPLACING with nmap_service_detection (top 1000 ports, 5-10 min)")
+                    
+                    smart_tool = {
+                        "name": "nmap_service_detection",
+                        "arguments": tool['arguments'],
+                        "justification": f"Replaced {tool['name']} with smart alternative - service detection scans top 1000 ports with version info, perfect for full assessment without timeout"
+                    }
+                    filtered_tools.append(smart_tool)
+                    replaced_tools.append(tool['name'])
+                else:
+                    filtered_tools.append(tool)
+            
+            if replaced_tools:
+                selected_tools = filtered_tools
+                reasoning = f"[AUTO-CORRECTED] Original selection included forbidden tools ({', '.join(replaced_tools)}) which would timeout. Replaced with nmap_service_detection. " + reasoning
 
         if not selected_tools and reasoning:
             print(f"  ℹ️  {reasoning[:100]}...")
