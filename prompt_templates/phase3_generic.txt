@@ -26,6 +26,8 @@
 
 ### PROGRAMMATIC REPORT (Structured Scan Data):
 
+**IMPORTANT: The scan results are provided below. You do NOT need to ask for them. Analyze the data below immediately.**
+
 {{PROGRAMMATIC_REPORT}}
 
 ---
@@ -35,6 +37,14 @@
 ```
 {{SCAN_RESULTS}}
 ```
+
+---
+
+### YOUR TASK:
+
+**You have already received all scan data above in the PROGRAMMATIC REPORT section.**
+
+Generate a comprehensive security analysis report based on the PROGRAMMATIC REPORT data provided above. Do NOT ask for scan results - they are already provided in this prompt.
 
 ---
 
