@@ -766,30 +766,31 @@ Select the most appropriate tool for the user's request."""
         })
 
         # =====================================================================
-        # STAGE 4: MASSCAN VERIFICATION - Comprehensive port verification
+        # STAGE 4: NMAP SERVICE DETECTION - Source of Truth
         # =====================================================================
-        print("\n  🎯 STAGE 4: MASSCAN VERIFICATION")
+        print("\n  🎯 STAGE 4: NMAP SERVICE DETECTION (Source of Truth)")
         print("  " + "-"*58)
-        print("     → Comprehensive verification with Masscan")
-        print("     → Scan common web/service ports on unique IPs")
+        print("     → Detailed service/version detection with Nmap")
+        print("     → OS fingerprinting when possible")
+        print("     → Will scan ONLY IPs with open ports from Stage 3")
+        print("     → This is the authoritative data for final report")
 
         selected_tools.append({
-            "name": "masscan_batch_scan",
+            "name": "nmap_service_detection_batch",
             "arguments": {
-                "source": "stage1_dns_results",  # Will use Stage 1 IPs
-                "ports": "80,443,8080,8443,22,21,25,3389,3306,5432,1433,445,139,23,161",
-                "rate": 2000,
+                "source": "stage3_naabu_results",  # Only scan IPs with open ports
+                "scan_discovered_ports": True,  # Target specific ports found by Naabu
                 "save_results": True
             },
-            "justification": "Stage 4: Comprehensive port verification with Masscan on common service ports"
+            "justification": "Stage 4: Nmap service detection on discovered open ports - SOURCE OF TRUTH for final report"
         })
 
         print("\n  ✅ 4-STAGE WORKFLOW CONFIGURED")
         print("     → Stage 1: DNS Resolution (subdomain → IP)")
         print("     → Stage 2: OSINT Enrichment (Shodan intel)")
-        print("     → Stage 3: Naabu Scanning (fast discovery)")
-        print("     → Stage 4: Masscan Scanning (verification)")
-        print("     → All stages will generate programmatic reports")
+        print("     → Stage 3: Naabu Scanning (fast port discovery)")
+        print("     → Stage 4: Nmap Detection (🎯 SOURCE OF TRUTH)")
+        print("     → Final report will use Nmap data with enriched context")
 
         return selected_tools
 

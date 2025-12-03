@@ -585,7 +585,7 @@ class ProgrammaticReportGenerator:
     def generate_4stage_workflow_report(stage1_dns: Optional[Dict[str, Any]],
                                          stage2_shodan: Optional[Dict[str, Any]],
                                          stage3_naabu: Optional[Dict[str, Any]],
-                                         stage4_masscan: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+                                         stage4_nmap: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Generate programmatic report from 4-stage port scan workflow.
 
@@ -593,7 +593,7 @@ class ProgrammaticReportGenerator:
             stage1_dns: DNS resolution results
             stage2_shodan: Shodan OSINT enrichment results
             stage3_naabu: Naabu port scan results
-            stage4_masscan: Masscan port scan results
+            stage4_nmap: Nmap service detection results (SOURCE OF TRUTH)
 
         Returns:
             Dict with 'content' (markdown) and 'structured_data' (JSON)
@@ -662,22 +662,48 @@ class ProgrammaticReportGenerator:
         else:
             content += "❌ Stage 3 failed or no data\n\n"
 
-        # Stage 4: Masscan Verification
-        content += "### STAGE 4: MASSCAN VERIFICATION\n\n"
-        if stage4_masscan and stage4_masscan.get("success"):
-            content += f"- **Targets Scanned**: {stage4_masscan.get('targets_count', 0)}\n"
-            content += f"- **Targets with Open Ports**: {stage4_masscan.get('targets_with_open_ports', 0)}\n"
-            content += f"- **Total Open Ports**: {stage4_masscan.get('total_open_ports', 0)}\n"
-            content += f"- **Elapsed Time**: {stage4_masscan.get('elapsed_seconds', 0)}s\n\n"
+        # Stage 4: Nmap Service Detection (SOURCE OF TRUTH)
+        content += "### STAGE 4: NMAP SERVICE DETECTION (🎯 SOURCE OF TRUTH)\n\n"
+        if stage4_nmap and stage4_nmap.get("success"):
+            stats = stage4_nmap.get("stats", {})
+            content += f"- **Targets Scanned**: {stats.get('total', 0)}\n"
+            content += f"- **Successful Scans**: {stats.get('successful', 0)}\n"
+            content += f"- **Failed Scans**: {stats.get('failed', 0)}\n"
+            content += f"- **Services Detected**: {stats.get('total_services', 0)}\n"
+            content += f"- **OS Fingerprints**: {stats.get('os_detected', 0)}\n\n"
 
-            results = stage4_masscan.get("results", {})
+            services_by_type = stats.get("services_by_type", {})
+            if services_by_type:
+                content += "**Service Distribution**:\n"
+                sorted_services = sorted(services_by_type.items(), key=lambda x: x[1], reverse=True)[:10]
+                for svc, count in sorted_services:
+                    content += f"- {svc}: {count} instances\n"
+                content += "\n"
+
+            results = stage4_nmap.get("results", [])
             if results:
-                content += "**Sample Results**:\n"
-                for ip, ports in list(results.items())[:5]:
-                    port_list = [p['port'] if isinstance(p, dict) else p for p in ports]
-                    content += f"- {ip}: {len(ports)} ports → {', '.join(map(str, sorted(port_list)[:10]))}\n"
-                if len(results) > 5:
-                    content += f"- ... and {len(results) - 5} more targets\n"
+                content += "**Sample Detailed Results**:\n"
+                successful_results = [r for r in results if r.get("status") == "success"][:3]
+                for res in successful_results:
+                    ip = res.get("ip")
+                    result_data = res.get("result", {})
+                    services = result_data.get("services_detected", [])
+                    os_info = result_data.get("os_matches", [])
+
+                    content += f"\n**{ip}**:\n"
+                    if services:
+                        for svc in services[:5]:
+                            port = svc.get("port", "?")
+                            service = svc.get("service", "unknown")
+                            version = svc.get("version", "")
+                            content += f"- Port {port}: {service} {version}\n"
+                    if os_info:
+                        os_name = os_info[0].get("name", "Unknown")
+                        accuracy = os_info[0].get("accuracy", "0")
+                        content += f"- OS: {os_name} ({accuracy}% accuracy)\n"
+
+                if len(successful_results) < len(results):
+                    content += f"\n... and {len(results) - len(successful_results)} more targets\n"
                 content += "\n"
         else:
             content += "❌ Stage 4 failed or no data\n\n"
@@ -688,13 +714,17 @@ class ProgrammaticReportGenerator:
         unique_ips_count = len(stage1_dns.get("unique_ips", [])) if stage1_dns else 0
         shodan_ports = stage2_shodan.get("stats", {}).get("total_ports", 0) if stage2_shodan else 0
         naabu_ports = stage3_naabu.get("total_open_ports", 0) if stage3_naabu else 0
-        masscan_ports = stage4_masscan.get("total_open_ports", 0) if stage4_masscan else 0
+        nmap_services = stage4_nmap.get("stats", {}).get("total_services", 0) if stage4_nmap else 0
+        nmap_os_detected = stage4_nmap.get("stats", {}).get("os_detected", 0) if stage4_nmap else 0
 
         content += f"- **Original Subdomains**: {total_targets}\n"
-        content += f"- **Deduplicated to**: {unique_ips_count} unique IPs\n"
+        content += f"- **Deduplicated to**: {unique_ips_count} unique IPs ({((total_targets-unique_ips_count)/total_targets*100):.1f}% reduction)\n"
         content += f"- **OSINT Ports (Shodan)**: {shodan_ports}\n"
         content += f"- **Discovered Ports (Naabu)**: {naabu_ports}\n"
-        content += f"- **Verified Ports (Masscan)**: {masscan_ports}\n"
+        content += f"- **🎯 Detected Services (Nmap)**: {nmap_services} (SOURCE OF TRUTH)\n"
+        content += f"- **🎯 OS Fingerprints (Nmap)**: {nmap_os_detected}\n\n"
+
+        content += "**Key Insight**: Nmap Stage 4 provides the authoritative service/version/OS data for vulnerability assessment.\n"
 
         # Structured data
         structured_data = {
@@ -702,13 +732,16 @@ class ProgrammaticReportGenerator:
             "stage1_dns": stage1_dns,
             "stage2_shodan": stage2_shodan,
             "stage3_naabu": stage3_naabu,
-            "stage4_masscan": stage4_masscan,
+            "stage4_nmap": stage4_nmap,
+            "source_of_truth": "stage4_nmap",  # Mark which stage is authoritative
             "summary": {
                 "original_targets": total_targets,
                 "unique_ips": unique_ips_count,
+                "deduplication_savings_pct": ((total_targets-unique_ips_count)/total_targets*100) if total_targets > 0 else 0,
                 "osint_ports": shodan_ports,
                 "discovered_ports": naabu_ports,
-                "verified_ports": masscan_ports
+                "nmap_services": nmap_services,
+                "nmap_os_detected": nmap_os_detected
             }
         }
 
@@ -745,13 +778,13 @@ class ProgrammaticReportGenerator:
             return ProgrammaticReportGenerator.generate_subdomain_report(amass_result, bbot_result)
 
         if tool_name == "4stage" or tool_name == "4stage_workflow":
-            # Special case: takes 4 results (dns, shodan, naabu, masscan)
+            # Special case: takes 4 results (dns, shodan, naabu, nmap)
             stage1_dns = results[0] if len(results) > 0 else None
             stage2_shodan = results[1] if len(results) > 1 else None
             stage3_naabu = results[2] if len(results) > 2 else None
-            stage4_masscan = results[3] if len(results) > 3 else None
+            stage4_nmap = results[3] if len(results) > 3 else None
             return ProgrammaticReportGenerator.generate_4stage_workflow_report(
-                stage1_dns, stage2_shodan, stage3_naabu, stage4_masscan
+                stage1_dns, stage2_shodan, stage3_naabu, stage4_nmap
             )
 
         generator = generators.get(tool_name)

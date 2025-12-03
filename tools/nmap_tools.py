@@ -1067,6 +1067,145 @@ NMAP_TOOLS = [
 ]
 
 
+def nmap_service_detection_batch(targets: list = None, source: str = None,
+                                  scan_discovered_ports: bool = True,
+                                  save_results: bool = False, timeout: int = 1800) -> dict:
+    """
+    Stage 4 tool: Batch Nmap service detection for 4-stage workflow.
+
+    This is the SOURCE OF TRUTH for the final report. It provides:
+    - Service/version detection (-sV)
+    - OS fingerprinting (-O when possible)
+    - Detailed banner grabbing
+
+    Args:
+        targets: List of IPs or dict of {IP: [ports]} from Stage 3
+        source: Source identifier (e.g., "stage3_naabu_results")
+        scan_discovered_ports: If True, scan only discovered ports; if False, scan all common ports
+        save_results: Whether to save results for next stage
+        timeout: Timeout in seconds per host
+
+    Returns:
+        dict: Comprehensive Nmap scan results with stage metadata
+    """
+    from typing import Dict, List, Any
+    import time
+
+    print(f"\n  🎯 [STAGE 4] Nmap Service Detection (Source of Truth)")
+
+    # Parse targets - could be list of IPs or dict of {IP: [ports]}
+    if isinstance(targets, dict):
+        # Stage 3 passed {IP: [ports]} dict
+        target_port_map = targets
+        target_list = list(targets.keys())
+    elif isinstance(targets, list):
+        # Simple list of IPs
+        target_list = targets
+        target_port_map = {}
+    else:
+        return {
+            "success": False,
+            "error": f"Invalid targets type: {type(targets)}",
+            "stage": 4
+        }
+
+    print(f"     - Targets to scan: {len(target_list)}")
+    print(f"     - Scan mode: {'Discovered ports only' if scan_discovered_ports and target_port_map else 'All common ports'}")
+
+    all_results = []
+    successful = 0
+    failed = 0
+
+    # Aggregate statistics
+    total_services = 0
+    total_os_detected = 0
+    services_by_type = {}
+
+    for i, ip in enumerate(target_list, 1):
+        ports_to_scan = target_port_map.get(ip, []) if scan_discovered_ports and target_port_map else []
+
+        if ports_to_scan:
+            ports_str = ",".join(map(str, sorted(ports_to_scan)[:100]))  # Limit to 100 ports
+            print(f"     [{i}/{len(target_list)}] Scanning {ip} → {len(ports_to_scan)} ports...", end=" ")
+        else:
+            ports_str = ""
+            print(f"     [{i}/{len(target_list)}] Scanning {ip} → default ports...", end=" ")
+
+        try:
+            result = nmap_service_detection(ip, ports=ports_str, timeout=timeout)
+
+            if result.get("success"):
+                services = result.get("services_detected", [])
+                os_info = result.get("os_matches", [])
+
+                print(f"✓ {len(services)} services, OS: {'Yes' if os_info else 'No'}")
+
+                successful += 1
+                total_services += len(services)
+                if os_info:
+                    total_os_detected += 1
+
+                # Track service types
+                for svc in services:
+                    svc_name = svc.get("service", "unknown")
+                    services_by_type[svc_name] = services_by_type.get(svc_name, 0) + 1
+
+                all_results.append({
+                    "ip": ip,
+                    "result": result,
+                    "status": "success"
+                })
+            else:
+                print(f"✗ {result.get('error', 'Unknown error')}")
+                failed += 1
+                all_results.append({
+                    "ip": ip,
+                    "error": result.get("error"),
+                    "status": "failed"
+                })
+
+        except Exception as e:
+            print(f"✗ Exception: {str(e)}")
+            failed += 1
+            all_results.append({
+                "ip": ip,
+                "error": str(e),
+                "status": "failed"
+            })
+
+        # Brief pause between scans to avoid overwhelming the network
+        if i < len(target_list):
+            time.sleep(0.5)
+
+    print(f"\n  📊 [STAGE 4] Summary (Source of Truth):")
+    print(f"     - Successful: {successful}")
+    print(f"     - Failed: {failed}")
+    print(f"     - Total services detected: {total_services}")
+    print(f"     - OS detected: {total_os_detected}/{len(target_list)}")
+
+    if services_by_type:
+        print(f"     - Top services found:")
+        sorted_services = sorted(services_by_type.items(), key=lambda x: x[1], reverse=True)[:5]
+        for svc, count in sorted_services:
+            print(f"       • {svc}: {count}")
+
+    return {
+        "success": True,
+        "stage": 4,
+        "source_of_truth": True,  # Mark this as authoritative
+        "results": all_results,
+        "stats": {
+            "total": len(target_list),
+            "successful": successful,
+            "failed": failed,
+            "total_services": total_services,
+            "os_detected": total_os_detected,
+            "services_by_type": services_by_type
+        },
+        "summary": f"Stage 4 Nmap: Scanned {len(target_list)} IPs, detected {total_services} services, {total_os_detected} OS fingerprints"
+    }
+
+
 # ============================================================================
 # FUNCTION DISPATCHER
 # ============================================================================
