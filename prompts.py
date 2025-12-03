@@ -739,10 +739,11 @@ def generate_next_step_suggestions(scan_results: list, failure_reason: str = "")
     elif any("masscan" in tool or "naabu" in tool for tool in tools_attempted):
         # Check if we have subdomain data from database
         suggestions.extend([
-            "Check which specific subdomains are actually reachable",
-            "Run detailed nmap service detection on high-priority targets",
-            "Verify network connectivity to targets first",
-            "Try scanning with lower rate to avoid firewall blocks",
+            "Use masscan to scan those subdomains for web ports only (80,443,8080,8443) - faster & more targeted",
+            "Try HTTP probes instead of port scans - web services might only respond to HTTP",
+            "Test a few individual subdomains with full nmap scan to verify connectivity",
+            "Use slower scan rate (--rate 100) to avoid triggering WAF/firewall blocks",
+            "Check Shodan for those domains to see if they're in the database",
         ])
     
     # Generic failure - provide general suggestions
@@ -835,20 +836,43 @@ The following scans exceeded their time limits:
 
 """
     
-    # No data analysis
-    if no_data_scans:
-        report += f"""### 📊 No Data Returned ({len(no_data_scans)} scans)
+    # No data analysis (0 ports found, but scan succeeded)
+    if no_data_scans or (not failed_scans and not no_data_scans):
+        # Check if this is a batch scan with 0 ports
+        batch_scan_tools = [r.get("tool") for r in scan_results if "masscan" in r.get("tool", "").lower() or "naabu" in r.get("tool", "").lower()]
+
+        if batch_scan_tools:
+            # Special handling for batch scans with 0 ports
+            report += f"""### 📊 No Open Ports Found (0/{len(scan_results)} scans found ports)
+
+The scan completed successfully but **found 0 open ports** on all targets.
+
+**This typically means:**
+1. **Firewall/WAF Protection** - Targets drop SYN packets from port scanners
+2. **CDN Protection** - Traffic routed through Cloudflare/Akamai blocks raw TCP scans
+3. **Rate Limiting** - Fast scans trigger automatic blocking
+4. **HTTP-Only Services** - Sites only respond to HTTP probes, not port scans
+5. **DNS Issues** - Some subdomains may not resolve to live IPs
+
+**What this does NOT mean:**
+- ❌ "Targets are down" - They're likely up but protected
+- ❌ "No services running" - Web services are probably active
+- ❌ "Scan failed" - The scan worked, targets are just hardened
+
+"""
+        else:
+            report += f"""### 📊 No Data Returned ({len(no_data_scans)} scans)
 
 These scans completed but found no results:
 """
-        for tool in no_data_scans:
-            for r in scan_results:
-                if r.get("tool") == tool:
-                    args = r.get("args", {})
-                    target = args.get("target") or args.get("domain") or args.get("targets", "unknown")
-                    report += f"- **{tool}** on `{target}`\n"
-        
-        report += """
+            for tool in no_data_scans:
+                for r in scan_results:
+                    if r.get("tool") == tool:
+                        args = r.get("args", {})
+                        target = args.get("target") or args.get("domain") or args.get("targets", "unknown")
+                        report += f"- **{tool}** on `{target}`\n"
+
+            report += """
 **Possible reasons:**
 - Targets are unreachable or down
 - Heavy firewall filtering blocking scans
@@ -907,29 +931,45 @@ Before retrying, verify:
         tool_name = scan_results[0].get("tool", "")
         args = scan_results[0].get("args", {})
         target = args.get("target") or args.get("domain") or args.get("targets", "example.com")
-        
+
+        # Handle list of targets (truncate for readability)
         if isinstance(target, list):
-            target = target[0] if target else "example.com"
-        
+            if len(target) > 3:
+                # Show first 3 targets + count
+                target_display = f"{target[0]},{target[1]},{target[2]} (and {len(target)-3} more)"
+            else:
+                target_display = ",".join(target[:3])
+        elif isinstance(target, str):
+            # If it's a long comma-separated string, truncate it
+            target_parts = [t.strip() for t in target.split(",")]
+            if len(target_parts) > 3:
+                target_display = f"{target_parts[0]},{target_parts[1]},{target_parts[2]} (and {len(target_parts)-3} more)"
+            else:
+                target_display = target[:100]  # Limit to 100 chars
+        else:
+            target_display = str(target)[:100]
+
         if "subdomain" in tool_name.lower() or "bbot" in tool_name.lower() or "amass" in tool_name.lower():
-            report += f"""- `Quick scan on {target}`
-- `Find subdomains for {target} (passive mode only)`
-- `Check if {target} is up`
+            report += f"""- `Quick scan on {target_display}`
+- `Find subdomains for {target_display} (passive mode only)`
+- `Check if {target_display} is up`
 """
         elif "port" in tool_name.lower() or "nmap" in tool_name.lower():
-            report += f"""- `Quick port scan on {target}`
-- `Scan top 1000 ports on {target}`
-- `Check if port 80 and 443 are open on {target}`
+            report += f"""- `Quick port scan on {target_display}`
+- `Scan top 1000 ports on {target_display}`
+- `Check if port 80 and 443 are open on {target_display}`
 """
         elif "masscan" in tool_name.lower() or "naabu" in tool_name.lower():
-            report += f"""- `Scan web ports on {target}`
-- `Quick masscan on {target}`
-- `Check connectivity to {target}`
+            # For batch scans with no results, suggest different approaches
+            report += f"""- `Use masscan to scan those subdomains for web ports (80,443,8080,8443)`
+- `Check which of those subdomains respond to HTTP/HTTPS`
+- `Verify DNS resolution for those subdomains`
+- `Try slower scan rate to avoid firewall blocks`
 """
         else:
-            report += f"""- `Quick scan on {target}`
-- `Check {target} status`
-- `Find information about {target}`
+            report += f"""- `Quick scan on {target_display}`
+- `Check {target_display} status`
+- `Find information about {target_display}`
 """
     
     report += """

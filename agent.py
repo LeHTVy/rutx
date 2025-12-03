@@ -2452,6 +2452,27 @@ Be specific about CVEs, provide CVSS scores if known, and reference specific vul
             except Exception as e:
                 print(f"  ⚠️  Could not retrieve programmatic report: {e}")
 
+        # If no programmatic report and no useful scan data, return failure report instead of calling LLM
+        if not programmatic_report_content and scan_type == "generic":
+            # Check if there's any actual data in results_for_llm
+            has_useful_data = False
+            for r in results_for_llm:
+                # Check various data indicators
+                if r.get("open_ports") or r.get("total_open_ports", 0) > 0 or r.get("hosts_discovered", 0) > 0:
+                    has_useful_data = True
+                    break
+                if r.get("naabu_data", {}).get("total_open_ports", 0) > 0:
+                    has_useful_data = True
+                    break
+                if r.get("masscan_data", {}).get("total_open_ports", 0) > 0:
+                    has_useful_data = True
+                    break
+
+            if not has_useful_data:
+                print(f"  ⚠️  No programmatic report and no scan data - using failure report")
+                from prompts import generate_failure_report
+                return generate_failure_report(scan_results)
+
         # Send COMPLETE scan data to LLM with programmatic report
         system_prompt = get_phase3_prompt(
             json.dumps(results_for_llm, indent=2),
