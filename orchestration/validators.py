@@ -84,9 +84,40 @@ class PhaseValidator:
             if 'success' not in tool_result:
                 errors.append(f"Tool '{tool_name}' missing success flag")
 
-            # If successful, should have output
-            if tool_result.get('success') and not tool_result.get('output'):
-                errors.append(f"Tool '{tool_name}' succeeded but has no output")
+            # If successful, check for data using tool-specific fields
+            if tool_result.get('success'):
+                has_data = False
+                
+                # Check for various data fields depending on tool type
+                data_fields = [
+                    'output',           # Generic output
+                    'subdomains',       # Subdomain tools (amass, bbot)
+                    'results',          # Port scanners (masscan, naabu)
+                    'data',             # OSINT tools (shodan)
+                    'hosts',            # Nmap
+                    'ports',            # Port lists
+                    'open_ports',       # Open ports
+                ]
+                
+                for field in data_fields:
+                    if field in tool_result and tool_result[field]:
+                        # Check if it's actually populated (not empty list/dict/string)
+                        value = tool_result[field]
+                        if isinstance(value, (list, dict)):
+                            if len(value) > 0:
+                                has_data = True
+                                break
+                        elif isinstance(value, str):
+                            if value.strip():
+                                has_data = True
+                                break
+                        else:
+                            # Other types (int, bool, etc.)
+                            has_data = True
+                            break
+                
+                if not has_data:
+                    errors.append(f"Tool '{tool_name}' succeeded but has no output")
 
         return (len(errors) == 0, errors)
 

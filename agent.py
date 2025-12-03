@@ -700,7 +700,8 @@ Select the most appropriate tool for the user's request."""
                     # Use naabu for full port scan
                     selected_tools.append({
                         "name": "naabu_full_scan",
-                        "arguments": {"targets": subdomain, "rate": 10000}
+                        "arguments": {"targets": subdomain, "rate": 10000},
+                        "justification": f"Crown jewel target (score {score}/10) - full 65535 port scan for maximum coverage"
                     })
             
             # HIGH-VALUE: Top 1000 ports
@@ -721,7 +722,8 @@ Select the most appropriate tool for the user's request."""
                     "arguments": {
                         "targets": ",".join(high_targets),
                         "top": 1000
-                    }
+                    },
+                    "justification": f"High-value targets ({len(high_targets)} hosts) - top 1000 ports for efficient coverage"
                 })
             
             # MEDIUM/LOW: Fast batch scan with Naabu (fast + low noise)
@@ -739,7 +741,8 @@ Select the most appropriate tool for the user's request."""
                         "targets": ",".join(medium_low_targets),
                         "top": 1000,  # Top 1000 common ports
                         "rate": 3000  # Fast rate (Naabu is less noisy than Masscan)
-                    }
+                    },
+                    "justification": f"Medium/low priority targets ({len(medium_low_targets)} hosts) - fast batch scan with top 1000 ports"
                 })
             
             total = len(crown_jewels) + len(high_value) + len(medium_low)
@@ -759,7 +762,8 @@ Select the most appropriate tool for the user's request."""
                     "targets": ",".join(subdomains),
                     "ports": "top-1000",
                     "rate": 5000
-                }
+                },
+                "justification": f"Two-phase discovery: fast batch scan of {len(subdomains)} targets to find live ports before detailed analysis"
             })
 
             # PHASE 2 will be added after Phase 1 completes
