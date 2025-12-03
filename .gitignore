@@ -1,31 +1,40 @@
 # ============================================================================
 # ============================================================================
 casestudy/
+clean/
 
 # ============================================================================
 # Database & Data Files
 # ============================================================================
-data/*.db
+data/pentest.db
 *.db
 *.sqlite
 *.sqlite3
 
 # ============================================================================
-# Logs
+# Logs & Audit Trails (SENSITIVE - Never Commit)
 # ============================================================================
 logs/
 *.log
 log_*.json
+audit_logs/
+**/*.audit
+audit_*.json
 
 # ============================================================================
-# Scan Results & Outputs
+# Scan Results & Outputs (SENSITIVE - Contains Target Data)
 # ============================================================================
 tools/scan_results/
 scan_results/
+/tmp/nmap_scans/
+/tmp/masscan_scans/
+/tmp/bbot_*/
 *.xml
 *.json.output
 *.nmap
 *.gnmap
+*_scan_*.txt
+*_results_*.json
 
 # ============================================================================
 # Python
@@ -60,16 +69,21 @@ ENV/
 env/
 
 # ============================================================================
-# Environment & Secrets
+# Environment & Secrets (CRITICAL - Contains API Keys)
 # ============================================================================
 .env
 .env.local
 config_local.py
 *_secrets.py
+data/llm_config.json
+data/*.key
 
 # API Keys (in case accidentally added to config.py)
 # Ensure config.py is reviewed before committing
 # config.py  # Uncomment if config contains secrets
+
+# LLM Configuration (may contain API keys)
+# llm_config.json stored in data/ is already ignored above
 
 # ============================================================================
 # IDE & Editors

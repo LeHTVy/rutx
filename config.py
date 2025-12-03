@@ -77,9 +77,33 @@ ALLOW_DESTRUCTIVE_COMMANDS = False  # Block dangerous commands (rm -rf, etc.)
 LOG_LEVEL = "INFO"
 LOG_FILE = "logs/security_agent.log"
 
-# Database Settings (Data Persistence Layer)
+# ============================================================================
+# LOCAL STORAGE PATHS (SENSITIVE DATA - NOT COMMITTED TO GIT)
+# ============================================================================
 import os
-DATABASE_URL = f"sqlite:///{os.path.join(os.path.dirname(__file__), 'data', 'pentest.db')}"
+from pathlib import Path
+
+# Base directory
+BASE_DIR = Path(__file__).parent
+
+# Data directory (databases, configurations)
+DATA_DIR = BASE_DIR / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+# Audit logs directory (crash recovery, session tracking)
+AUDIT_LOG_DIR = BASE_DIR / "audit_logs"
+AUDIT_LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+# Application logs directory (debug, info, error logs)
+LOG_DIR = BASE_DIR / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+# Scan results directories (temporary storage)
+SCAN_RESULTS_DIR = BASE_DIR / "scan_results"
+SCAN_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+
+# Database Settings (Data Persistence Layer)
+DATABASE_URL = f"sqlite:///{DATA_DIR / 'pentest.db'}"
 ENABLE_DATABASE = True  # Enable database persistence for scan results
 AUTO_PARSE_RESULTS = True  # Automatically parse and store tool outputs
 

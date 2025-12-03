@@ -10,6 +10,7 @@ import json
 import requests
 import time
 from datetime import datetime
+from pathlib import Path
 
 # Add current directory for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -29,7 +30,11 @@ def _safe_print(*args, **kwargs):
     # Last attempt without catching
     print(*args, **kwargs)
 
-from config import OLLAMA_ENDPOINT, OLLAMA_LIST_ENDPOINT, MODEL_NAME
+from config import (
+    OLLAMA_ENDPOINT, OLLAMA_LIST_ENDPOINT, MODEL_NAME,
+    # Local storage paths (auto-created)
+    AUDIT_LOG_DIR, DATA_DIR, LOG_DIR, SCAN_RESULTS_DIR
+)
 from tools import ALL_TOOLS, get_all_tool_names
 
 
@@ -124,10 +129,21 @@ def print_banner():
         print(f"{indent}{line}")
     print(f"{Colors.RESET}")
     
-    # Center the subtitle
-    subtitle = "AI"
-    sub_padding = " " * ((width - len(subtitle)) // 2)
-    print(f"{Colors.DIM}{sub_padding}{subtitle}{Colors.RESET}")
+    ai_art = [
+        " ▄▀█ █",
+        " █▀█ █"
+    ]
+    
+    # Position it to the right, below the logo
+    ai_width = len(ai_art[0])
+    # Align with right edge of SNODE logo
+    ai_padding = padding + logo_width - ai_width - 2
+    ai_indent = " " * ai_padding
+    
+    print(f"{Colors.DIM}")
+    for ai_line in ai_art:
+        print(f"{ai_indent}{ai_line}")
+    print(f"{Colors.RESET}")
     
     # Center the separator and title
     separator = "═" * 60
@@ -279,6 +295,7 @@ def print_help():
   • clear     - Clear the screen
   • tools     - List all available scanning tools
   • history   - Show command history (last 20 commands)
+  • verify    - Show security configuration (local storage paths)
   • sudo      - Restart as Administrator (Windows UAC)
   • banner    - Show the SNODE banner
   • quit/exit - Exit the program
@@ -302,6 +319,12 @@ def main():
     """Main entry point"""
     clear_screen()
     print_banner()
+
+    # Verify local storage configuration
+    print(f"{Colors.DIM}🔒 Security: Local storage configured{Colors.RESET}")
+    print(f"{Colors.DIM}   Data: {DATA_DIR.name}/ | Logs: {LOG_DIR.name}/ | Audit: {AUDIT_LOG_DIR.name}/{Colors.RESET}")
+    print()
+
     print_system_info()
 
     # Initialize SNODE Integration (Tracing + Guardrails)
@@ -360,6 +383,16 @@ def main():
                     restart_as_admin()
                 else:
                     print(f"\n{Colors.GREEN}Already running as Administrator{Colors.RESET}\n")
+                continue
+
+            elif prompt.lower() in ['verify', 'security', 'check']:
+                print(f"\n{Colors.CYAN}🔒 Security Configuration:{Colors.RESET}\n")
+                print(f"   {Colors.GREEN}✓{Colors.RESET} Data directory:    {DATA_DIR}")
+                print(f"   {Colors.GREEN}✓{Colors.RESET} Audit logs:        {AUDIT_LOG_DIR}")
+                print(f"   {Colors.GREEN}✓{Colors.RESET} App logs:          {LOG_DIR}")
+                print(f"   {Colors.GREEN}✓{Colors.RESET} Scan results:      {SCAN_RESULTS_DIR}")
+                print(f"\n   {Colors.DIM}All directories auto-created and .gitignore protected{Colors.RESET}")
+                print(f"   {Colors.DIM}Run 'python verify_security.py' for full verification{Colors.RESET}\n")
                 continue
 
             # Run the 3-phase scan

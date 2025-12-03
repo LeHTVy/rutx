@@ -278,9 +278,24 @@ class SessionMetrics:
 
 
 # Convenience function to create audit logger for current session
-def create_audit_logger(session_id: str, target: str) -> AuditLogger:
-    """Create and initialize an audit logger for a scan session"""
-    logger = AuditLogger(session_id, target)
+def create_audit_logger(session_id: str, target: str, output_dir: str = None) -> AuditLogger:
+    """
+    Create and initialize an audit logger for a scan session
+
+    Args:
+        session_id: Unique session identifier
+        target: Target being scanned
+        output_dir: Custom output directory (defaults to config.AUDIT_LOG_DIR)
+    """
+    # Use centralized config if no custom directory specified
+    if output_dir is None:
+        try:
+            from config import AUDIT_LOG_DIR
+            output_dir = str(AUDIT_LOG_DIR)
+        except ImportError:
+            output_dir = "audit_logs"  # Fallback
+
+    logger = AuditLogger(session_id, target, output_dir)
 
     # Log session start
     logger.log_event('session_start', {

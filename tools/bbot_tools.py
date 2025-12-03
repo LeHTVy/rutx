@@ -23,6 +23,31 @@ from datetime import datetime
 from pathlib import Path
 
 
+def _find_bbot_executable():
+    """Find bbot executable in common locations"""
+    import shutil
+    
+    # Check PATH first
+    bbot_path = shutil.which("bbot")
+    if bbot_path:
+        return bbot_path
+        
+    # Check common user directories (pipx, local bin)
+    common_paths = [
+        os.path.expanduser("~/.local/bin/bbot"),
+        "/usr/local/bin/bbot",
+        "/opt/bbot/bin/bbot",
+        # Check sudo user's home if running as root
+        os.path.expanduser(f"~{os.environ.get('SUDO_USER', '')}/.local/bin/bbot") if os.environ.get('SUDO_USER') else None
+    ]
+    
+    for path in common_paths:
+        if path and os.path.exists(path) and os.access(path, os.X_OK):
+            return path
+            
+    return "bbot"  # Fallback to command name
+
+
 def _run_subprocess_with_drain(cmd, timeout):
     """
     Run subprocess while draining stdout/stderr to prevent blocking.
@@ -30,14 +55,22 @@ def _run_subprocess_with_drain(cmd, timeout):
 
     Uses DEVNULL to completely suppress output and avoid terminal I/O issues.
     """
+    # Resolve executable path
+    if cmd[0] == "bbot":
+        cmd[0] = _find_bbot_executable()
+
     # Completely suppress stdout/stderr to avoid terminal I/O blocking
     # BBOT writes its results to JSON files anyway
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL
-    )
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL
+        )
+    except FileNotFoundError:
+        # Re-raise to be caught by caller
+        raise
 
     start_time = time.time()
     try:
