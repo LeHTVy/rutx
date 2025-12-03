@@ -1971,7 +1971,7 @@ Select the most appropriate tool for the user's request."""
 
         # NEW FLOW: Generate and store programmatic report FIRST
         # This ensures we have structured data before LLM analysis
-        programmatic_report_id = self._generate_and_store_programmatic_report(
+        programmatic_report_id, programmatic_report_content = self._generate_and_store_programmatic_report(
             scan_results, scan_type
         )
 
@@ -2671,15 +2671,19 @@ Be specific about CVEs, provide CVSS scores if known, and reference specific vul
 
 
         # Retrieve programmatic report from database if it was generated
-        programmatic_report_content = ""
-        if programmatic_report_id:
+        # Retrieve programmatic report content if available
+        if programmatic_report_content:
+            print(f"  📄 Retrieved programmatic report ({len(programmatic_report_content)} chars)")
+            analysis = programmatic_report_content
+        elif programmatic_report_id:
+            # Fallback: try to retrieve from DB if content missing but ID exists
             try:
-                prog_report = ProgrammaticReportService.get_programmatic_report(programmatic_report_id)
-                if prog_report:
-                    programmatic_report_content = prog_report.get("content", "")
-                    print(f"  📄 Retrieved programmatic report ({len(programmatic_report_content)} chars)")
-            except Exception as e:
-                print(f"  ⚠️  Could not retrieve programmatic report: {e}")
+                report = ProgrammaticReportService.get_report(programmatic_report_id)
+                if report:
+                    analysis = report.get("report_data", "")
+                    print(f"  📄 Retrieved programmatic report from DB ({len(analysis)} chars)")
+            except Exception:
+                pass
 
         # If no programmatic report and no useful scan data, return failure report instead of calling LLM
         if not programmatic_report_content and scan_type == "generic":
@@ -3208,16 +3212,16 @@ Session: """ + (self.db_session_id or 'N/A') + f""" | Type: Port Scan ({tool_dis
                     target=target
                 )
                 print(f"  ✅ Programmatic report saved (ID: {report_id[:8]}...)")
-                return report_id
+                return report_id, report_data
             else:
                 print(f"  ⚠️  No programmatic report generated for scan type: {scan_type}")
-                return None
+                return None, None
 
         except Exception as e:
             print(f"  ⚠️  Failed to generate programmatic report: {e}")
             import traceback
             traceback.print_exc()
-            return None
+            return None, None
 
     def phase_4_report_generation(self, scan_results: List[Dict]) -> str:
         """
