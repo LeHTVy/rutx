@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 import os
 import socket
-from typing import List, Dict, Set, Tuple
+from typing import List, Dict, Set, Tuple, Any
 from collections import defaultdict
 
 
@@ -281,7 +281,7 @@ def print_deduplication_stats(subdomains: List[str], unique_ips: List[str], ip_t
     """
     savings = len(subdomains) - len(unique_ips)
     savings_pct = (savings / len(subdomains) * 100) if subdomains else 0
-    
+
     print(f"\n  [DNS Resolution & Deduplication]")
     print(f"     - Total subdomains: {len(subdomains)}")
     print(f"     - Unique IPs: {len(unique_ips)}")
@@ -293,6 +293,64 @@ def print_deduplication_stats(subdomains: List[str], unique_ips: List[str], ip_t
         top_ip = sorted_ips[0]
         if len(top_ip[1]) > 1:
             print(f"     - Most shared IP: {top_ip[0]} ({len(top_ip[1])} subdomains)")
+
+
+def dns_bulk_resolve(subdomains: List[str], save_results: bool = False) -> Dict[str, Any]:
+    """
+    Stage 1 tool: Bulk DNS resolution with deduplication for 4-stage workflow.
+
+    Args:
+        subdomains: List of subdomains to resolve
+        save_results: Whether to save results for next stage
+
+    Returns:
+        Dict with resolution results, unique IPs, and metadata
+
+    Example:
+        >>> result = dns_bulk_resolve(["api.example.com", "web.example.com"])
+        >>> result["unique_ips"]  # List of unique IPs
+        >>> result["subdomain_to_ip"]  # Mapping
+    """
+    print(f"\n  📡 [STAGE 1] DNS Bulk Resolution - {len(subdomains)} subdomains")
+
+    # Resolve all subdomains
+    unique_ips, ip_to_subdomains, subdomain_to_ip = get_unique_ips(subdomains)
+
+    # Print stats
+    print_deduplication_stats(subdomains, unique_ips, ip_to_subdomains)
+
+    # Filter out private/local IPs (only keep public IPs)
+    public_ips = []
+    for ip in unique_ips:
+        # Check if public IP
+        octets = ip.split('.')
+        if len(octets) == 4:
+            first = int(octets[0])
+            second = int(octets[1])
+
+            # Skip private ranges: 10.x.x.x, 172.16-31.x.x, 192.168.x.x, 127.x.x.x
+            if first == 10 or first == 127:
+                continue
+            if first == 172 and 16 <= second <= 31:
+                continue
+            if first == 192 and second == 168:
+                continue
+
+            public_ips.append(ip)
+
+    print(f"     - Public IPs: {len(public_ips)} (filtered {len(unique_ips) - len(public_ips)} private IPs)")
+
+    return {
+        "success": True,
+        "stage": 1,
+        "subdomains_count": len(subdomains),
+        "unique_ips": unique_ips,
+        "public_ips": public_ips,
+        "ip_to_subdomains": ip_to_subdomains,
+        "subdomain_to_ip": subdomain_to_ip,
+        "deduplication_savings": len(subdomains) - len(unique_ips),
+        "summary": f"Stage 1 DNS: Resolved {len(subdomains)} subdomains to {len(unique_ips)} unique IPs ({len(public_ips)} public)"
+    }
 
 
 # ============================================================================

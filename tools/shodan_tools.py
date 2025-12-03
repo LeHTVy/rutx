@@ -206,6 +206,113 @@ def shodan_host(ip):
     return shodan_lookup(ip)
 
 
+def shodan_batch_lookup(ips: list, source: str = None, save_results: bool = False):
+    """
+    Stage 2 tool: Batch Shodan lookup for multiple IPs (4-stage workflow).
+
+    Args:
+        ips: List of IP addresses to query (or will be loaded from source)
+        source: Source identifier (e.g., "stage1_dns_results") - not used yet
+        save_results: Whether to save results for next stage
+
+    Returns:
+        dict: Batch lookup results with OSINT intelligence
+
+    Example:
+        >>> result = shodan_batch_lookup(["8.8.8.8", "1.1.1.1"])
+        >>> result["results"]  # List of Shodan lookups
+    """
+    from typing import List, Dict, Any
+    import time
+
+    print(f"\n  🔍 [STAGE 2] Shodan Batch Lookup - {len(ips)} IPs")
+
+    results = []
+    successful = 0
+    not_found = 0
+    failed = 0
+
+    # Track aggregate intelligence
+    total_ports = 0
+    total_services = 0
+    total_vulns = 0
+    high_threat_ips = []
+
+    for i, ip in enumerate(ips, 1):
+        print(f"     [{i}/{len(ips)}] Querying {ip}...", end=" ")
+
+        result = shodan_lookup(ip)
+
+        if result.get("success"):
+            data = result.get("data", {})
+
+            if data.get("status") == "not_found":
+                print("Not in Shodan")
+                not_found += 1
+            else:
+                ports = data.get("ports", [])
+                services = data.get("services", [])
+                vulns = data.get("vulns", [])
+                threat_level = data.get("threat_level", "UNKNOWN")
+
+                print(f"✓ {len(ports)} ports, {len(services)} services, {len(vulns)} CVEs")
+
+                total_ports += len(ports)
+                total_services += len(services)
+                total_vulns += len(vulns)
+
+                if threat_level == "HIGH":
+                    high_threat_ips.append(ip)
+
+                successful += 1
+
+            results.append({
+                "ip": ip,
+                "data": data,
+                "status": "success"
+            })
+        else:
+            print(f"✗ {result.get('error', 'Unknown error')}")
+            failed += 1
+            results.append({
+                "ip": ip,
+                "error": result.get("error"),
+                "status": "failed"
+            })
+
+        # Rate limiting: Shodan free tier = 1 query/second
+        if i < len(ips):
+            time.sleep(1.1)
+
+    print(f"\n  📊 [STAGE 2] Summary:")
+    print(f"     - Successful: {successful}")
+    print(f"     - Not found: {not_found}")
+    print(f"     - Failed: {failed}")
+    print(f"     - Total ports discovered: {total_ports}")
+    print(f"     - Total services: {total_services}")
+    print(f"     - Total CVEs: {total_vulns}")
+    if high_threat_ips:
+        print(f"     - ⚠️  High threat IPs: {len(high_threat_ips)}")
+
+    return {
+        "success": True,
+        "stage": 2,
+        "results": results,
+        "stats": {
+            "total": len(ips),
+            "successful": successful,
+            "not_found": not_found,
+            "failed": failed,
+            "total_ports": total_ports,
+            "total_services": total_services,
+            "total_vulns": total_vulns,
+            "high_threat_count": len(high_threat_ips),
+            "high_threat_ips": high_threat_ips
+        },
+        "summary": f"Stage 2 Shodan: Queried {len(ips)} IPs, found {total_ports} ports, {total_vulns} CVEs, {len(high_threat_ips)} high-threat IPs"
+    }
+
+
 def execute_shodan_tool(tool_name, tool_args):
     """
     Execute a Shodan tool by name with given arguments

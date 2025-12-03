@@ -694,112 +694,102 @@ Select the most appropriate tool for the user's request."""
 
     def _get_intelligent_port_scan_strategy(self, subdomains: List[str]) -> List[Dict]:
         """
-        Professional port scanning workflow with DNS pre-resolution and deduplication
+        Enhanced 4-Stage Port Scanning Workflow with OSINT enrichment
 
-        Uses OSINT intelligence to prioritize scanning:
-        - Crown jewels: Full port scan (1-65535) with naabu
-        - High-value: Top 1000 ports
-        - Others: Batch scan common ports
+        Stage 1: DNS Resolution - Convert subdomains to unique public IPs
+        Stage 2: OSINT Enrichment - Query Shodan for intelligence on IPs
+        Stage 3: Naabu Scanning - Fast port discovery
+        Stage 4: Masscan Scanning - Comprehensive port verification
+
+        Each stage builds enriched context for LLM analysis.
 
         Args:
             subdomains: List of subdomains to scan
 
         Returns:
-            List of tool selections with intelligent prioritization
+            List of tool selections for 4-stage workflow
         """
-        print("\n  🧠 INTELLIGENT PORT SCAN STRATEGY")
+        print("\n  🧠 ENHANCED 4-STAGE PORT SCAN STRATEGY")
         print("  " + "="*58)
-        
-        # Use OSINT intelligence if available
+
         selected_tools = []
-        
-        if self.osint_intelligence:
-            print("\n  🎯 STAGE 1: OSINT-Guided Prioritization")
-            
-            intelligence = self.osint_intelligence
-            
-            # CROWN JEWELS: Comprehensive scans (ALL 65535 ports!)
-            crown_jewels = intelligence.get("crown_jewels", [])
-            if crown_jewels:
-                crown_targets = [t["subdomain"] for t in crown_jewels]
-                print(f"\n  👑 CROWN JEWELS ({len(crown_targets)}) → FULL PORT SCAN (1-65535):")
-                
-                for target_info in crown_jewels:
-                    subdomain = target_info["subdomain"]
-                    score = target_info["score"]
-                    print(f"     • {subdomain} (Score: {score}/10)")
-                    
-                    # Use naabu for full port scan
-                    selected_tools.append({
-                        "name": "naabu_full_scan",
-                        "arguments": {"targets": subdomain, "rate": 10000},
-                        "justification": f"Crown jewel target (score {score}/10) - full 65535 port scan for maximum coverage"
-                    })
-            
-            # HIGH-VALUE: Top 1000 ports
-            high_value = intelligence.get("high_value", [])
-            if high_value:
-                high_targets = [t["subdomain"] for t in high_value]
-                print(f"\n  🎯 HIGH-VALUE ({len(high_targets)}) → TOP 1000 PORTS:")
-                
-                for target_info in high_value[:5]:  # Show first 5
-                    print(f"     • {target_info['subdomain']} (Score: {target_info['score']}/10)")
-                
-                if len(high_value) > 5:
-                    print(f"     ... and {len(high_value) - 5} more")
-                
-                # Batch scan with naabu top-1000
-                selected_tools.append({
-                    "name": "naabu_top_ports",
-                    "arguments": {
-                        "targets": ",".join(high_targets),
-                        "top": 1000
-                    },
-                    "justification": f"High-value targets ({len(high_targets)} hosts) - top 1000 ports for efficient coverage"
-                })
-            
-            # MEDIUM/LOW: Fast batch scan with Naabu (fast + low noise)
-            medium_low = intelligence.get("medium_value", []) + intelligence.get("low_value", [])
-            if medium_low:
-                medium_low_targets = [t["subdomain"] for t in medium_low]
-                print(f"\n  ⚡ MEDIUM/LOW ({len(medium_low_targets)}) → FAST BATCH SCAN:")
-                print(f"     → Strategy: Naabu batch scan (top 1000 ports)")
-                print(f"     → Rate: 3000 pps (fast + low noise)")
-                print(f"     → Est. time: ~3-5 minutes for {len(medium_low_targets)} targets")
 
-                selected_tools.append({
-                    "name": "naabu_top_ports",
-                    "arguments": {
-                        "targets": ",".join(medium_low_targets),
-                        "top": 1000,  # Top 1000 common ports
-                        "rate": 3000  # Fast rate (Naabu is less noisy than Masscan)
-                    },
-                    "justification": f"Medium/low priority targets ({len(medium_low_targets)} hosts) - fast batch scan with top 1000 ports"
-                })
-            
-            total = len(crown_jewels) + len(high_value) + len(medium_low)
-            print(f"\n  ✅ Strategy: {len(crown_jewels)} comprehensive + {len(high_value)} detailed + {len(medium_low)} quick = {total} targets")
-            
-        else:
-            # Fallback: No OSINT intelligence - use TWO-PHASE approach
-            print("\n  ⚡ TWO-PHASE SCANNING STRATEGY (No OSINT)")
-            print(f"     → Phase 1: Naabu quick scan on {len(subdomains)} subdomains (find live ports)")
-            print(f"     → Phase 2: Nmap detailed scan (only on hosts with open ports)")
-            print(f"     → Expected savings: 10-20x faster than pure nmap")
+        # =====================================================================
+        # STAGE 1: DNS RESOLUTION - Convert subdomains to unique public IPs
+        # =====================================================================
+        print("\n  📡 STAGE 1: DNS RESOLUTION")
+        print("  " + "-"*58)
 
-            # PHASE 1: Fast discovery with Naabu
-            selected_tools.append({
-                "name": "naabu_batch_scan",
-                "arguments": {
-                    "targets": ",".join(subdomains),
-                    "ports": "top-1000",
-                    "rate": 5000
-                },
-                "justification": f"Two-phase discovery: fast batch scan of {len(subdomains)} targets to find live ports before detailed analysis"
-            })
+        selected_tools.append({
+            "name": "dns_bulk_resolve",
+            "arguments": {
+                "subdomains": subdomains,
+                "save_results": True
+            },
+            "justification": f"Stage 1: Resolve {len(subdomains)} subdomains to unique IPs for deduplication and efficient scanning"
+        })
 
-            # PHASE 2 will be added after Phase 1 completes
-            # (See phase_2_execution for post-processing)
+        # =====================================================================
+        # STAGE 2: OSINT ENRICHMENT - Shodan lookup on resolved IPs
+        # =====================================================================
+        print("\n  🔍 STAGE 2: OSINT ENRICHMENT (Shodan)")
+        print("  " + "-"*58)
+        print("     → Will query Shodan for each unique IP")
+        print("     → Gather: Open ports, services, CVEs, threat intel")
+
+        selected_tools.append({
+            "name": "shodan_batch_lookup",
+            "arguments": {
+                "source": "stage1_dns_results",  # Will use Stage 1 output
+                "save_results": True
+            },
+            "justification": "Stage 2: OSINT enrichment - query Shodan for intelligence on resolved IPs"
+        })
+
+        # =====================================================================
+        # STAGE 3: NAABU SCANNING - Fast port discovery
+        # =====================================================================
+        print("\n  ⚡ STAGE 3: NAABU PORT SCANNING")
+        print("  " + "-"*58)
+        print("     → Fast port discovery with Naabu")
+        print("     → Scan top 1000 ports on unique IPs")
+
+        selected_tools.append({
+            "name": "naabu_batch_scan",
+            "arguments": {
+                "source": "stage1_dns_results",  # Will use Stage 1 IPs
+                "ports": "top-1000",
+                "rate": 5000,
+                "save_results": True
+            },
+            "justification": "Stage 3: Fast port discovery with Naabu on unique IPs from Stage 1"
+        })
+
+        # =====================================================================
+        # STAGE 4: MASSCAN VERIFICATION - Comprehensive port verification
+        # =====================================================================
+        print("\n  🎯 STAGE 4: MASSCAN VERIFICATION")
+        print("  " + "-"*58)
+        print("     → Comprehensive verification with Masscan")
+        print("     → Scan common web/service ports on unique IPs")
+
+        selected_tools.append({
+            "name": "masscan_batch_scan",
+            "arguments": {
+                "source": "stage1_dns_results",  # Will use Stage 1 IPs
+                "ports": "80,443,8080,8443,22,21,25,3389,3306,5432,1433,445,139,23,161",
+                "rate": 2000,
+                "save_results": True
+            },
+            "justification": "Stage 4: Comprehensive port verification with Masscan on common service ports"
+        })
+
+        print("\n  ✅ 4-STAGE WORKFLOW CONFIGURED")
+        print("     → Stage 1: DNS Resolution (subdomain → IP)")
+        print("     → Stage 2: OSINT Enrichment (Shodan intel)")
+        print("     → Stage 3: Naabu Scanning (fast discovery)")
+        print("     → Stage 4: Masscan Scanning (verification)")
+        print("     → All stages will generate programmatic reports")
 
         return selected_tools
 

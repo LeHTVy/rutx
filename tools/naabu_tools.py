@@ -483,6 +483,45 @@ def execute_naabu_tool(tool_name: str, tool_args: dict) -> dict:
         }
 
 
+def naabu_batch_scan_stage3(targets: List[str] = None, source: str = None, ports: str = "top-1000",
+                            rate: int = 5000, save_results: bool = False, timeout: int = None) -> Dict[str, Any]:
+    """
+    Stage 3 tool: Naabu batch scan for 4-stage workflow.
+
+    Args:
+        targets: List of IPs to scan (will be used if source is not specified)
+        source: Source identifier (e.g., "stage1_dns_results") - not used yet, targets passed directly
+        ports: Port range or "top-1000" (default)
+        rate: Scan rate in packets/sec
+        save_results: Whether to save results for next stage
+        timeout: Timeout in seconds (auto-calculated if None)
+
+    Returns:
+        dict: Scan results with stage metadata
+    """
+    print(f"\n  ⚡ [STAGE 3] Naabu Port Scanning - {len(targets)} IPs")
+
+    # Call existing naabu_batch_scan
+    result = naabu_batch_scan(
+        targets=",".join(targets),
+        ports=ports,
+        rate=rate,
+        timeout=timeout
+    )
+
+    # Add stage metadata
+    if result.get("success"):
+        result["stage"] = 3
+
+        print(f"\n  📊 [STAGE 3] Summary:")
+        print(f"     - Targets scanned: {result.get('targets_count', 0)}")
+        print(f"     - Targets with open ports: {result.get('targets_with_open_ports', 0)}")
+        print(f"     - Total open ports: {result.get('total_open_ports', 0)}")
+        print(f"     - Elapsed time: {result.get('elapsed_seconds', 0)}s")
+
+    return result
+
+
 # ============================================================================
 # Testing
 # ============================================================================

@@ -498,7 +498,228 @@ def register_all_tools():
     def reverse_dns_wrapper(ip: str) -> dict:
         return reverse_dns_lookup(ip)
 
+    # ============================================================================
+    # 4-STAGE PORT SCAN WORKFLOW TOOLS
+    # ============================================================================
+
+    from .dns_tools import dns_bulk_resolve
+    from .shodan_tools import shodan_batch_lookup
+    from .naabu_tools import naabu_batch_scan_stage3
+    from .masscan_tools import masscan_batch_scan_stage4
+
+    @register_tool(ToolMetadata(
+        name="DNS Bulk Resolve (Stage 1)",
+        function_name="dns_bulk_resolve",
+        description="Stage 1: Bulk DNS resolution with deduplication - converts subdomains to unique public IPs",
+        category=ToolCategory.DOMAIN,
+        parameters=[
+            ToolParameter(
+                name="subdomains",
+                type=InputType.STRING,
+                description="List of subdomains to resolve",
+                examples=[["api.example.com", "web.example.com"]]
+            ),
+            ToolParameter(
+                name="save_results",
+                type=InputType.STRING,
+                description="Save results for next stage",
+                required=False
+            )
+        ],
+        output=ToolOutput(
+            format="json",
+            schema={
+                "stage": "int",
+                "unique_ips": "list",
+                "public_ips": "list",
+                "subdomain_to_ip": "dict",
+                "deduplication_savings": "int"
+            },
+            description="DNS resolution with deduplication statistics"
+        ),
+        use_cases=[
+            "Resolve multiple subdomains efficiently",
+            "Deduplicate IPs for efficient scanning",
+            "Stage 1 of 4-stage port scan workflow"
+        ],
+        triggers=["dns bulk", "resolve subdomains", "stage 1"],
+        chains_to=["Shodan Batch Lookup", "Naabu Batch Scan"],
+        timeout=60
+    ))
+    def dns_bulk_resolve_wrapper(subdomains: list, save_results: bool = False) -> dict:
+        return dns_bulk_resolve(subdomains, save_results)
+
+    @register_tool(ToolMetadata(
+        name="Shodan Batch Lookup (Stage 2)",
+        function_name="shodan_batch_lookup",
+        description="Stage 2: Batch Shodan OSINT enrichment - queries Shodan for intelligence on resolved IPs",
+        category=ToolCategory.OSINT,
+        parameters=[
+            ToolParameter(
+                name="ips",
+                type=InputType.STRING,
+                description="List of IPs to query",
+                examples=[["8.8.8.8", "1.1.1.1"]]
+            ),
+            ToolParameter(
+                name="source",
+                type=InputType.STRING,
+                description="Source identifier (e.g., 'stage1_dns_results')",
+                required=False
+            ),
+            ToolParameter(
+                name="save_results",
+                type=InputType.STRING,
+                description="Save results for next stage",
+                required=False
+            )
+        ],
+        output=ToolOutput(
+            format="json",
+            schema={
+                "stage": "int",
+                "results": "list",
+                "stats": "dict"
+            },
+            description="OSINT intelligence from Shodan"
+        ),
+        use_cases=[
+            "Gather threat intelligence on IPs",
+            "Discover known vulnerabilities",
+            "Stage 2 of 4-stage port scan workflow"
+        ],
+        triggers=["shodan batch", "osint enrichment", "stage 2"],
+        prerequisites=["DNS Bulk Resolve"],
+        chains_to=["Naabu Batch Scan"],
+        timeout=600
+    ))
+    def shodan_batch_lookup_wrapper(ips: list, source: str = None, save_results: bool = False) -> dict:
+        return shodan_batch_lookup(ips, source, save_results)
+
+    @register_tool(ToolMetadata(
+        name="Naabu Batch Scan (Stage 3)",
+        function_name="naabu_batch_scan_stage3",
+        description="Stage 3: Fast port discovery with Naabu on unique IPs",
+        category=ToolCategory.NETWORK,
+        parameters=[
+            ToolParameter(
+                name="targets",
+                type=InputType.STRING,
+                description="List of IPs to scan",
+                examples=[["192.168.1.1", "10.0.0.1"]]
+            ),
+            ToolParameter(
+                name="source",
+                type=InputType.STRING,
+                description="Source identifier (e.g., 'stage1_dns_results')",
+                required=False
+            ),
+            ToolParameter(
+                name="ports",
+                type=InputType.STRING,
+                description="Port range or 'top-1000'",
+                required=False
+            ),
+            ToolParameter(
+                name="rate",
+                type=InputType.STRING,
+                description="Scan rate in packets/sec",
+                required=False
+            ),
+            ToolParameter(
+                name="save_results",
+                type=InputType.STRING,
+                description="Save results for next stage",
+                required=False
+            )
+        ],
+        output=ToolOutput(
+            format="json",
+            schema={
+                "stage": "int",
+                "results": "dict",
+                "targets_with_open_ports": "int",
+                "total_open_ports": "int"
+            },
+            description="Fast port discovery results"
+        ),
+        use_cases=[
+            "Fast port scanning on deduplicated IPs",
+            "Stage 3 of 4-stage port scan workflow"
+        ],
+        triggers=["naabu batch", "stage 3", "fast port scan"],
+        prerequisites=["DNS Bulk Resolve", "Shodan Batch Lookup"],
+        chains_to=["Masscan Batch Scan"],
+        timeout=1800,
+        is_intrusive=True
+    ))
+    def naabu_batch_scan_stage3_wrapper(targets: list, source: str = None, ports: str = "top-1000",
+                                         rate: int = 5000, save_results: bool = False) -> dict:
+        return naabu_batch_scan_stage3(targets, source, ports, rate, save_results)
+
+    @register_tool(ToolMetadata(
+        name="Masscan Batch Scan (Stage 4)",
+        function_name="masscan_batch_scan_stage4",
+        description="Stage 4: Comprehensive port verification with Masscan",
+        category=ToolCategory.NETWORK,
+        parameters=[
+            ToolParameter(
+                name="targets",
+                type=InputType.STRING,
+                description="List of IPs to scan",
+                examples=[["192.168.1.1", "10.0.0.1"]]
+            ),
+            ToolParameter(
+                name="source",
+                type=InputType.STRING,
+                description="Source identifier (e.g., 'stage1_dns_results')",
+                required=False
+            ),
+            ToolParameter(
+                name="ports",
+                type=InputType.STRING,
+                description="Comma-separated ports",
+                required=False
+            ),
+            ToolParameter(
+                name="rate",
+                type=InputType.STRING,
+                description="Scan rate in packets/sec",
+                required=False
+            ),
+            ToolParameter(
+                name="save_results",
+                type=InputType.STRING,
+                description="Save results for next stage",
+                required=False
+            )
+        ],
+        output=ToolOutput(
+            format="json",
+            schema={
+                "stage": "int",
+                "results": "dict",
+                "targets_with_open_ports": "int",
+                "total_open_ports": "int"
+            },
+            description="Comprehensive port verification results"
+        ),
+        use_cases=[
+            "Verify open ports with Masscan",
+            "Stage 4 of 4-stage port scan workflow"
+        ],
+        triggers=["masscan batch", "stage 4", "port verification"],
+        prerequisites=["DNS Bulk Resolve", "Shodan Batch Lookup", "Naabu Batch Scan"],
+        timeout=1800,
+        is_intrusive=True
+    ))
+    def masscan_batch_scan_stage4_wrapper(targets: list, source: str = None,
+                                           ports: str = "80,443,8080,8443,22,21,25,3389,3306,5432,1433,445,139,23,161",
+                                           rate: int = 2000, save_results: bool = False) -> dict:
+        return masscan_batch_scan_stage4(targets, source, ports, rate, save_results)
+
     print("[OK] Registered all existing security tools with LLM registry")
+    print("[OK] Registered 4-stage port scan workflow tools")
 
 
 # Auto-register on import

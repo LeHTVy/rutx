@@ -435,14 +435,54 @@ MASSCAN_TOOLS = [
 # FUNCTION DISPATCHER
 # ============================================================================
 
+def masscan_batch_scan_stage4(targets: List[str] = None, source: str = None,
+                               ports: str = "80,443,8080,8443,22,21,25,3389,3306,5432,1433,445,139,23,161",
+                               rate: int = 2000, save_results: bool = False, timeout: int = 300) -> Dict[str, Any]:
+    """
+    Stage 4 tool: Masscan batch scan for 4-stage workflow.
+
+    Args:
+        targets: List of IPs to scan (will be used if source is not specified)
+        source: Source identifier (e.g., "stage1_dns_results") - not used yet, targets passed directly
+        ports: Comma-separated ports to scan
+        rate: Scan rate in packets/sec
+        save_results: Whether to save results for next stage
+        timeout: Timeout in seconds
+
+    Returns:
+        dict: Scan results with stage metadata
+    """
+    print(f"\n  🎯 [STAGE 4] Masscan Verification - {len(targets)} IPs")
+
+    # Call existing masscan_scan
+    result = masscan_scan(
+        targets=targets,
+        ports=ports,
+        rate=rate,
+        timeout=timeout
+    )
+
+    # Add stage metadata
+    if result.get("success"):
+        result["stage"] = 4
+
+        print(f"\n  📊 [STAGE 4] Summary:")
+        print(f"     - Targets scanned: {result.get('targets_count', 0)}")
+        print(f"     - Targets with open ports: {result.get('targets_with_open_ports', 0)}")
+        print(f"     - Total open ports: {result.get('total_open_ports', 0)}")
+        print(f"     - Elapsed time: {result.get('elapsed_seconds', 0)}s")
+
+    return result
+
+
 def execute_masscan_tool(tool_name: str, tool_args: dict) -> Dict[str, Any]:
     """
     Execute a masscan tool by name with given arguments
-    
+
     Args:
         tool_name: Name of the tool function
         tool_args: Dictionary of arguments
-    
+
     Returns:
         The result of the tool execution
     """

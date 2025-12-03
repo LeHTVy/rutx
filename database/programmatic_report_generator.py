@@ -582,12 +582,150 @@ class ProgrammaticReportGenerator:
         }
 
     @staticmethod
+    def generate_4stage_workflow_report(stage1_dns: Optional[Dict[str, Any]],
+                                         stage2_shodan: Optional[Dict[str, Any]],
+                                         stage3_naabu: Optional[Dict[str, Any]],
+                                         stage4_masscan: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Generate programmatic report from 4-stage port scan workflow.
+
+        Args:
+            stage1_dns: DNS resolution results
+            stage2_shodan: Shodan OSINT enrichment results
+            stage3_naabu: Naabu port scan results
+            stage4_masscan: Masscan port scan results
+
+        Returns:
+            Dict with 'content' (markdown) and 'structured_data' (JSON)
+        """
+        content = "## 4-STAGE PORT SCAN WORKFLOW REPORT\n\n"
+
+        # Stage 1: DNS Resolution
+        content += "### STAGE 1: DNS RESOLUTION\n\n"
+        if stage1_dns and stage1_dns.get("success"):
+            subdomains_count = stage1_dns.get("subdomains_count", 0)
+            unique_ips = stage1_dns.get("unique_ips", [])
+            public_ips = stage1_dns.get("public_ips", [])
+            dedup_savings = stage1_dns.get("deduplication_savings", 0)
+
+            content += f"- **Subdomains Resolved**: {subdomains_count}\n"
+            content += f"- **Unique IPs**: {len(unique_ips)}\n"
+            content += f"- **Public IPs**: {len(public_ips)}\n"
+            content += f"- **Deduplication Savings**: {dedup_savings} ({(dedup_savings/subdomains_count*100):.1f}%)\n\n"
+
+            if public_ips[:5]:
+                content += "**Sample Public IPs**:\n"
+                for ip in public_ips[:5]:
+                    content += f"- {ip}\n"
+                if len(public_ips) > 5:
+                    content += f"- ... and {len(public_ips) - 5} more\n"
+                content += "\n"
+        else:
+            content += "❌ Stage 1 failed or no data\n\n"
+
+        # Stage 2: OSINT Enrichment
+        content += "### STAGE 2: OSINT ENRICHMENT (Shodan)\n\n"
+        if stage2_shodan and stage2_shodan.get("success"):
+            stats = stage2_shodan.get("stats", {})
+            content += f"- **IPs Queried**: {stats.get('total', 0)}\n"
+            content += f"- **Successful**: {stats.get('successful', 0)}\n"
+            content += f"- **Not Found**: {stats.get('not_found', 0)}\n"
+            content += f"- **Failed**: {stats.get('failed', 0)}\n"
+            content += f"- **Total Ports Discovered**: {stats.get('total_ports', 0)}\n"
+            content += f"- **Total Services**: {stats.get('total_services', 0)}\n"
+            content += f"- **Total CVEs**: {stats.get('total_vulns', 0)}\n"
+
+            if stats.get('high_threat_ips'):
+                content += f"\n⚠️ **High Threat IPs**: {stats.get('high_threat_count', 0)}\n"
+                for ip in stats.get('high_threat_ips', [])[:3]:
+                    content += f"- {ip}\n"
+            content += "\n"
+        else:
+            content += "❌ Stage 2 failed or no data\n\n"
+
+        # Stage 3: Naabu Scanning
+        content += "### STAGE 3: NAABU PORT SCANNING\n\n"
+        if stage3_naabu and stage3_naabu.get("success"):
+            content += f"- **Targets Scanned**: {stage3_naabu.get('targets_count', 0)}\n"
+            content += f"- **Targets with Open Ports**: {stage3_naabu.get('targets_with_open_ports', 0)}\n"
+            content += f"- **Total Open Ports**: {stage3_naabu.get('total_open_ports', 0)}\n"
+            content += f"- **Elapsed Time**: {stage3_naabu.get('elapsed_seconds', 0)}s\n\n"
+
+            results = stage3_naabu.get("results", {})
+            if results:
+                content += "**Sample Results**:\n"
+                for ip, ports in list(results.items())[:5]:
+                    content += f"- {ip}: {len(ports)} ports → {', '.join(map(str, sorted(ports)[:10]))}\n"
+                if len(results) > 5:
+                    content += f"- ... and {len(results) - 5} more targets\n"
+                content += "\n"
+        else:
+            content += "❌ Stage 3 failed or no data\n\n"
+
+        # Stage 4: Masscan Verification
+        content += "### STAGE 4: MASSCAN VERIFICATION\n\n"
+        if stage4_masscan and stage4_masscan.get("success"):
+            content += f"- **Targets Scanned**: {stage4_masscan.get('targets_count', 0)}\n"
+            content += f"- **Targets with Open Ports**: {stage4_masscan.get('targets_with_open_ports', 0)}\n"
+            content += f"- **Total Open Ports**: {stage4_masscan.get('total_open_ports', 0)}\n"
+            content += f"- **Elapsed Time**: {stage4_masscan.get('elapsed_seconds', 0)}s\n\n"
+
+            results = stage4_masscan.get("results", {})
+            if results:
+                content += "**Sample Results**:\n"
+                for ip, ports in list(results.items())[:5]:
+                    port_list = [p['port'] if isinstance(p, dict) else p for p in ports]
+                    content += f"- {ip}: {len(ports)} ports → {', '.join(map(str, sorted(port_list)[:10]))}\n"
+                if len(results) > 5:
+                    content += f"- ... and {len(results) - 5} more targets\n"
+                content += "\n"
+        else:
+            content += "❌ Stage 4 failed or no data\n\n"
+
+        # Summary
+        content += "## WORKFLOW SUMMARY\n\n"
+        total_targets = stage1_dns.get("subdomains_count", 0) if stage1_dns else 0
+        unique_ips_count = len(stage1_dns.get("unique_ips", [])) if stage1_dns else 0
+        shodan_ports = stage2_shodan.get("stats", {}).get("total_ports", 0) if stage2_shodan else 0
+        naabu_ports = stage3_naabu.get("total_open_ports", 0) if stage3_naabu else 0
+        masscan_ports = stage4_masscan.get("total_open_ports", 0) if stage4_masscan else 0
+
+        content += f"- **Original Subdomains**: {total_targets}\n"
+        content += f"- **Deduplicated to**: {unique_ips_count} unique IPs\n"
+        content += f"- **OSINT Ports (Shodan)**: {shodan_ports}\n"
+        content += f"- **Discovered Ports (Naabu)**: {naabu_ports}\n"
+        content += f"- **Verified Ports (Masscan)**: {masscan_ports}\n"
+
+        # Structured data
+        structured_data = {
+            "workflow": "4-stage",
+            "stage1_dns": stage1_dns,
+            "stage2_shodan": stage2_shodan,
+            "stage3_naabu": stage3_naabu,
+            "stage4_masscan": stage4_masscan,
+            "summary": {
+                "original_targets": total_targets,
+                "unique_ips": unique_ips_count,
+                "osint_ports": shodan_ports,
+                "discovered_ports": naabu_ports,
+                "verified_ports": masscan_ports
+            }
+        }
+
+        return {
+            "content": content,
+            "structured_data": structured_data,
+            "report_type": "4stage_workflow",
+            "title": "4-Stage Port Scan Workflow Report"
+        }
+
+    @staticmethod
     def generate_report(tool_name: str, *results) -> Optional[Dict[str, Any]]:
         """
         Generate a programmatic report for any tool.
 
         Args:
-            tool_name: Name of the tool (nmap, masscan, naabu, subdomain, shodan)
+            tool_name: Name of the tool (nmap, masscan, naabu, subdomain, shodan, 4stage)
             *results: Tool result(s) - varies by tool
 
         Returns:
@@ -605,6 +743,16 @@ class ProgrammaticReportGenerator:
             amass_result = results[0] if len(results) > 0 else None
             bbot_result = results[1] if len(results) > 1 else None
             return ProgrammaticReportGenerator.generate_subdomain_report(amass_result, bbot_result)
+
+        if tool_name == "4stage" or tool_name == "4stage_workflow":
+            # Special case: takes 4 results (dns, shodan, naabu, masscan)
+            stage1_dns = results[0] if len(results) > 0 else None
+            stage2_shodan = results[1] if len(results) > 1 else None
+            stage3_naabu = results[2] if len(results) > 2 else None
+            stage4_masscan = results[3] if len(results) > 3 else None
+            return ProgrammaticReportGenerator.generate_4stage_workflow_report(
+                stage1_dns, stage2_shodan, stage3_naabu, stage4_masscan
+            )
 
         generator = generators.get(tool_name)
         if generator and len(results) > 0:
