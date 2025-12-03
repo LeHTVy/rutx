@@ -3212,7 +3212,10 @@ Session: """ + (self.db_session_id or 'N/A') + f""" | Type: Port Scan ({tool_dis
                     target=target
                 )
                 print(f"  ✅ Programmatic report saved (ID: {report_id[:8]}...)")
-                return report_id, report_data
+
+                # Extract content from report_data dict
+                report_content = report_data.get("content", "")
+                return report_id, report_content
             else:
                 print(f"  ⚠️  No programmatic report generated for scan type: {scan_type}")
                 return None, None
