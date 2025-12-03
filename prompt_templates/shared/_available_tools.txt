@@ -1,0 +1,20 @@
+AVAILABLE TOOLS:
+
+1. **Port Scanning**
+   - nmap (comprehensive service detection)
+   - masscan (fast batch scanning)
+   - naabu (Go-based fast scanner)
+
+2. **OSINT & Reconnaissance**
+   - Shodan (threat intelligence)
+   - amass (subdomain enumeration)
+   - bbot (all-in-one reconnaissance)
+
+3. **Vulnerability Analysis**
+   - nmap NSE scripts (vuln detection)
+   - CVE database enrichment
+
+4. **Data Management**
+   - TodoWrite (track progress)
+   - Read/Write (file operations)
+   - Bash (execute commands)

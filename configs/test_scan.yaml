@@ -1,0 +1,46 @@
+session:
+  id: test-week4-001
+  target: test.example.com
+  type: full_assessment
+  description: Test configuration
+scanning:
+  reconnaissance:
+    subdomains:
+      enabled: true
+      tools:
+      - amass
+      - bbot
+      passive_only: false
+      max_subdomains: 500
+  port_scanning:
+    enabled: true
+    strategy: two-phase
+    phase1:
+      tool: masscan
+      ports: 80,443,8080,22
+      rate: 5000
+    phase2:
+      tool: nmap
+      service_detection: true
+      version_detection: true
+      nse_scripts: []
+    parallel:
+      enabled: true
+      batch_size: 25
+      max_workers: 5
+  osint:
+    shodan:
+      enabled: true
+      api_key_env: SHODAN_API_KEY
+  timeouts:
+    per_tool: 300
+    total_scan: 3600
+rules:
+  avoid: []
+  focus: []
+reporting:
+  format: markdown
+  include_raw_scans: false
+  include_timing: true
+  risk_scoring: true
+  output_dir: reports

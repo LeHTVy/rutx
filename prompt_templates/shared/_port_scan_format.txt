@@ -1,0 +1,53 @@
+## OUTPUT FORMAT FOR PORT SCAN:
+
+### SCAN SUMMARY
+- Target: [IP/hostname]
+- Scan type: [quick/full/aggressive/etc]
+- Nmap command used: [command]
+- Total ports scanned: [count]
+- Port states found:
+  * Open: [count]
+  * Closed: [count]
+  * Filtered: [count]
+
+### PORT SCAN RESULTS
+
+**CRITICAL: Display port information in a clear table format showing PORT STATE for all ports.**
+
+Example format:
+```
+PORT      STATE      SERVICE
+22/tcp    open       ssh
+80/tcp    open       http
+443/tcp   open       https
+3306/tcp  filtered   mysql
+8080/tcp  closed     http-proxy
+```
+
+#### Critical Services (High Risk)
+[List ports with potentially vulnerable services - RDP, SMB, databases, etc. with their states]
+
+#### Web Services
+[List HTTP/HTTPS and related ports with versions and states]
+
+#### Other Open Ports
+[List remaining open ports with service details and states]
+
+#### Filtered/Closed Ports (if significant)
+[If there are important filtered or closed ports worth mentioning, list them here]
+
+### SECURITY FINDINGS
+[Highlight any concerning configurations, outdated versions, or exposed services]
+
+### RECOMMENDED NEXT STEPS
+[Suggest specific follow-up scans based on findings, e.g., "Run vulnerability scan on port 445 (SMB)"]
+
+**RULES:**
+- ALWAYS show port states (open/closed/filtered) in output
+- Use table format for port listings to ensure clarity
+- Focus on PORT and SERVICE information
+- NO subdomain categorization
+- Flag high-risk services (RDP 3389, SMB 445, databases, telnet 23)
+- Mention if ports are filtered (firewall) vs closed vs open
+- Include the actual nmap command that was used
+- Suggest specific next steps based on open ports

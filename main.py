@@ -130,43 +130,43 @@ def print_system_info():
     tool_categories = get_tool_categories()
     total_tools = len(get_all_tool_names())
 
-    print(f"\n{Colors.BOLD}{'─'*width}{Colors.RESET}")
+    print(f"\n{Colors.BOLD}{'-'*width}{Colors.RESET}")
 
     # Left Column: Model & Tools | Right Column: Usage
     left_lines = []
     right_lines = []
 
     # Left side - Model Info
-    left_lines.append(f"{Colors.CYAN}▸ MODEL{Colors.RESET}")
+    left_lines.append(f"{Colors.CYAN}> MODEL{Colors.RESET}")
     if ollama_ok:
-        left_lines.append(f"  {Colors.GREEN}✓{Colors.RESET} Ollama: {Colors.GREEN}Connected{Colors.RESET}")
+        left_lines.append(f"  {Colors.GREEN}[OK]{Colors.RESET} Ollama: {Colors.GREEN}Connected{Colors.RESET}")
         left_lines.append(f"  {Colors.DIM}Active:{Colors.RESET} {MODEL_NAME}")
         if models:
             left_lines.append(f"  {Colors.DIM}Available:{Colors.RESET} {len(models)} models")
     else:
-        left_lines.append(f"  {Colors.RED}✗{Colors.RESET} Ollama: {Colors.RED}Not Connected{Colors.RESET}")
+        left_lines.append(f"  {Colors.RED}[X]{Colors.RESET} Ollama: {Colors.RED}Not Connected{Colors.RESET}")
         left_lines.append(f"  {Colors.DIM}Run: ollama serve{Colors.RESET}")
 
     left_lines.append("")
-    left_lines.append(f"{Colors.CYAN}▸ TOOLS ({total_tools}){Colors.RESET}")
+    left_lines.append(f"{Colors.CYAN}> TOOLS ({total_tools}){Colors.RESET}")
 
     for category, tools in tool_categories.items():
         if tools:
             left_lines.append(f"  {Colors.DIM}{category}:{Colors.RESET} {len(tools)}")
 
     # Right side - Usage Info
-    right_lines.append(f"{Colors.CYAN}▸ HOW IT WORKS{Colors.RESET}")
+    right_lines.append(f"{Colors.CYAN}> HOW IT WORKS{Colors.RESET}")
     right_lines.append(f"  {Colors.GREEN}1.{Colors.RESET} AI selects optimal security tools")
     right_lines.append(f"  {Colors.GREEN}2.{Colors.RESET} Executes scans & saves to DB")
     right_lines.append(f"  {Colors.GREEN}3.{Colors.RESET} Analyzes & generates report")
     right_lines.append("")
-    right_lines.append(f"{Colors.CYAN}▸ CONVERSATIONAL AI{Colors.RESET}")
+    right_lines.append(f"{Colors.CYAN}> CONVERSATIONAL AI{Colors.RESET}")
     right_lines.append(f"  {Colors.DIM}»{Colors.RESET} Find subdomains of example.com")
     right_lines.append(f"  {Colors.DIM}»{Colors.RESET} Port scan {Colors.YELLOW}those targets{Colors.RESET}")
     right_lines.append(f"  {Colors.DIM}»{Colors.RESET} Check vulns on {Colors.YELLOW}the api subdomain{Colors.RESET}")
     right_lines.append(f"  {Colors.DIM}»{Colors.RESET} Full assessment of 192.168.1.1")
     right_lines.append("")
-    right_lines.append(f"{Colors.CYAN}▸ QUICK COMMANDS{Colors.RESET}")
+    right_lines.append(f"{Colors.CYAN}> QUICK COMMANDS{Colors.RESET}")
     right_lines.append(f"  {Colors.DIM}help{Colors.RESET}    Help & tips")
     right_lines.append(f"  {Colors.DIM}tools{Colors.RESET}   List 39 tools")
     right_lines.append(f"  {Colors.DIM}clear{Colors.RESET}   Clear screen")
@@ -190,7 +190,7 @@ def print_system_info():
         if padding < 0:
             padding = 2
 
-        print(f"  {left}{' ' * padding}{Colors.DIM}│{Colors.RESET}  {right}")
+        print(f"  {left}{' ' * padding}{Colors.DIM}|{Colors.RESET}  {right}")
 
     print(f"{Colors.BOLD}{'─'*width}{Colors.RESET}")
 
@@ -199,7 +199,7 @@ def print_phase_header(phase: int, title: str):
     """Print phase header"""
     icons = {1: "📦", 2: "⚙️", 3: "📊"}
     print(f"\n{Colors.YELLOW}{'='*50}{Colors.RESET}")
-    print(f"{icons.get(phase, '▸')} {Colors.BOLD}PHASE {phase}: {title}{Colors.RESET}")
+    print(f"{icons.get(phase, '>')} {Colors.BOLD}PHASE {phase}: {title}{Colors.RESET}")
     print(f"{Colors.YELLOW}{'='*50}{Colors.RESET}")
 
 
@@ -211,7 +211,7 @@ def print_tool_list():
 
     for category, tools in categories.items():
         if tools:
-            print(f"{Colors.YELLOW}▸ {category}{Colors.RESET}")
+            print(f"{Colors.YELLOW}> {category}{Colors.RESET}")
             for tool in sorted(tools):
                 print(f"  {Colors.DIM}•{Colors.RESET} {tool}")
             print()
@@ -222,7 +222,7 @@ def print_help():
     print(f"""
 {Colors.CYAN}{Colors.BOLD}SNODE AI Help{Colors.RESET}
 
-{Colors.YELLOW}▸ How It Works{Colors.RESET}
+{Colors.YELLOW}> How It Works{Colors.RESET}
   SNODE AI uses a 3-phase system:
 
   {Colors.GREEN}Phase 1:{Colors.RESET} Tool Selection (BlackBox)
@@ -237,20 +237,20 @@ def print_help():
     - AI analyzes scan results
     - Generates vulnerability report
 
-{Colors.YELLOW}▸ Example Prompts{Colors.RESET}
+{Colors.YELLOW}> Example Prompts{Colors.RESET}
   • "Scan all ports on 192.168.1.100"
   • "Find subdomains of example.com"
   • "Perform vulnerability scan on 10.0.0.1"
   • "Get threat intel for suspicious IP 1.2.3.4"
   • "Comprehensive security assessment of target.com"
 
-{Colors.YELLOW}▸ Conversational Context (NEW){Colors.RESET}
+{Colors.YELLOW}> Conversational Context (NEW){Colors.RESET}
   Reference previous scan results:
   • "Find subdomains of example.com" → "port scan those subdomains"
   • "Scan 192.168.1.1" → "check vulnerabilities on that target"
   • Use keywords: "those", "them", "the list", "previous scan"
 
-{Colors.YELLOW}▸ Commands{Colors.RESET}
+{Colors.YELLOW}> Commands{Colors.RESET}
   • help      - Show this help message
   • clear     - Clear the screen
   • tools     - List all available scanning tools
@@ -259,13 +259,13 @@ def print_help():
   • banner    - Show the SNODE banner
   • quit/exit - Exit the program
 
-{Colors.YELLOW}▸ Keyboard Shortcuts{Colors.RESET}
+{Colors.YELLOW}> Keyboard Shortcuts{Colors.RESET}
   • ↑ / ↓     - Navigate command history
   • ← / →     - Move cursor left/right
   • Ctrl+C    - Interrupt current operation
   • Tab       - Auto-complete (when available)
 
-{Colors.YELLOW}▸ Tips{Colors.RESET}
+{Colors.YELLOW}> Tips{Colors.RESET}
   • Be specific about targets (IP, domain, URL)
   • Mention scan type if needed (quick, full, vuln)
   • Results are saved for later analysis

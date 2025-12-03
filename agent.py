@@ -37,6 +37,21 @@ from database import (
 from database.programmatic_report_generator import ProgrammaticReportGenerator
 from prompts import get_phase1_prompt, get_phase3_prompt, get_phase4_prompt
 
+# Audit logging for crash recovery
+from audit.logger import AuditLogger, SessionMetrics, create_audit_logger
+
+# Multi-phase orchestration for queue-based exploitation
+from orchestration.queue_manager import ExploitQueue, QueueItem, create_exploit_queue
+from orchestration.validators import PhaseValidator, validate_phase_output, AgentValidator
+from orchestration.session_mutex import SessionMutex, ParallelScanner, get_session_mutex
+
+# Configuration management
+try:
+    from scan_configs.scan_config import ScanConfig, load_scan_config
+    SCAN_CONFIG_AVAILABLE = True
+except ImportError:
+    CONFIG_AVAILABLE = False
+
 # SNODE Integration (Tracing + Guardrails)
 try:
     from utils.tracing import trace_ollama_call
@@ -64,7 +79,7 @@ class SNODEAgent:
         Phase 4: Report Generation (LLM formats for audience)
     """
 
-    def __init__(self, model: str = None):
+    def __init__(self, model: str = None, target: str = None):
         self.model = model or MODEL_NAME
         self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.conversation_history = []
@@ -74,11 +89,26 @@ class SNODEAgent:
         self.is_subdomain_scan = False  # Track if this is a subdomain enumeration scan
         self.high_value_targets = set()  # Track high-value subdomains for smart scan prioritization
         self.critical_targets = set()  # Track CRITICAL targets (api, admin, dev) for comprehensive scans
-        
+
         # OSINT Intelligence (for crown jewel identification)
         self.osint_intelligence = None  # Stores OSINT analysis results
         self.crown_jewels = set()  # CROWN JEWEL targets identified from business intelligence
         self.business_context = ""  # Business context scraped from target website
+
+        # Audit logging for crash recovery
+        self.audit_logger = None
+        self.metrics = None
+        self.target = target or "unknown_target"
+
+        # Multi-phase orchestration (queue-based exploitation)
+        self.exploit_queue = None  # Initialized when audit logger is created
+
+        # Parallel scanning (Week 3)
+        self.session_mutex = get_session_mutex()
+        self.parallel_scanner = None  # Initialized when needed
+
+        # Configuration-driven scanning (Week 4)
+        self.scan_config = None  # Can be loaded from YAML file
 
         # Enhanced persistence (4-phase flow)
         self.db_session_id = None  # Database ScanSession ID
@@ -1240,6 +1270,14 @@ Select the most appropriate tool for the user's request."""
             print(f"\n[{i}/{len(selected_tools)}] Running: {tool_name}")
             print(f"    Args: {json.dumps(tool_args, indent=2)[:100]}...")
 
+            # Log tool start
+            if self.audit_logger:
+                self.audit_logger.log_event('tool_start', {
+                    'tool': tool_name,
+                    'args': tool_args
+                })
+                self.metrics.start_timer(f'tool_{tool_name}')
+
             # Execute the tool
             try:
                 result = execute_tool(tool_name, tool_args)
@@ -1302,6 +1340,15 @@ Select the most appropriate tool for the user's request."""
                     "args": tool_args,
                     "result": result
                 })
+
+                # Log tool completion
+                if self.audit_logger:
+                    tool_elapsed = self.metrics.end_timer(f'tool_{tool_name}')
+                    self.audit_logger.log_event('tool_end', {
+                        'tool': tool_name,
+                        'success': result.get('success', False),
+                        'elapsed_seconds': tool_elapsed
+                    })
 
                 if result.get("success"):
                     print(f"    ✅ Success")
@@ -3487,46 +3534,146 @@ Session: """ + (self.db_session_id or 'N/A') + f""" | Type: Port Scan ({tool_dis
         """
         start_time = datetime.now()
 
+        # Initialize audit logger if not already created
+        if not self.audit_logger:
+            # Extract target from user prompt (simple heuristic)
+            self.target = self._extract_target_from_prompt(user_prompt) or "unknown_target"
+            self.audit_logger = create_audit_logger(self.session_id, self.target)
+            self.metrics = SessionMetrics(self.audit_logger)
+
+            # Initialize exploit queue for multi-phase orchestration
+            self.exploit_queue = create_exploit_queue(self.session_id)
+
+            # Initialize parallel scanner for concurrent operations
+            self.parallel_scanner = ParallelScanner(self.session_id, self.session_mutex)
+
+        # Log session start
+        self.audit_logger.log_event('session_start', {
+            'user_prompt': user_prompt,
+            'model': self.model
+        })
+        self.metrics.start_timer('full_scan')
+
         # Reset scan type flags for new scan to prevent state leakage
         self.is_subdomain_scan = False
 
         # Phase 1: Tool Selection
         self.current_phase = IterationPhase.TOOL_SELECTION
+        self.audit_logger.log_event('phase_start', {'phase': 'phase1_tool_selection'})
+        self.metrics.start_timer('phase1')
+
         selected_tools, reasoning = self.phase_1_tool_selection(user_prompt)
 
-        if not selected_tools:
+        phase1_elapsed = self.metrics.end_timer('phase1')
+
+        # Validate Phase 1 output
+        phase1_output = {
+            'selected_tools': selected_tools if selected_tools else [],
+            'reasoning': reasoning
+        }
+        is_valid, validation_errors = validate_phase_output('phase1_tool_selection', phase1_output)
+
+        self.audit_logger.log_event('phase_end', {
+            'phase': 'phase1_tool_selection',
+            'success': bool(selected_tools),
+            'tools_selected': len(selected_tools) if selected_tools else 0,
+            'elapsed_seconds': phase1_elapsed,
+            'validation_passed': is_valid,
+            'validation_errors': validation_errors if not is_valid else []
+        })
+
+        if not selected_tools or not is_valid:
+            error_msg = "No tools selected" if not selected_tools else f"Phase 1 validation failed: {', '.join(validation_errors)}"
+            print(f"\n  ⚠️  {error_msg}")
             return {
                 "success": False,
                 "phase": 1,
-                "error": "No tools selected",
-                "reasoning": reasoning
+                "error": error_msg,
+                "reasoning": reasoning,
+                "validation_errors": validation_errors if not is_valid else []
             }
 
         # Phase 2: Execution
         self.current_phase = IterationPhase.EXECUTION
+        self.audit_logger.log_event('phase_start', {'phase': 'phase2_execution'})
+        self.metrics.start_timer('phase2')
+
         execution_results = self.phase_2_execution(selected_tools)
-        
+
+        phase2_elapsed = self.metrics.end_timer('phase2')
+
+        # Validate Phase 2 output
+        phase2_output = {
+            'execution_results': execution_results
+        }
+        is_valid, validation_errors = validate_phase_output('phase2_execution', phase2_output)
+
+        self.audit_logger.log_event('phase_end', {
+            'phase': 'phase2_execution',
+            'success': True,
+            'tools_executed': len(execution_results),
+            'elapsed_seconds': phase2_elapsed,
+            'validation_passed': is_valid,
+            'validation_errors': validation_errors if not is_valid else []
+        })
+
+        if not is_valid:
+            print(f"\n  ⚠️  Phase 2 validation warnings: {', '.join(validation_errors)}")
+            # Continue anyway - Phase 2 validation is informational only
+
         # NEW: Gather OSINT Intelligence after subdomain enumeration
         # This identifies crown jewels BEFORE user says "port scan those"
         if self.is_subdomain_scan:
             # Extract discovered subdomains from execution results
             all_subdomains = []
             domain = None
-            
+
             for result in execution_results:
                 if result["result"].get("subdomains"):
                     all_subdomains.extend(result["result"]["subdomains"])
                     # Get domain from first result
                     if not domain:
                         domain = result.get("args", {}).get("domain") or result["result"].get("target")
-            
+
             # Gather OSINT intelligence if we have subdomains
             if all_subdomains and domain:
                 self._gather_osint_intelligence(domain, all_subdomains)
 
         # Phase 3: Intelligence Analysis
         self.current_phase = IterationPhase.ANALYSIS
+        self.audit_logger.log_event('phase_start', {'phase': 'phase3_analysis'})
+        self.metrics.start_timer('phase3')
+
         analysis_report = self.phase_3_analysis(execution_results)
+
+        phase3_elapsed = self.metrics.end_timer('phase3')
+
+        # Basic Phase 3 validation (checks if report exists and is substantial)
+        # Note: Full validation would require parsing the markdown report
+        phase3_valid = bool(analysis_report) and len(analysis_report.strip()) > 100
+        phase3_warnings = []
+        if not phase3_valid:
+            if not analysis_report:
+                phase3_warnings.append("No analysis report generated")
+            elif len(analysis_report.strip()) <= 100:
+                phase3_warnings.append("Analysis report too short (min 100 chars)")
+
+        # Check for hallucination keywords in report
+        hallucination_keywords = ['theoretical', 'may be vulnerable', 'could potentially', 'might have', 'appears to suggest']
+        for keyword in hallucination_keywords:
+            if keyword in analysis_report.lower():
+                phase3_warnings.append(f"Report contains uncertain language: '{keyword}'")
+
+        self.audit_logger.log_event('phase_end', {
+            'phase': 'phase3_analysis',
+            'success': bool(analysis_report),
+            'elapsed_seconds': phase3_elapsed,
+            'validation_passed': phase3_valid and len(phase3_warnings) == 0,
+            'validation_warnings': phase3_warnings
+        })
+
+        if phase3_warnings:
+            print(f"\n  ⚠️  Phase 3 validation warnings: {', '.join(phase3_warnings)}")
 
         # Phase 4: Report Generation (ONLY for actual subdomain enumeration scans)
         # Detect scan type based on tools used, not the flag (which may be stale)
@@ -3564,6 +3711,38 @@ Session: """ + (self.db_session_id or 'N/A') + f""" | Type: Port Scan ({tool_dis
         else:
             phases["phase_3_analysis"] = analysis_report
 
+        # Log session completion
+        full_scan_elapsed = self.metrics.end_timer('full_scan')
+        self.audit_logger.log_event('session_end', {
+            'status': 'completed',
+            'elapsed_seconds': elapsed
+        })
+
+        # Update final session state
+        self.audit_logger.update_session_state({
+            'status': 'completed',
+            'completed_phases': ['phase1_tool_selection', 'phase2_execution', 'phase3_analysis'],
+            'completed_tools': [t["name"] for t in selected_tools if any(
+                r["tool"] == t["name"] and r["result"].get("success")
+                for r in execution_results
+            )],
+            'failed_tools': [t["name"] for t in selected_tools if any(
+                r["tool"] == t["name"] and not r["result"].get("success")
+                for r in execution_results
+            )],
+            'risk_score': enriched_summary.get("risk_score", 0),
+            'risk_level': enriched_summary.get("risk_level", "N/A"),
+            'total_elapsed_seconds': elapsed
+        })
+
+        # Get exploit queue statistics
+        exploit_queue_stats = None
+        if self.exploit_queue:
+            try:
+                exploit_queue_stats = self.exploit_queue.get_stats()
+            except Exception as e:
+                print(f"  ⚠️  Failed to get exploit queue stats: {e}")
+
         result = {
             "success": True,
             "session_id": self.session_id,
@@ -3574,7 +3753,9 @@ Session: """ + (self.db_session_id or 'N/A') + f""" | Type: Port Scan ({tool_dis
             "risk_score": enriched_summary.get("risk_score", 0),
             "risk_level": enriched_summary.get("risk_level", "N/A"),
             "phases": phases,
-            "enriched_summary": enriched_summary
+            "enriched_summary": enriched_summary,
+            "audit_log_dir": str(self.audit_logger.session_dir) if self.audit_logger else None,
+            "exploit_queue_stats": exploit_queue_stats
         }
 
         return result

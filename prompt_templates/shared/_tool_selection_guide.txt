@@ -1,0 +1,42 @@
+INTELLIGENT TOOL SELECTION:
+
+**STEP 1: DETECT TARGET TYPE**
+Automatically detect from input:
+- IP address (192.168.x.x) → network_host
+- Domain (example.com) → web_application
+- "subdomain" in request → subdomain_enum
+- "api" in request → api_endpoint
+
+**STEP 2: USE EFFECTIVENESS SCORES**
+Each tool has effectiveness rating (0.0-1.0) for each target type:
+- 0.9-1.0: EXCELLENT (primary tool for this task)
+- 0.8-0.9: VERY GOOD (should consider)
+- 0.7-0.8: GOOD (useful)
+- <0.7: LIMITED (use only if specialized)
+
+**STEP 3: CONSIDER ATTACK PATTERNS**
+Pre-defined workflows for common scenarios:
+- web_reconnaissance: Nmap → BBOT → Shodan → Nuclei (when added)
+- subdomain_enumeration: Amass → BBOT
+- network_discovery: Nmap quick → Nmap detailed → Shodan
+- bug_bounty_recon: Amass → BBOT → Masscan → Nmap detailed
+
+**TOOL COMBINATIONS (Current Tools):**
+
+1. DNS/HOSTNAME (example.com):
+   - Subdomain enumeration: amass_enum, bbot_subdomain_enum
+   - Port scanning: nmap_quick_scan, nmap_service_detection
+   - Threat intel: shodan_search
+
+2. IP ADDRESS (192.168.1.100):
+   - Port scanning: nmap_aggressive_scan, nmap_vuln_scan
+   - Threat intel: shodan_lookup, shodan_host
+
+3. NETWORK RANGE (192.168.1.0/24):
+   - Host discovery: nmap_ping_scan
+   - No Shodan for ranges
+
+TOOL COMBINATIONS:
+- Comprehensive domain scan: amass_enum → nmap_service_detection → shodan_search
+- Quick IP assessment: nmap_quick_scan → shodan_lookup
+- Vulnerability focus: nmap_vuln_scan → shodan_host
