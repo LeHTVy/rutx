@@ -1145,6 +1145,8 @@ Select the most appropriate tool for the user's request."""
                 
                 # Initialize audit logging for crash recovery
                 from audit.logger import create_audit_logger, SessionMetrics
+                from orchestration.queue_manager import create_exploit_queue
+                
                 try:
                     self.audit_logger = create_audit_logger(
                         session_id=session.id,
@@ -1154,7 +1156,11 @@ Select the most appropriate tool for the user's request."""
                     
                     # Initialize exploit queue (multi-phase orchestration)
                     if self.audit_logger:
-                        self.exploit_queue = create_exploit_queue(self.audit_logger)
+                        # Fix: Pass session_id (str) not audit_logger object
+                        self.exploit_queue = create_exploit_queue(
+                            session_id=session.id,
+                            audit_log_dir=str(self.audit_logger.output_dir)
+                        )
                     
                     print(f"  📋 Audit logging enabled: {self.audit_logger.session_dir}")
                 except Exception as audit_err:
@@ -2300,6 +2306,12 @@ Be specific, actionable, and prioritize by risk level. Reference specific findin
                 services = nmap_data.get("services", [])
                 hosts_discovered = nmap_data.get("hosts_discovered", 0)
                 
+                # Initialize findings lists (needed even if no ports found)
+                critical_findings = []
+                high_risk_findings = []
+                web_findings = []
+                other_findings = []
+                
                 # Build report
                 analysis = f"""## SCAN SUMMARY
 
@@ -2325,11 +2337,6 @@ Be specific, actionable, and prioritize by risk level. Reference specific findin
                     critical_ports_dict = {3306: "MySQL", 5432: "PostgreSQL", 1433: "MSSQL", 3389: "RDP", 445: "SMB", 139: "NetBIOS"}
                     high_risk_ports_dict = {22: "SSH", 21: "FTP", 23: "Telnet", 25: "SMTP", 161: "SNMP"}
                     web_ports_dict = {80: "HTTP", 443: "HTTPS", 8080: "HTTP-Alt", 8443: "HTTPS-Alt", 8000: "HTTP-Alt", 8888: "HTTP-Alt"}
-                    
-                    critical_findings = []
-                    high_risk_findings = []
-                    web_findings = []
-                    other_findings = []
                     
                     for port_info in open_ports:
                         port_num = port_info.get("port", 0)
