@@ -2,7 +2,12 @@
 Configuration file for SNODE AI - Wireless Security Scanning Framework
 Centralized settings for all agents and tools
 
-SNODE AI uses LOCAL Ollama LLM (no cloud/OpenAI dependencies)
+SNODE AI supports multiple LLM providers:
+- Ollama (Local, FREE, PRIVATE)
+- OpenAI GPT (Cloud, PAID)
+- Anthropic Claude (Cloud, PAID)
+- Google Gemini (Cloud, FREE tier)
+- Groq (Cloud, FREE tier, FAST)
 
 Active Tools:
 - Nmap: Network scanning and service detection
@@ -13,14 +18,27 @@ Active Tools:
 - Output Manager: Handles large scan outputs efficiently
 """
 
-# Ollama AI Configuration
-OLLAMA_ENDPOINT = "http://localhost:11434/api/chat"
+# LLM Configuration (Dynamic - loaded from llm_config.json)
+# Use llm_config.py for interactive setup
+try:
+    from llm_config import load_llm_config
+    _llm_config = load_llm_config()
+    OLLAMA_ENDPOINT = _llm_config.get("endpoint", "http://localhost:11434/api/chat")
+    MODEL_NAME = _llm_config.get("model", "llama3.2:latest")
+    LLM_PROVIDER = _llm_config.get("provider", "ollama")
+    TIMEOUT_OLLAMA = _llm_config.get("timeout", 1800)
+except Exception as e:
+    # Fallback to defaults if config not found
+    print(f"⚠️  LLM config not loaded: {e}. Using defaults.")
+    OLLAMA_ENDPOINT = "http://localhost:11434/api/chat"
+    MODEL_NAME = "llama3.2:latest"
+    LLM_PROVIDER = "ollama"
+    TIMEOUT_OLLAMA = 1800
+
 OLLAMA_LIST_ENDPOINT = "http://localhost:11434/api/tags"
-MODEL_NAME = "llama3.2:latest"  
 
 # Timeout Settings (in seconds)
-TIMEOUT_NMAP = 1800  # 30 minutes (was 20, increased for comprehensive scans)
-TIMEOUT_OLLAMA = 1800 # 30 minutes 
+TIMEOUT_NMAP = 1800  # 30 minutes (was 20, increased for comprehensive scans) 
 TIMEOUT_AMASS = 1200  # 20 minutes
 TIMEOUT_BBOT = 1200   # 20 minutes  
 

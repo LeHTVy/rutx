@@ -99,23 +99,47 @@ def get_tool_categories():
 
 
 def print_banner():
-    """Print SNODE AI banner"""
+    """Print SNODE AI banner - centered and prominent"""
     width = get_terminal_width()
-
-    banner = f"""
-{Colors.CYAN}{Colors.BOLD}
-███████╗███╗   ██╗ ██████╗ ██████╗ ███████╗
-██╔════╝████╗  ██║██╔═══██╗██╔══██╗██╔════╝
-███████╗██╔██╗ ██║██║   ██║██║  ██║█████╗
-╚════██║██║╚██╗██║██║   ██║██║  ██║██╔══╝
-███████║██║ ╚████║╚██████╔╝██████╔╝███████╗
-╚══════╝╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚══════╝{Colors.RESET}
-{Colors.DIM}                                        AI{Colors.RESET}
-{Colors.YELLOW}═══════════════════════════════════════════{Colors.RESET}
-{Colors.GREEN}  Security Node - AI Penetration Testing{Colors.RESET}
-{Colors.YELLOW}═══════════════════════════════════════════{Colors.RESET}
-"""
-    print(banner)
+    
+    # ASCII art lines (without color codes for width calculation)
+    logo_lines = [
+        "███████╗███╗   ██╗ ██████╗ ██████╗ ███████╗",
+        "██╔════╝████╗  ██║██╔═══██╗██╔══██╗██╔════╝",
+        "███████╗██╔██╗ ██║██║   ██║██║  ██║█████╗  ",
+        "╚════██║██║╚██╗██║██║   ██║██║  ██║██╔══╝  ",
+        "███████║██║ ╚████║╚██████╔╝██████╔╝███████╗",
+        "╚══════╝╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚══════╝"
+    ]
+    
+    # Calculate padding for centering (based on longest line)
+    logo_width = len(logo_lines[0])
+    padding = max(0, (width - logo_width) // 2)
+    indent = " " * padding
+    
+    # Print with centering
+    print("\n")  # Add top spacing
+    print(f"{Colors.CYAN}{Colors.BOLD}")
+    for line in logo_lines:
+        print(f"{indent}{line}")
+    print(f"{Colors.RESET}")
+    
+    # Center the subtitle
+    subtitle = "AI"
+    sub_padding = " " * ((width - len(subtitle)) // 2)
+    print(f"{Colors.DIM}{sub_padding}{subtitle}{Colors.RESET}")
+    
+    # Center the separator and title
+    separator = "═" * 60
+    sep_padding = " " * ((width - len(separator)) // 2)
+    print(f"{Colors.YELLOW}{sep_padding}{separator}{Colors.RESET}")
+    
+    title = "Security Node - AI Penetration Testing"
+    title_padding = " " * ((width - len(title)) // 2)
+    print(f"{Colors.GREEN}{title_padding}{title}{Colors.RESET}")
+    
+    print(f"{Colors.YELLOW}{sep_padding}{separator}{Colors.RESET}")
+    print()  # Add bottom spacing
 
 
 def print_system_info():

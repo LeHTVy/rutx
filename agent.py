@@ -95,6 +95,16 @@ class SNODEAgent:
         self.crown_jewels = set()  # CROWN JEWEL targets identified from business intelligence
         self.business_context = ""  # Business context scraped from target website
 
+        # Initialize unified LLM client (supports multiple providers)
+        try:
+            from llm_client import get_llm_client
+            self.llm_client = get_llm_client()
+            self.llm_provider = self.llm_client.provider
+        except Exception as e:
+            print(f"⚠️  Failed to initialize LLM client: {e}")
+            self.llm_client = None
+            self.llm_provider = "ollama"
+
         # Audit logging for crash recovery
         self.audit_logger = None
         self.metrics = None
@@ -129,10 +139,32 @@ class SNODEAgent:
         timeout: int = None,
         retry_without_tools: bool = True
     ) -> Dict[str, Any]:
-        """Call Ollama API with retry logic"""
+        """Call LLM API with retry logic (supports multiple providers via unified client)"""
         if timeout is None:
             timeout = TIMEOUT_OLLAMA
 
+        # Use unified LLM client if available
+        if self.llm_client:
+            try:
+                # Note: Tool calling support varies by provider
+                # For now, only Ollama fully supports native tool calling
+                if tools and self.llm_provider != "ollama":
+                    # Fallback to text-based tool selection for non-Ollama providers
+                    return self._call_ollama_text_fallback(messages, tools, timeout)
+
+                # === SNODE TRACING: Wrap LLM call ===
+                if TRACING_AVAILABLE:
+                    user_msg = next((m["content"] for m in messages if m["role"] == "user"), "")
+                    with trace_ollama_call(self.model, user_msg):
+                        return self.llm_client.chat(messages, timeout)
+                else:
+                    return self.llm_client.chat(messages, timeout)
+
+            except Exception as e:
+                print(f"⚠️  LLM client error: {e}")
+                return {"error": str(e)}
+
+        # Fallback to direct Ollama call if client not available
         payload = {
             "model": self.model,
             "messages": messages,
@@ -2299,19 +2331,25 @@ Be specific, actionable, and prioritize by risk level. Reference specific findin
 
             if nmap_data:
                 print(f"  📊 Generating structured Nmap port scan report")
-                
+
                 target = nmap_data.get("target", "Unknown")
                 command = nmap_data.get("command", "N/A")
                 open_ports = nmap_data.get("open_ports", [])
                 services = nmap_data.get("services", [])
                 hosts_discovered = nmap_data.get("hosts_discovered", 0)
-                
+
                 # Initialize findings lists (needed even if no ports found)
+                # MUST be defined here to avoid UnboundLocalError
                 critical_findings = []
                 high_risk_findings = []
                 web_findings = []
                 other_findings = []
-                
+
+                # Define port categorization dicts upfront (needed for analysis later)
+                critical_ports_dict = {3306: "MySQL", 5432: "PostgreSQL", 1433: "MSSQL", 3389: "RDP", 445: "SMB", 139: "NetBIOS"}
+                high_risk_ports_dict = {22: "SSH", 21: "FTP", 23: "Telnet", 25: "SMTP", 161: "SNMP"}
+                web_ports_dict = {80: "HTTP", 443: "HTTPS", 8080: "HTTP-Alt", 8443: "HTTPS-Alt", 8000: "HTTP-Alt", 8888: "HTTP-Alt"}
+
                 # Build report
                 analysis = f"""## SCAN SUMMARY
 
@@ -2325,7 +2363,7 @@ Be specific, actionable, and prioritize by risk level. Reference specific findin
 ## OPEN PORTS
 
 """
-                
+
                 if not open_ports:
                     analysis += "**No open ports detected.**\n\n"
                     analysis += "This could indicate:\n"
@@ -2334,15 +2372,11 @@ Be specific, actionable, and prioritize by risk level. Reference specific findin
                     analysis += "- Host is configured to not respond to scans\n"
                 else:
                     # Categorize ports
-                    critical_ports_dict = {3306: "MySQL", 5432: "PostgreSQL", 1433: "MSSQL", 3389: "RDP", 445: "SMB", 139: "NetBIOS"}
-                    high_risk_ports_dict = {22: "SSH", 21: "FTP", 23: "Telnet", 25: "SMTP", 161: "SNMP"}
-                    web_ports_dict = {80: "HTTP", 443: "HTTPS", 8080: "HTTP-Alt", 8443: "HTTPS-Alt", 8000: "HTTP-Alt", 8888: "HTTP-Alt"}
-                    
                     for port_info in open_ports:
                         port_num = port_info.get("port", 0)
                         service = port_info.get("service", "unknown")
                         state = port_info.get("state", "unknown")
-                        
+
                         if state == "open":
                             if port_num in critical_ports_dict:
                                 critical_findings.append((port_num, service, critical_ports_dict[port_num]))
