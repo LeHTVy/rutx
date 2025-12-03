@@ -354,12 +354,88 @@ def dns_bulk_resolve(subdomains: List[str], save_results: bool = False) -> Dict[
 
 
 # ============================================================================
+# TOOL REGISTRATION
+# ============================================================================
+
+DNS_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "dns_bulk_resolve",
+            "description": "Stage 1 tool: Bulk DNS resolution with IP deduplication for 4-stage workflow. Resolves multiple subdomains to IPs and identifies unique targets.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "subdomains": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of subdomains to resolve"
+                    },
+                    "save_results": {
+                        "type": "boolean",
+                        "description": "Save results for next stage (default: False)"
+                    }
+                },
+                "required": ["subdomains"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "resolve_dns",
+            "description": "Simple DNS resolution for a single domain. Returns A records.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "domain": {
+                        "type": "string",
+                        "description": "Domain name to resolve"
+                    }
+                },
+                "required": ["domain"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reverse_dns_lookup",
+            "description": "Reverse DNS lookup (PTR record) to find hostname from IP address.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ip": {
+                        "type": "string",
+                        "description": "IP address for reverse lookup"
+                    }
+                },
+                "required": ["ip"]
+            }
+        }
+    }
+]
+
+
+def execute_dns_tool(tool_name: str, tool_args: dict):
+    """Execute DNS tool by name"""
+    if tool_name == "dns_bulk_resolve":
+        return dns_bulk_resolve(**tool_args)
+    elif tool_name == "resolve_dns":
+        return resolve_dns(**tool_args)
+    elif tool_name == "reverse_dns_lookup":
+        return reverse_dns_lookup(**tool_args)
+    else:
+        return {"error": f"Unknown DNS tool: {tool_name}"}
+
+
+# ============================================================================
 # Testing
 # ============================================================================
 
 if __name__ == "__main__":
     print("Testing DNS Tools...")
-    
+
     # Test with real subdomains
     test_subs = [
         "www.google.com",
@@ -369,17 +445,17 @@ if __name__ == "__main__":
         "example.com",
         "www.example.com"
     ]
-    
+
     print(f"\nResolving {len(test_subs)} subdomains...")
     unique_ips, ip_to_subs, sub_to_ip = get_unique_ips(test_subs)
-    
+
     print_deduplication_stats(test_subs, unique_ips, ip_to_subs)
-    
+
     print("\n[OK] DNS Tools working!")
     print("\nResolution results:")
     for sub, ip in sorted(sub_to_ip.items()):
         print(f"  {sub} → {ip}")
-    
+
     print("\nIP grouping:")
     for ip, subs in sorted(ip_to_subs.items()):
         print(f"  {ip}:")

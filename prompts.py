@@ -50,11 +50,8 @@ def get_phase1_prompt(tool_list: str, user_request: str = "") -> str:
         'USER_REQUEST': user_request or "No specific request provided"
     }
 
-    try:
-        base_prompt = load_prompt('phase1_tool_selection', variables)
-    except FileNotFoundError:
-        # Fallback to old hardcoded version if template not found
-        return _get_phase1_prompt_fallback(tool_list, user_request)
+    # Load prompt from template (NEW architecture - no fallbacks)
+    base_prompt = load_prompt('phase1_tool_selection', variables)
 
     # Add enhanced features if available (same as old version)
     if ENHANCED_FEATURES_AVAILABLE and user_request:
@@ -120,17 +117,14 @@ def get_phase3_prompt(
     # Try to load scan-type specific template
     template_name = f'phase3_{scan_type}'
 
+    # Try to load scan-type specific template, fall back to generic (NEW architecture)
     try:
         prompt = load_prompt(template_name, variables)
         return prompt
     except FileNotFoundError:
-        # Try generic template
-        try:
-            prompt = load_prompt('phase3_generic', variables)
-            return prompt
-        except FileNotFoundError:
-            # Final fallback to old hardcoded version
-            return _get_phase3_prompt_fallback(scan_results, db_context, scan_type, programmatic_report)
+        # Try generic template (this is acceptable fallback - all are NEW templates)
+        prompt = load_prompt('phase3_generic', variables)
+        return prompt
 
 
 # ============================================================================
@@ -153,11 +147,8 @@ def get_phase4_prompt(combined_results: str, tool_count: int) -> str:
         'TOOL_COUNT': str(tool_count)
     }
 
-    try:
-        return load_prompt('phase4_subdomain_report', variables)
-    except FileNotFoundError:
-        # Fallback to old version
-        return _get_phase4_prompt_fallback(combined_results, tool_count)
+    # Load prompt from template (NEW architecture - no fallbacks)
+    return load_prompt('phase4_subdomain_report', variables)
 
 
 # ============================================================================
@@ -314,74 +305,18 @@ Try the suggested approaches above, or ask for help with a specific error.
 
 
 # ============================================================================
-# FALLBACK FUNCTIONS (Old hardcoded versions - used if templates missing)
-# ============================================================================
-
-def _get_phase1_prompt_fallback(tool_list: str, user_request: str = "") -> str:
-    """Fallback to old Phase 1 prompt if template not found"""
-    return f"""You are SNODE AI, a security analysis agent.
-
-PHASE 1: TOOL SELECTION
-
-AVAILABLE TOOLS:
-{tool_list}
-
-Select appropriate tools based on the user request.
-Analysis comes in Phase 3.
-"""
-
-
-def _get_phase3_prompt_fallback(scan_results: str, db_context: str, scan_type: str, programmatic_report: str) -> str:
-    """Fallback to old Phase 3 prompt if template not found"""
-    return f"""You are SNODE AI, a senior cybersecurity analyst.
-
-PHASE 3: INTELLIGENCE ANALYSIS
-
-DATABASE CONTEXT:
-{db_context}
-
-SCAN RESULTS:
-{scan_results}
-
-Provide security analysis based on the scan results.
-Be specific and evidence-based.
-"""
-
-
-def _get_phase4_prompt_fallback(combined_results: str, tool_count: int) -> str:
-    """Fallback to old Phase 4 prompt if template not found"""
-    return f"""You are SNODE AI, a security analysis agent.
-
-PHASE 4: COMBINED REPORT GENERATION
-
-Results from {tool_count} tools:
-
-{combined_results}
-
-Generate security analysis and recommendations.
-"""
-
-
-# ============================================================================
-# BACKWARD COMPATIBILITY NOTE
+# NEW ARCHITECTURE - Template-Based Only
 # ============================================================================
 
 """
-This file maintains 100% backward compatibility with the old prompts.py:
+This file uses the NEW template-based prompt system exclusively.
 
-1. Same function signatures
-2. Same return types
-3. Same behavior
+All prompts are stored in prompt_templates/*.txt files for easy editing.
+No fallback to hardcoded versions - clean architecture.
 
-Differences:
-- Now uses template files (prompts/*.txt)
-- Easier to edit (plain text, not Python)
-- Better for adding new tools (nuclei, metasploit, nikto, etc.)
-- Falls back to hardcoded versions if templates missing
-
-Migration status:
-- Phase 1: ✅ Migrated to template (phase1_tool_selection.txt)
-- Phase 3: ✅ Migrated to template (phase3_*.txt)
-- Phase 4: ⚠️ Needs template creation
-- Failure reports: ⚠️ Too complex to template (kept as code)
+Migration complete:
+- Phase 1: ✅ Uses phase1_tool_selection.txt
+- Phase 3: ✅ Uses phase3_*.txt templates
+- Phase 4: ✅ Uses phase4_subdomain_report.txt
+- Failure reports: ✅ Generated programmatically (kept as code)
 """

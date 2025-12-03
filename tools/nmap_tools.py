@@ -1063,6 +1063,40 @@ NMAP_TOOLS = [
                 "required": ["targets"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "nmap_service_detection_batch",
+            "description": "Stage 4 tool: Batch Nmap service detection for 4-stage workflow. This is the SOURCE OF TRUTH providing service/version detection and OS fingerprinting.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "targets": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of IPs or dict of {IP: [ports]} from Stage 3"
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "Source identifier (e.g., 'stage3_naabu_results')"
+                    },
+                    "scan_discovered_ports": {
+                        "type": "boolean",
+                        "description": "If True, scan only discovered ports; if False, scan all common ports (default: True)"
+                    },
+                    "save_results": {
+                        "type": "boolean",
+                        "description": "Save results for next stage (default: False)"
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Timeout in seconds per host (default: 1800)"
+                    }
+                },
+                "required": ["targets"]
+            }
+        }
     }
 ]
 
@@ -1232,6 +1266,7 @@ def execute_tool(tool_name, tool_args):
         "nmap_all_ports": nmap_all_ports,
         "nmap_top_ports": nmap_top_ports,
         "nmap_service_detection": nmap_service_detection,
+        "nmap_service_detection_batch": nmap_service_detection_batch,
         "nmap_intense_service_scan": nmap_intense_service_scan,
         "nmap_os_detection": nmap_os_detection,
         "nmap_aggressive_scan": nmap_aggressive_scan,

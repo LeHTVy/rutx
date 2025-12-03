@@ -327,7 +327,8 @@ def execute_shodan_tool(tool_name, tool_args):
     tool_map = {
         "shodan_lookup": shodan_lookup,
         "shodan_search": shodan_search,
-        "shodan_host": shodan_host
+        "shodan_host": shodan_host,
+        "shodan_batch_lookup": shodan_batch_lookup
     }
 
     if tool_name not in tool_map:
@@ -409,6 +410,32 @@ SHODAN_TOOLS = [
                     }
                 },
                 "required": ["ip"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "shodan_batch_lookup",
+            "description": "Stage 2 tool: Batch Shodan lookup for multiple IPs (4-stage workflow). Queries Shodan for OSINT intelligence on multiple IPs.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ips": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of IP addresses to query"
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "Source identifier (optional, for workflow tracking)"
+                    },
+                    "save_results": {
+                        "type": "boolean",
+                        "description": "Save results for next stage (default: False)"
+                    }
+                },
+                "required": ["ips"]
             }
         }
     }
