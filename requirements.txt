@@ -1,6 +1,8 @@
 # Core Dependencies
 requests>=2.31.0
 sqlalchemy>=2.0.0
+PyYAML>=6.0
+
 
 # Phoenix Tracing & Observability (Optional - for SNODE Integration)
 # NOTE: For LOCAL Ollama LLM only - no OpenAI dependencies needed
