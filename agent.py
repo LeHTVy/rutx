@@ -1057,7 +1057,9 @@ Select the most appropriate tool for the user's request."""
         ]
         
         try:
-            response = self._call_ollama(messages, timeout=60)
+            # Increased timeout for local LLMs which need more time for reasoning
+            response = self._call_ollama(messages, timeout=180)
+
             
             if "error" in response:
                 print(f"  ⚠️  LLM thinking failed: {response['error']}")
