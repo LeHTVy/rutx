@@ -1028,6 +1028,106 @@ Select the most appropriate tool for the user's request."""
             print(f"  ⚠️  OSINT intelligence failed: {e}")
             return None
 
+    def _think_and_plan(self, user_prompt: str) -> Tuple[List[Dict], str, Dict]:
+        """
+        LLM Thinking Stage: Analyze user prompt and reason about tool selection
+        
+        Args:
+            user_prompt: User's natural language request
+            
+        Returns:
+            Tuple of (selected_tools, summary, thinking_data)
+        """
+        from prompt_templates.prompt_manager import load_prompt
+        
+        print("\n  🧠 THINKING STAGE")
+        print("  " + "-"*56)
+        
+        # Load thinking prompt and substitute user prompt
+        try:
+            thinking_prompt = load_prompt("phase1_thinking", {"USER_PROMPT": user_prompt})
+        except Exception as e:
+            print(f"  ⚠️  Could not load thinking prompt: {e}")
+            return [], "", {}
+        
+        # Call LLM with thinking prompt
+        messages = [
+            {"role": "system", "content": thinking_prompt},
+            {"role": "user", "content": "Analyze this request and output JSON with your thinking and selected tools."}
+        ]
+        
+        try:
+            response = self._call_ollama(messages, timeout=60)
+            
+            if "error" in response:
+                print(f"  ⚠️  LLM thinking failed: {response['error']}")
+                return [], "", {}
+            
+            content = response.get("message", {}).get("content", "")
+            
+            # Parse JSON from response (handle markdown code blocks)
+            import re
+            json_match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1)
+            else:
+                # Try to find raw JSON
+                json_match = re.search(r'\{.*\}', content, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(0)
+                else:
+                    print(f"  ⚠️  Could not extract JSON from LLM response")
+                    return [], "", {}
+            
+            # Parse the JSON
+            thinking_data = json.loads(json_str)
+            
+            # Extract thinking info
+            thinking = thinking_data.get("thinking", {})
+            tools = thinking_data.get("tools", [])
+            summary = thinking_data.get("summary", "")
+            
+            # Display thinking box
+            intent = thinking.get("intent", "unknown")
+            target = thinking.get("target", "unknown")
+            reasoning = thinking.get("reasoning", [])
+            
+            print(f"  │ Intent: {intent}")
+            print(f"  │ Target: {target}")
+            print(f"  │")
+            if reasoning:
+                print(f"  │ Reasoning:")
+                for i, step in enumerate(reasoning[:5], 1):
+                    # Truncate long reasoning steps
+                    step_short = step[:60] + "..." if len(step) > 60 else step
+                    print(f"  │   {i}. {step_short}")
+            print(f"  │")
+            print(f"  │ Plan: {summary}")
+            print("  " + "-"*56)
+            
+            # Convert tools to expected format
+            selected_tools = []
+            for tool in tools:
+                if isinstance(tool, dict) and "name" in tool:
+                    selected_tools.append({
+                        "name": tool["name"],
+                        "arguments": tool.get("arguments", {})
+                    })
+            
+            if selected_tools:
+                print(f"\n  ✅ Selected {len(selected_tools)} tools:")
+                for tool in selected_tools[:5]:
+                    print(f"     • {tool['name']}")
+            
+            return selected_tools, summary, thinking_data
+            
+        except json.JSONDecodeError as e:
+            print(f"  ⚠️  Could not parse LLM JSON: {e}")
+            return [], "", {}
+        except Exception as e:
+            print(f"  ⚠️  Thinking stage error: {e}")
+            return [], "", {}
+
     def phase_1_tool_selection(self, user_prompt: str) -> Tuple[List[Dict], str]:
         """
         Phase 1: Tool Selection (LLM/Keyword)
@@ -1227,7 +1327,39 @@ Select the most appropriate tool for the user's request."""
             except Exception as e:
                 print(f"  ⚠️  Session creation failed: {e}")
 
+        # === LLM THINKING STAGE ===
+        # Use LLM to analyze user request and reason about tool selection
+        # This runs BEFORE keyword detection to provide more intelligent tool selection
+        thinking_tools, thinking_summary, thinking_data = self._think_and_plan(user_prompt)
+        
+        if thinking_tools:
+            # LLM returned valid tools - use them instead of keyword matching
+            print(f"\n  🎯 Using LLM-selected tools from thinking stage")
+            
+            # Add justification from thinking reasoning
+            reasoning_list = thinking_data.get("thinking", {}).get("reasoning", [])
+            for tool in thinking_tools:
+                if 'justification' not in tool and reasoning_list:
+                    tool['justification'] = " → ".join(reasoning_list[:2])
+            
+            # Log phase completion
+            if self.audit_logger:
+                self.audit_logger.log_event('phase_end', {
+                    'phase': 'phase1_tool_selection',
+                    'success': True,
+                    'method': 'llm_thinking',
+                    'tools_selected': [t['name'] for t in thinking_tools]
+                })
+            
+            return thinking_tools, thinking_summary
+
+        # === FALLBACK: KEYWORD DETECTION ===
+        # If thinking stage fails or returns no tools, use keyword matching
+        print("\n  📋 KEYWORD DETECTION FALLBACK")
+        print("  " + "-"*56)
+        
         # 1. Check for subdomain enumeration request
+
         if self._detect_subdomain_scan(user_prompt):
             # Clear previous high-value targets for fresh subdomain scan
             self.high_value_targets.clear()
