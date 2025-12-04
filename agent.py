@@ -1058,7 +1058,7 @@ Select the most appropriate tool for the user's request."""
         
         try:
             # Increased timeout for local LLMs which need more time for reasoning
-            response = self._call_ollama(messages, timeout=180)
+            response = self._call_ollama(messages, timeout=600)
 
             
             if "error" in response:
@@ -1329,38 +1329,14 @@ Select the most appropriate tool for the user's request."""
             except Exception as e:
                 print(f"  ⚠️  Session creation failed: {e}")
 
-        # === LLM THINKING STAGE ===
-        # Use LLM to analyze user request and reason about tool selection
-        # This runs BEFORE keyword detection to provide more intelligent tool selection
-        thinking_tools, thinking_summary, thinking_data = self._think_and_plan(user_prompt)
-        
-        if thinking_tools:
-            # LLM returned valid tools - use them instead of keyword matching
-            print(f"\n  🎯 Using LLM-selected tools from thinking stage")
-            
-            # Add justification from thinking reasoning
-            reasoning_list = thinking_data.get("thinking", {}).get("reasoning", [])
-            for tool in thinking_tools:
-                if 'justification' not in tool and reasoning_list:
-                    tool['justification'] = " → ".join(reasoning_list[:2])
-            
-            # Log phase completion
-            if self.audit_logger:
-                self.audit_logger.log_event('phase_end', {
-                    'phase': 'phase1_tool_selection',
-                    'success': True,
-                    'method': 'llm_thinking',
-                    'tools_selected': [t['name'] for t in thinking_tools]
-                })
-            
-            return thinking_tools, thinking_summary
-
-        # === FALLBACK: KEYWORD DETECTION ===
-        # If thinking stage fails or returns no tools, use keyword matching
-        print("\n  📋 KEYWORD DETECTION FALLBACK")
+        # === FAST PATH: KEYWORD DETECTION ===
+        # Try keyword matching first for speed (local LLMs are slow)
+        # LLM thinking stage will be used only for ambiguous/complex requests
+        print("\n  🚀 FAST KEYWORD DETECTION")
         print("  " + "-"*56)
         
         # 1. Check for subdomain enumeration request
+
 
         if self._detect_subdomain_scan(user_prompt):
             # Clear previous high-value targets for fresh subdomain scan
@@ -1485,134 +1461,45 @@ Select the most appropriate tool for the user's request."""
                     
                 return selected_tools, reasoning
 
-        #  5. LLM fallback for unrecognized requests
-        # Build system prompt with effectiveness guidance
-        from prompts import get_phase1_prompt
-        from tools import get_all_tool_names
-
-        # Format tool list for LLM
-        tool_names = get_all_tool_names()
-        tool_list_str = "\\n".join([f"- {tool}" for tool in tool_names])
-
-        # Get enhanced Phase 1 prompt with effectiveness + patterns
-        system_prompt = get_phase1_prompt(tool_list_str, user_request=user_prompt)
-
-        # Call LLM with enhanced guidance
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ]
-
-        response = self._call_ollama(messages, tools=ALL_TOOLS)
-
-        if "error" in response:
-            return [], f"Error: {response['error']}"
-
-        message = response.get("message", {})
-        tool_calls = message.get("tool_calls", [])
-        reasoning = message.get("content", "")
-
-        selected_tools = []
+        #  5. LLM THINKING STAGE (only for unrecognized/ambiguous requests)
+        # Keywords failed - use LLM to reason about tool selection
+        print("\n  🧠 LLM THINKING STAGE (keywords didn't match)")
+        print("  " + "-"*56)
         
-        # Parse reasoning to extract per-tool justifications
-        # Expected format: "1. tool_name - justification text"
-        tool_justifications = {}
-        if reasoning:
-            import re
-            # Try to extract numbered justifications (e.g., "1. nmap_service_detection - ...")
-            pattern = r'(\d+)\.\s*([a-z_]+)\s*[-:]\s*([^\n]+)'
-            matches = re.findall(pattern, reasoning, re.IGNORECASE)
-            for num, tool_name, justification in matches:
-                tool_justifications[tool_name.lower()] = justification.strip()
+        thinking_tools, thinking_summary, thinking_data = self._think_and_plan(user_prompt)
         
-        for call in tool_calls:
-            tool_name = call.get("function", {}).get("name")
-            tool_info = {
-                "name": tool_name,
-                "arguments": call.get("function", {}).get("arguments", {})
-            }
+        if thinking_tools:
+            # LLM returned valid tools
+            print(f"\n  🎯 Using LLM-selected tools")
             
-            # Add justification from parsed reasoning
-            if tool_name and tool_name.lower() in tool_justifications:
-                tool_info["justification"] = tool_justifications[tool_name.lower()]
-            else:
-                # Fallback: use generic reasoning or extract from full reasoning
-                tool_info["justification"] = reasoning[:200] if reasoning else f"Selected for {user_prompt[:50]}"
+            # Add justification from thinking reasoning
+            reasoning_list = thinking_data.get("thinking", {}).get("reasoning", [])
+            for tool in thinking_tools:
+                if 'justification' not in tool and reasoning_list:
+                    tool['justification'] = " → ".join(reasoning_list[:2])
             
-            selected_tools.append(tool_info)
-            print(f"  ✓ Selected: {tool_info['name']}")
+            # Log phase completion
+            if self.audit_logger:
+                self.audit_logger.log_event('phase_end', {
+                    'phase': 'phase1_tool_selection',
+                    'success': True,
+                    'method': 'llm_thinking',
+                    'tools_selected': [t['name'] for t in thinking_tools]
+                })
+            
+            return thinking_tools, thinking_summary
 
-        # FALLBACK VALIDATION: Check if LLM selection is valid or needs override
-        from intent_mapper import IntentMapper
-
-        # Check if we should use fallback instead of LLM selection
-        should_use_fallback = IntentMapper.should_use_fallback(selected_tools, user_prompt)
-
-        if should_use_fallback:
-            print("  ⚠️  LLM tool selection needs override - using intent-based fallback")
-
-            # Extract target from prompt
-            target = self._extract_target_from_prompt(user_prompt)
-            if not target:
-                target = IntentMapper.extract_target(user_prompt)
-
-            if target:
-                # Get fallback tools from intent mapper
-                fallback_tools, fallback_reasoning = IntentMapper.get_fallback_tools(
-                    user_prompt, target
-                )
-
-                if fallback_tools:
-                    # Check for 4-stage workflow special case
-                    if fallback_tools[0].get("name") == "_4stage_workflow":
-                        # Use the existing 4-stage workflow logic
-                        subdomains = fallback_tools[0]["arguments"].get("subdomains", [])
-                        selected_tools = self._get_intelligent_port_scan_strategy(subdomains)
-                        reasoning = fallback_reasoning
-                        print(f"  ✓ Fallback: Using 4-stage workflow for {len(subdomains)} subdomains")
-                    else:
-                        selected_tools = fallback_tools
-                        reasoning = fallback_reasoning
-                        print(f"  ✓ Fallback: {fallback_reasoning}")
-
-                        for tool in selected_tools:
-                            print(f"  ✓ Selected: {tool['name']}")
-
-        # SAFETY FILTER: Block forbidden tools for "full assessment" requests
-        full_assessment_keywords = ['full assessment', 'comprehensive scan', 'complete scan', 'full scan']
-        is_full_assessment = any(keyword in user_prompt.lower() for keyword in full_assessment_keywords)
+        # If thinking stage also failed, return empty with error
+        print("  ⚠️  Could not determine tools for this request")
+        print("  💡 Try being more specific, e.g.:")
+        print("     • 'find subdomains for example.com'")
+        print("     • 'scan ports on 192.168.1.1'")
+        print("     • 'check vulnerabilities on example.com'")
         
-        if is_full_assessment:
-            forbidden_tools = ['nmap_all_ports', 'nmap_comprehensive_scan']
-            filtered_tools = []
-            replaced_tools = []
-            
-            for tool in selected_tools:
-                if tool['name'] in forbidden_tools:
-                    # Replace with smart alternative
-                    print(f"  ⚠️  BLOCKED: {tool['name']} (forbidden for 'full assessment' - would timeout)")
-                    print(f"  ✅ AUTO-REPLACING with nmap_service_detection (top 1000 ports, 5-10 min)")
-                    
-                    smart_tool = {
-                        "name": "nmap_service_detection",
-                        "arguments": tool['arguments'],
-                        "justification": f"Replaced {tool['name']} with smart alternative - service detection scans top 1000 ports with version info, perfect for full assessment without timeout"
-                    }
-                    filtered_tools.append(smart_tool)
-                    replaced_tools.append(tool['name'])
-                else:
-                    filtered_tools.append(tool)
-            
-            if replaced_tools:
-                selected_tools = filtered_tools
-                reasoning = f"[AUTO-CORRECTED] Original selection included forbidden tools ({', '.join(replaced_tools)}) which would timeout. Replaced with nmap_service_detection. " + reasoning
-
-        if not selected_tools and reasoning:
-            print(f"  ℹ️  {reasoning[:100]}...")
-
-        return selected_tools, reasoning
+        return [], "Could not parse request. Try being more specific."
 
     def phase_2_execution(self, selected_tools: List[Dict]) -> List[Dict]:
+
         """
         Phase 2: Execute Tools & Atomic Persistence
         Run each selected tool, parse output, save to tool-specific models, enrich
