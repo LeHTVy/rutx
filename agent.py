@@ -839,8 +839,34 @@ Select the most appropriate tool for the user's request."""
                         total_open_ports += len(ports)
 
         if not hosts_with_ports:
-            print("\n  ℹ️  Phase 2 skipped: No hosts with open ports found")
-            return
+            # FALLBACK: Check Shodan results for ports when Naabu finds nothing
+            # This is common when firewalls block scans but Shodan has historical data
+            shodan_results = []
+            for r in results:
+                tool_name = r.get("tool", "")
+                if "shodan" in tool_name.lower() and r["result"].get("success"):
+                    shodan_results.append(r)
+            
+            if shodan_results:
+                print("\n  ℹ️  Naabu found no open ports, checking Shodan data...")
+                for r in shodan_results:
+                    scan_data = r["result"]
+                    # Shodan batch format: results = {ip: {ports: [...], ...}}
+                    if "results" in scan_data:
+                        for ip, ip_data in scan_data["results"].items():
+                            ports = ip_data.get("ports", [])
+                            if ports:
+                                hosts_with_ports.add(ip)
+                                total_open_ports += len(ports)
+                
+                if hosts_with_ports:
+                    print(f"  📊 Shodan fallback: Found {len(hosts_with_ports)} hosts with {total_open_ports} ports")
+                    print("  🎯 Using Shodan data to trigger Nmap Stage 4...")
+            
+            if not hosts_with_ports:
+                print("\n  ℹ️  Phase 2 skipped: No hosts with open ports found (Naabu + Shodan)")
+                return
+
 
         # Run Phase 2: Detailed Nmap scan on hosts with open ports
         print(f"\n{'='*60}")
