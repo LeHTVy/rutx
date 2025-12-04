@@ -58,19 +58,21 @@ class ConfigLoader:
             ValueError: If JSON is invalid
         """
         file_path = Path(filepath)
-        defaults = defaults or {}
+        has_defaults = defaults is not None
+        defaults = defaults if defaults is not None else {}
 
         # If file doesn't exist
         if not file_path.exists():
-            if create_if_missing and defaults:
+            if create_if_missing and has_defaults:
                 logger.info(f"Creating new config file: {filepath}")
                 ConfigLoader.save_json(filepath, defaults)
                 return defaults
-            elif defaults:
+            elif has_defaults:
                 logger.warning(f"Config file not found: {filepath}, using defaults")
                 return defaults
             else:
                 raise FileNotFoundError(f"Configuration file not found: {filepath}")
+
 
         # Load existing file
         try:
