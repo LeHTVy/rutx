@@ -109,11 +109,14 @@ class ResponseValidator:
     @classmethod
     def _has_evidence_citations(cls, response: str) -> bool:
         """Check if response contains evidence citations"""
-        # Look for "Evidence:", "evidence\":", or quoted text
+        # Look for "Evidence:", "evidence":", or quoted text
         has_evidence_field = "evidence" in response.lower() and (":" in response or "\":" in response)
         has_quotes = response.count('"') >= 4  # At least 2 quoted sections
-
-        return has_evidence_field or has_quotes
+        
+        # Also accept specific subdomain/domain mentions as evidence (for subdomain scans)
+        has_domain_evidence = bool(re.search(r'\b[\w-]+\.[\w-]+\.[a-z]{2,}\b', response))
+        
+        return has_evidence_field or has_quotes or has_domain_evidence
 
     @classmethod
     def _check_invented_cves(cls, response: str, programmatic_report: str) -> List[str]:
@@ -202,6 +205,10 @@ class ResponseValidator:
 
         # 1. Evidence citations (30 points)
         evidence_count = response.count("Evidence:") + response.count("evidence\":")
+        # Also count subdomain mentions as evidence for subdomain scans
+        subdomain_mentions = len(re.findall(r'\b[\w-]+\.[\w-]+\.[a-z]{2,}\b', response))
+        if subdomain_mentions > 0 and evidence_count == 0:
+            evidence_count = min(3, subdomain_mentions // 2)  # Give partial credit for subdomain mentions
         score["breakdown"]["evidence_citations"] = min(30, evidence_count * 10)
 
         # 2. Specificity (25 points)
@@ -209,9 +216,10 @@ class ResponseValidator:
         has_ports = bool(re.search(r'[Pp]ort \d+', response))
         has_services = bool(re.search(r'(SSH|HTTP|MySQL|nginx|Apache|FTP|SMB|RDP)', response))
         has_versions = bool(re.search(r'\d+\.\d+', response))  # Version numbers
+        has_subdomains = bool(re.search(r'\b[\w-]+\.[\w-]+\.[a-z]{2,}\b', response))  # Subdomain mentions
 
-        specificity = (has_ips * 8) + (has_ports * 7) + (has_services * 5) + (has_versions * 5)
-        score["breakdown"]["specificity"] = specificity
+        specificity = (has_ips * 8) + (has_ports * 7) + (has_services * 5) + (has_versions * 5) + (has_subdomains * 10)
+        score["breakdown"]["specificity"] = min(25, specificity)
 
         # 3. Accuracy (25 points) - deduct for issues
         accuracy = 25
