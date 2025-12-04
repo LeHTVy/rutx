@@ -456,7 +456,8 @@ class ProgrammaticReportGenerator:
             for category, subdomains in categories.items():
                 if subdomains:
                     content += f"#### {category.upper()} ({len(subdomains)})\n"
-                    for subdomain in sorted(subdomains)[:20]:  # Limit to first 20 per category
+                    # Show ALL subdomains (no limit) - LLM needs complete data
+                    for subdomain in sorted(subdomains):
                         source = ""
                         if subdomain in overlap:
                             source = " [Both]"
@@ -465,9 +466,6 @@ class ProgrammaticReportGenerator:
                         elif subdomain in bbot_only:
                             source = " [BBOT]"
                         content += f"- {subdomain}{source}\n"
-
-                    if len(subdomains) > 20:
-                        content += f"- ... and {len(subdomains) - 20} more\n"
                     content += "\n"
 
         return {
