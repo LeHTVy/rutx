@@ -2760,6 +2760,30 @@ Be specific about CVEs, provide CVSS scores if known, and reference specific vul
             else:
                 print(f"  🔍 DEBUG: ❌ Programmatic report NOT in system prompt!")
                 print(f"  🔍 DEBUG: System prompt length: {len(system_prompt)}")
+            
+            # EXTRA DEBUG: Show scan data section and save to file
+            if "=== SCAN DATA" in system_prompt:
+                print(f"  🔍 DEBUG: ✅ Found === SCAN DATA === markers in prompt")
+                # Extract and show snippet between markers
+                start = system_prompt.find("=== SCAN DATA")
+                end = system_prompt.find("=== END SCAN DATA")
+                if start != -1 and end != -1:
+                    scan_section = system_prompt[start:end+50]
+                    print(f"  🔍 DEBUG: Scan section preview: {scan_section[:300]}...")
+            else:
+                print(f"  🔍 DEBUG: ❌ === SCAN DATA === markers NOT FOUND!")
+            
+            # Save full prompt to file for inspection
+            try:
+                prompt_debug_file = "/tmp/llm_prompt_debug.txt"
+                with open(prompt_debug_file, 'w', encoding='utf-8') as f:
+                    f.write("=== SYSTEM PROMPT ===\n\n")
+                    f.write(system_prompt)
+                    f.write("\n\n=== USER MESSAGE ===\n\n")
+                    f.write("The scan data is in your system prompt...")
+                print(f"  🔍 DEBUG: Full prompt saved to {prompt_debug_file}")
+            except Exception as e:
+                print(f"  🔍 DEBUG: Could not save prompt file: {e}")
 
         messages = [
             {"role": "system", "content": system_prompt},
