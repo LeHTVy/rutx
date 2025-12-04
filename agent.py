@@ -1797,10 +1797,18 @@ Select the most appropriate tool for the user's request."""
                 results_dict = result.get("results", {})
                 return total_ports > 0 or len(results_dict) > 0
             
-            # Shodan scans
+            # Shodan scans - handle both single and batch formats
             if "shodan" in tool.lower():
+                # Single IP format: uses 'data'
                 data = result.get("data", {})
-                return data and len(data) > 0
+                if data and len(data) > 0:
+                    return True
+                # Batch format: uses 'results', 'successful', 'total_ports'
+                results = result.get("results", {})
+                successful = result.get("successful", 0)
+                total_ports = result.get("total_ports", 0)
+                return len(results) > 0 or successful > 0 or total_ports > 0
+
             
             # Default: assume success means we have data
             return True
