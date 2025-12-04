@@ -6,14 +6,22 @@ Provides atomic file writes and consistent error handling.
 """
 
 import json
-import yaml
 import tempfile
 import shutil
 from pathlib import Path
 from typing import Dict, Any, Optional
 import logging
 
+# Optional YAML support - gracefully degrade if not installed
+try:
+    import yaml
+    YAML_AVAILABLE = True
+except ImportError:
+    yaml = None
+    YAML_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
+
 
 
 class ConfigLoader:
@@ -105,7 +113,14 @@ class ConfigLoader:
         Raises:
             FileNotFoundError: If file doesn't exist and no defaults provided
             ValueError: If YAML is invalid
+            ImportError: If PyYAML is not installed
         """
+        if not YAML_AVAILABLE:
+            logger.warning("PyYAML not installed. Install with: pip install PyYAML")
+            if defaults:
+                return defaults
+            raise ImportError("PyYAML is required for YAML config files. Install with: pip install PyYAML")
+        
         file_path = Path(filepath)
         defaults = defaults or {}
 
@@ -120,6 +135,7 @@ class ConfigLoader:
                 return defaults
             else:
                 raise FileNotFoundError(f"Configuration file not found: {filepath}")
+
 
         # Load existing file
         try:
@@ -220,8 +236,12 @@ class ConfigLoader:
             sort_keys: Sort keys alphabetically (default: False, preserve order)
 
         Raises:
+            ImportError: If PyYAML is not installed
             Exception: If save fails
         """
+        if not YAML_AVAILABLE:
+            raise ImportError("PyYAML is required for YAML config files. Install with: pip install PyYAML")
+
         file_path = Path(filepath)
 
         # Create parent directories if needed

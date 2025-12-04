@@ -587,10 +587,19 @@ class ToolResultPersister:
             return self.save_amass_result(result)
         elif 'masscan' in tool_lower:
             return self.save_masscan_result(result)
+        elif 'naabu' in tool_lower:
+            # Naabu results are passed directly to Phase 2 follow-up (Nmap)
+            # No separate persistence needed - data flows to nmap_service_detection
+            return None
+        elif 'dns' in tool_lower:
+            # DNS resolution results are transient - IPs are passed to subsequent stages
+            # No persistence needed - just stage orchestration data
+            return None
         else:
             # Unknown tool - just log
             print(f"  Warning: No persister for tool '{tool_name}'")
             return None
+
 
 
 # ============================================================================

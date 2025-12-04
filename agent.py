@@ -696,54 +696,66 @@ Select the most appropriate tool for the user's request."""
         """
         Enhanced 4-Stage Port Scanning Workflow with OSINT enrichment
 
-        Stage 1: DNS Resolution - Convert subdomains to unique public IPs
+        Stage 1: DNS Resolution - Convert subdomains to unique public IPs (EXECUTED INLINE)
         Stage 2: OSINT Enrichment - Query Shodan for intelligence on IPs
         Stage 3: Naabu Scanning - Fast port discovery
-        Stage 4: Masscan Scanning - Comprehensive port verification
+        Stage 4: Nmap Service Detection - Source of Truth
 
-        Each stage builds enriched context for LLM analysis.
+        IMPORTANT: Stage 1 is executed INLINE to get real IPs.
+        Stages 2-4 are returned as tools with concrete data.
 
         Args:
             subdomains: List of subdomains to scan
 
         Returns:
-            List of tool selections for 4-stage workflow
+            List of tool selections for stages 2-4 (with real IP data)
         """
+        from tools import execute_tool
+        
         print("\n  🧠 ENHANCED 4-STAGE PORT SCAN STRATEGY")
         print("  " + "="*58)
 
         selected_tools = []
 
         # =====================================================================
-        # STAGE 1: DNS RESOLUTION - Convert subdomains to unique public IPs
+        # STAGE 1: DNS RESOLUTION - Execute INLINE to get real IPs
         # =====================================================================
         print("\n  📡 STAGE 1: DNS RESOLUTION")
         print("  " + "-"*58)
 
-        selected_tools.append({
-            "name": "dns_bulk_resolve",
-            "arguments": {
-                "subdomains": subdomains,
-                "save_results": True
-            },
-            "justification": f"Stage 1: Resolve {len(subdomains)} subdomains to unique IPs for deduplication and efficient scanning"
-        })
+        dns_result = execute_tool("dns_bulk_resolve", {"subdomains": subdomains, "save_results": True})
+        
+        if not dns_result.get("success"):
+            print(f"    ❌ DNS resolution failed: {dns_result.get('error', 'Unknown error')}")
+            return []  # Cannot proceed without IPs
+        
+        unique_ips = dns_result.get("unique_ips", [])
+        subdomain_to_ip = dns_result.get("subdomain_to_ip", {})
+        
+        print(f"    ✅ Resolved {len(subdomains)} subdomains → {len(unique_ips)} unique IPs")
+        
+        if not unique_ips:
+            print("    ⚠️  No IPs resolved, cannot proceed with port scanning")
+            return []
+
+        # Store DNS results for later use in report generation
+        self._stage1_dns_results = dns_result
 
         # =====================================================================
         # STAGE 2: OSINT ENRICHMENT - Shodan lookup on resolved IPs
         # =====================================================================
         print("\n  🔍 STAGE 2: OSINT ENRICHMENT (Shodan)")
         print("  " + "-"*58)
-        print("     → Will query Shodan for each unique IP")
+        print(f"     → Will query Shodan for {len(unique_ips)} unique IPs")
         print("     → Gather: Open ports, services, CVEs, threat intel")
 
         selected_tools.append({
             "name": "shodan_batch_lookup",
             "arguments": {
-                "source": "stage1_dns_results",  # Will use Stage 1 output
+                "ips": unique_ips,  # Real IPs from Stage 1
                 "save_results": True
             },
-            "justification": "Stage 2: OSINT enrichment - query Shodan for intelligence on resolved IPs"
+            "justification": f"Stage 2: OSINT enrichment - query Shodan for {len(unique_ips)} IPs"
         })
 
         # =====================================================================
@@ -751,48 +763,45 @@ Select the most appropriate tool for the user's request."""
         # =====================================================================
         print("\n  ⚡ STAGE 3: NAABU PORT SCANNING")
         print("  " + "-"*58)
-        print("     → Fast port discovery with Naabu")
-        print("     → Scan top 1000 ports on unique IPs")
+        print(f"     → Fast port discovery with Naabu on {len(unique_ips)} IPs")
+        print("     → Scan top 1000 ports")
 
+        # Convert IPs list to comma-separated string for naabu_batch_scan
+        targets_str = ",".join(unique_ips)
+        
         selected_tools.append({
             "name": "naabu_batch_scan",
             "arguments": {
-                "source": "stage1_dns_results",  # Will use Stage 1 IPs
+                "targets": targets_str,  # Comma-separated string of IPs
                 "ports": "top-1000",
-                "rate": 5000,
-                "save_results": True
+                "rate": 5000
             },
-            "justification": "Stage 3: Fast port discovery with Naabu on unique IPs from Stage 1"
+            "justification": f"Stage 3: Fast port discovery with Naabu on {len(unique_ips)} IPs"
         })
 
         # =====================================================================
-        # STAGE 4: NMAP SERVICE DETECTION - Source of Truth
+        # STAGE 4: NMAP SERVICE DETECTION - Deferred until Stage 3 completes
         # =====================================================================
         print("\n  🎯 STAGE 4: NMAP SERVICE DETECTION (Source of Truth)")
         print("  " + "-"*58)
         print("     → Detailed service/version detection with Nmap")
         print("     → OS fingerprinting when possible")
-        print("     → Will scan ONLY IPs with open ports from Stage 3")
+        print("     → Will scan IPs with open ports from Stage 3")
         print("     → This is the authoritative data for final report")
 
-        selected_tools.append({
-            "name": "nmap_service_detection_batch",
-            "arguments": {
-                "source": "stage3_naabu_results",  # Only scan IPs with open ports
-                "scan_discovered_ports": True,  # Target specific ports found by Naabu
-                "save_results": True
-            },
-            "justification": "Stage 4: Nmap service detection on discovered open ports - SOURCE OF TRUTH for final report"
-        })
+        # NOTE: Stage 4 will be triggered by _execute_phase2_if_needed() 
+        # after Naabu results are available. We don't add it here because
+        # we don't know which IPs have open ports yet.
 
         print("\n  ✅ 4-STAGE WORKFLOW CONFIGURED")
-        print("     → Stage 1: DNS Resolution (subdomain → IP)")
-        print("     → Stage 2: OSINT Enrichment (Shodan intel)")
+        print("     → Stage 1: DNS Resolution ✅ DONE")
+        print(f"       └─ {len(unique_ips)} unique IPs resolved")
+        print("     → Stage 2: OSINT Enrichment (Shodan)")
         print("     → Stage 3: Naabu Scanning (fast port discovery)")
-        print("     → Stage 4: Nmap Detection (🎯 SOURCE OF TRUTH)")
-        print("     → Final report will use Nmap data with enriched context")
+        print("     → Stage 4: Nmap Detection (🎯 triggered after Stage 3)")
 
         return selected_tools
+
 
     def _execute_phase2_if_needed(self, results: List[Dict], selected_tools: List[Dict]):
         """
