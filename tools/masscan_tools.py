@@ -10,6 +10,7 @@ import os
 import re
 from datetime import datetime
 from typing import List, Union, Dict, Any
+from utils.command_runner import CommandRunner
 
 
 def _resolve_hostname_to_ip(hostname: str) -> str:
@@ -111,12 +112,14 @@ def masscan_scan(
         savings = len(original_targets) - len(targets)
         print(f"    [DEDUP] Removed {savings} duplicate IPs ({len(targets)} unique IPs to scan)")
     
-    # Generate output file path
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = "/tmp/masscan_scans"
-    os.makedirs(output_dir, exist_ok=True)
-    
-    json_output = os.path.join(output_dir, f"masscan_{timestamp}.json")
+    # Generate output file path using OutputFileManager
+    from utils.output_file_manager import OutputFileManager
+
+    json_output = OutputFileManager.generate_output_path(
+        tool="masscan",
+        target="batch",
+        ext="json"
+    )
     
     # Build command
     # Masscan accepts multiple targets separated by commas
@@ -129,26 +132,20 @@ def masscan_scan(
         "--rate", str(rate),
         "-oJ", json_output
     ]
-    
+
     try:
-        start_time = time.time()
-        result = subprocess.run(
-            cmd_parts,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False
-        )
-        elapsed = time.time() - start_time
-        
-        if result.returncode != 0:
+        exec_result = CommandRunner.run(cmd_parts, timeout=timeout)
+
+        if not exec_result.success:
             return {
                 "success": False,
-                "error": f"Masscan returned exit code {result.returncode}",
-                "stderr": result.stderr,
-                "stdout": result.stdout,
+                "error": exec_result.error,
+                "stderr": exec_result.stderr,
+                "stdout": exec_result.stdout,
                 "targets": targets
             }
+
+        elapsed = exec_result.elapsed_time
         
         # Parse JSON output
         scan_results = {}
@@ -222,7 +219,7 @@ def masscan_scan(
             "hostname_to_ip": hostname_to_ip,  # DNS mapping
             "targets_count": len(original_targets),
             "output_json": json_output,
-            "output": result.stdout,
+            "output": exec_result.stdout,
             "elapsed_seconds": round(elapsed, 2),
             "scan_rate": rate,
             "ports_scanned": ports,
@@ -233,20 +230,7 @@ def masscan_scan(
             "summary": f"Masscan: {targets_with_ports}/{len(original_targets)} targets with open ports, {total_open_ports} total ports found",
             "timestamp": datetime.now().isoformat()
         }
-        
-    except subprocess.TimeoutExpired:
-        timeout_mins = timeout // 60
-        return {
-            "success": False,
-            "error": f"Masscan timed out after {timeout_mins} minutes",
-            "targets": targets
-        }
-    except FileNotFoundError:
-        return {
-            "success": False,
-            "error": "masscan command not found. Please install masscan first.",
-            "targets": targets
-        }
+
     except Exception as ex:
         return {
             "success": False,

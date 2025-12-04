@@ -10,6 +10,7 @@ import socket
 import re
 import os
 from datetime import datetime
+from utils.command_runner import CommandRunner
 
 
 def get_local_network_info():
@@ -107,14 +108,14 @@ def nmap_scan(target, options="", return_dict=True, timeout=600):
         dict: Structured scan result with output_xml path for database parsing
     """
     import time
+    from utils.output_file_manager import OutputFileManager
 
-    # Generate output file paths
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_target = re.sub(r'[^\w\-.]', '_', target)
-    output_dir = "/tmp/nmap_scans"
-    os.makedirs(output_dir, exist_ok=True)
-
-    xml_output = os.path.join(output_dir, f"nmap_{safe_target}_{timestamp}.xml")
+    # Generate output file path using OutputFileManager
+    xml_output = OutputFileManager.generate_output_path(
+        tool="nmap",
+        target=target,
+        ext="xml"
+    )
 
     cmd_parts = ["nmap", "-oX", xml_output]
 
@@ -123,114 +124,89 @@ def nmap_scan(target, options="", return_dict=True, timeout=600):
 
     cmd_parts.append(target)
 
-    try:
-        start_time = time.time()
-        result = subprocess.run(
-            cmd_parts,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False
-        )
-        elapsed = time.time() - start_time
+    # Use CommandRunner for consistent execution
+    exec_result = CommandRunner.run(cmd_parts, timeout=timeout)
 
-        if result.returncode != 0:
-            return {
-                "success": False,
-                "error": f"Nmap returned exit code {result.returncode}",
-                "stderr": result.stderr,
-                "stdout": result.stdout,
-                "target": target
-            }
-
-        # Parse stdout for quick summary
-        stdout = result.stdout
-        open_ports = []
-        hosts = []
-        host_up = False
-
-        for line in stdout.splitlines():
-            # Extract host info from "Nmap scan report for ..."
-            host_match = re.search(r'Nmap scan report for ([\w\.\-]+)(?: \((\d+\.\d+\.\d+\.\d+)\))?', line)
-            if host_match:
-                hostname = host_match.group(1)
-                ip = host_match.group(2) or hostname
-                hosts.append({"hostname": hostname, "ip": ip})
-
-            # Check if host is up
-            if 'Host is up' in line:
-                host_up = True
-
-            # Extract port info - handles variable whitespace
-            # Format: "22/tcp   open  ssh" or "443/tcp open  https"
-            port_match = re.match(r'^(\d+)/(tcp|udp)\s+(\w+)\s*(.*)?$', line)
-            if port_match:
-                open_ports.append({
-                    "port": int(port_match.group(1)),
-                    "protocol": port_match.group(2),
-                    "state": port_match.group(3),
-                    "service": (port_match.group(4) or "").strip()
-                })
-
-        # Count open, filtered, and closed ports
-        open_count = len([p for p in open_ports if p["state"] == "open"])
-        filtered_count = len([p for p in open_ports if p["state"] == "filtered"])
-        closed_count = len([p for p in open_ports if p["state"] == "closed"])
-
-        # If no hosts found but host was up, add the target as a host
-        if not hosts and host_up:
-            hosts.append({"hostname": target, "ip": target})
-
-        # Build informative summary
-        summary_parts = [f"{len(hosts)} host(s)"]
-        if open_count > 0:
-            summary_parts.append(f"{open_count} open")
-        if filtered_count > 0:
-            summary_parts.append(f"{filtered_count} filtered")
-        if closed_count > 0:
-            summary_parts.append(f"{closed_count} closed")
-
-        if not open_ports and host_up:
-            summary_parts.append("(host up, all scanned ports filtered/closed)")
-
-        return {
-            "success": True,
-            "tool": "nmap_scan",
-            "target": target,
-            "output_xml": xml_output,  # CRITICAL: For database parsing
-            "output": stdout,
-            "elapsed_seconds": round(elapsed, 2),
-            "hosts_discovered": len(hosts),
-            "hosts": hosts,
-            "host_up": host_up,
-            "open_ports_count": open_count,
-            "filtered_ports_count": filtered_count,
-            "closed_ports_count": closed_count,
-            "open_ports": open_ports,
-            "command": ' '.join(cmd_parts),
-            "summary": f"Nmap scan: {', '.join(summary_parts)}",
-            "timestamp": datetime.now().isoformat()
-        }
-
-    except subprocess.TimeoutExpired:
-        timeout_mins = timeout // 60
+    if not exec_result.success:
         return {
             "success": False,
-            "error": f"Nmap scan timed out after {timeout_mins} minutes",
+            "error": exec_result.error,
+            "stderr": exec_result.stderr,
+            "stdout": exec_result.stdout,
             "target": target
         }
-    except FileNotFoundError:
-        return {
-            "success": False,
-            "error": "nmap command not found. Please install nmap first.",
-            "target": target
-        }
-    except Exception as ex:
-        return {
-            "success": False,
-            "error": f"{type(ex).__name__}: {ex}",
-            "target": target
-        }
+
+    # Continue with parsing using the exec_result
+    elapsed = exec_result.elapsed_time
+
+    # Parse stdout for quick summary
+    stdout = exec_result.stdout
+    open_ports = []
+    hosts = []
+    host_up = False
+
+    for line in stdout.splitlines():
+        # Extract host info from "Nmap scan report for ..."
+        host_match = re.search(r'Nmap scan report for ([\w\.\-]+)(?: \((\d+\.\d+\.\d+\.\d+)\))?', line)
+        if host_match:
+            hostname = host_match.group(1)
+            ip = host_match.group(2) or hostname
+            hosts.append({"hostname": hostname, "ip": ip})
+
+        # Check if host is up
+        if 'Host is up' in line:
+            host_up = True
+
+        # Extract port info - handles variable whitespace
+        # Format: "22/tcp   open  ssh" or "443/tcp open  https"
+        port_match = re.match(r'^(\d+)/(tcp|udp)\s+(\w+)\s*(.*)?$', line)
+        if port_match:
+            open_ports.append({
+                "port": int(port_match.group(1)),
+                "protocol": port_match.group(2),
+                "state": port_match.group(3),
+                "service": (port_match.group(4) or "").strip()
+            })
+
+    # Count open, filtered, and closed ports
+    open_count = len([p for p in open_ports if p["state"] == "open"])
+    filtered_count = len([p for p in open_ports if p["state"] == "filtered"])
+    closed_count = len([p for p in open_ports if p["state"] == "closed"])
+
+    # If no hosts found but host was up, add the target as a host
+    if not hosts and host_up:
+        hosts.append({"hostname": target, "ip": target})
+
+    # Build informative summary
+    summary_parts = [f"{len(hosts)} host(s)"]
+    if open_count > 0:
+        summary_parts.append(f"{open_count} open")
+    if filtered_count > 0:
+        summary_parts.append(f"{filtered_count} filtered")
+    if closed_count > 0:
+        summary_parts.append(f"{closed_count} closed")
+
+    if not open_ports and host_up:
+        summary_parts.append("(host up, all scanned ports filtered/closed)")
+
+    return {
+        "success": True,
+        "tool": "nmap_scan",
+        "target": target,
+        "output_xml": xml_output,  # CRITICAL: For database parsing
+        "output": stdout,
+        "elapsed_seconds": round(elapsed, 2),
+        "hosts_discovered": len(hosts),
+        "hosts": hosts,
+        "host_up": host_up,
+        "open_ports_count": open_count,
+        "filtered_ports_count": filtered_count,
+        "closed_ports_count": closed_count,
+        "open_ports": open_ports,
+        "command": ' '.join(cmd_parts),
+        "summary": f"Nmap scan: {', '.join(summary_parts)}",
+        "timestamp": datetime.now().isoformat()
+    }
 
 
 # ============================================================================
@@ -1441,32 +1417,26 @@ def nmap_stealth_batch_scan(targets, ports="top-1000", timing="T3", max_rate=300
         timeout = max(600, int(estimated_seconds * 2))  # 2x safety factor
         print(f"     Timeout set to: {int(timeout // 60)}m {int(timeout % 60)}s")
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False
-        )
+        exec_result = CommandRunner.run(cmd, timeout=timeout)
 
-        elapsed_seconds = time.time() - start_time
+        elapsed_seconds = exec_result.elapsed_time
         print(f"     Scan completed in: {int(elapsed_seconds // 60)}m {int(elapsed_seconds % 60)}s")
-        print(f"     Nmap return code: {result.returncode}")
+        print(f"     Nmap return code: {exec_result.returncode}")
 
-        if result.returncode != 0:
-            print(f"     [ERROR] Nmap failed with return code {result.returncode}")
-            print(f"     [ERROR] stderr: {result.stderr[:200]}")
+        if not exec_result.success:
+            print(f"     [ERROR] Nmap failed: {exec_result.error}")
+            print(f"     [ERROR] stderr: {exec_result.stderr[:200]}")
             return {
                 "success": False,
-                "error": f"Nmap returned exit code {result.returncode}",
-                "stderr": result.stderr,
-                "stdout": result.stdout,
+                "error": exec_result.error,
+                "stderr": exec_result.stderr,
+                "stdout": exec_result.stdout,
                 "targets": target_list,
                 "targets_count": len(target_list)
             }
 
         # Parse results
-        stdout = result.stdout
+        stdout = exec_result.stdout
         results = {}  # {IP/hostname: [ports]}
         hostname_to_ip = {}
         current_host = None
@@ -1516,20 +1486,9 @@ def nmap_stealth_batch_scan(targets, ports="top-1000", timing="T3", max_rate=300
             "timing": timing,
             "output_xml": xml_output,
             "stdout": stdout,
-            "stderr": result.stderr
+            "stderr": exec_result.stderr
         }
 
-    except subprocess.TimeoutExpired:
-        timeout_mins = timeout // 60
-        print(f"     [ERROR] Scan timed out after {timeout_mins} minutes")
-        return {
-            "success": False,
-            "error": f"Nmap batch scan timed out after {timeout_mins} minutes",
-            "targets": target_list,
-            "targets_count": len(target_list),
-            "estimated_seconds": estimated_seconds,
-            "timeout_seconds": timeout
-        }
     except Exception as e:
         print(f"     [ERROR] Unexpected error: {e}")
         return {

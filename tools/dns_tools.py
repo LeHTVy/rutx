@@ -14,6 +14,7 @@ import os
 import socket
 from typing import List, Dict, Set, Tuple, Any
 from collections import defaultdict
+from utils.command_runner import CommandRunner
 
 
 def resolve_dns(domain: str) -> dict:
@@ -102,10 +103,10 @@ def dnsx_bulk_resolve(subdomains: List[str], timeout: int = 30) -> Dict[str, str
         return {}
     
     # Check if dnsx is available
-    try:
-        subprocess.run(["dnsx", "-version"], capture_output=True, check=True, timeout=5)
+    version_check = CommandRunner.run(["dnsx", "-version"], timeout=5)
+    if version_check.success:
         use_dnsx = True
-    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+    else:
         print("  [WARNING] dnsx not found, falling back to Python DNS (slower)")
         use_dnsx = False
     
@@ -138,18 +139,12 @@ def _dnsx_resolve(subdomains: List[str], timeout: int) -> Dict[str, str]:
         ]
         
         # print(f"DEBUG: Running command: {' '.join(cmd)}")
-        
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False
-        )
-        
-        if result.returncode != 0:
-            print(f"  [WARNING] dnsx failed with code {result.returncode}")
-            print(f"  [WARNING] stderr: {result.stderr}")
+
+        exec_result = CommandRunner.run(cmd, timeout=timeout)
+
+        if not exec_result.success:
+            print(f"  [WARNING] dnsx failed: {exec_result.error}")
+            print(f"  [WARNING] stderr: {exec_result.stderr}")
         
         # Parse JSON output
         import json
@@ -181,12 +176,9 @@ def _dnsx_resolve(subdomains: List[str], timeout: int) -> Dict[str, str]:
             # print(f"DEBUG: Raw output was: {content if 'content' in locals() else 'N/A'}")
             print("  [WARNING] Falling back to Python DNS")
             return _fallback_resolve(subdomains)
-            
+
         return mapping
-        
-    except subprocess.TimeoutExpired:
-        print(f"  [WARNING] dnsx timed out after {timeout}s")
-        return _fallback_resolve(subdomains)
+
     except Exception as e:
         print(f"  [WARNING] dnsx error: {e}")
         return _fallback_resolve(subdomains)

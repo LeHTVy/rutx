@@ -16,6 +16,7 @@ import json
 from datetime import datetime
 from typing import List, Union, Dict, Any
 from collections import defaultdict
+from utils.command_runner import CommandRunner
 
 
 def naabu_scan(
@@ -58,9 +59,8 @@ def naabu_scan(
             targets = [targets]
     
     # Check if naabu is available
-    try:
-        subprocess.run(["naabu", "-version"], capture_output=True, check=True, timeout=5)
-    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+    version_check = CommandRunner.run(["naabu", "-version"], timeout=5)
+    if not version_check.success:
         return {
             "success": False,
             "error": "naabu not found. Install with: go install github.com/projectdiscovery/naabu/v2/cmd/naabu@latest",
@@ -105,25 +105,17 @@ def naabu_scan(
         ])
 
         print(f"    Running: naabu -list {targets_file} -p {ports_display} -rate {rate}")
-        
-        import time
-        start_time = time.time()
-        
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False
-        )
-        
-        elapsed = time.time() - start_time
-        
-        if result.returncode != 0 and result.returncode != 1:  # 1 is OK (no results)
+
+        exec_result = CommandRunner.run(cmd, timeout=timeout)
+
+        elapsed = exec_result.elapsed_time
+
+        # Naabu returns 1 when no results found, which is OK
+        if exec_result.returncode != 0 and exec_result.returncode != 1:
             return {
                 "success": False,
-                "error": f"naabu returned exit code {result.returncode}",
-                "stderr": result.stderr,
+                "error": f"naabu returned exit code {exec_result.returncode}",
+                "stderr": exec_result.stderr,
                 "targets": targets
             }
         
@@ -170,13 +162,7 @@ def naabu_scan(
             "command": ' '.join(cmd),
             "summary": f"Naabu: {targets_with_ports}/{len(targets)} targets with open ports, {total_open_ports} total ports found"
         }
-        
-    except subprocess.TimeoutExpired:
-        return {
-            "success": False,
-            "error": f"naabu timed out after {timeout}s",
-            "targets": targets
-        }
+
     except Exception as e:
         return {
             "success": False,

@@ -2,9 +2,10 @@
 Snode Security Framework - Phase Validation System
 
 Enforces "No Exploit, No Report" principle by validating phase outputs.
+Includes declarative validation rules system for cleaner validation logic.
 """
 
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Callable
 from pathlib import Path
 import json
 import re
@@ -15,8 +16,129 @@ class ValidationError(Exception):
     pass
 
 
+class ValidationRule:
+    """
+    Declarative validation rule
+
+    Allows defining validation logic as data rather than code,
+    making it easier to maintain and understand.
+    """
+
+    def __init__(
+        self,
+        field: str,
+        validator_func: Callable[[Any], bool],
+        error_message: str,
+        required: bool = True
+    ):
+        """
+        Create a validation rule
+
+        Args:
+            field: Field name to validate (can use dot notation for nested: "user.email")
+            validator_func: Function that takes value and returns True if valid
+            error_message: Error message to show if validation fails
+            required: Whether field is required to exist
+        """
+        self.field = field
+        self.validator_func = validator_func
+        self.error_message = error_message
+        self.required = required
+
+    def validate(self, data: Dict) -> Optional[str]:
+        """
+        Validate this rule against data
+
+        Args:
+            data: Data dictionary to validate
+
+        Returns:
+            Error message if validation fails, None if passes
+        """
+        # Get value (support nested fields with dot notation)
+        value = self._get_nested_value(data, self.field)
+
+        # Check if field exists
+        if value is None:
+            if self.required:
+                return f"Missing required field: {self.field}"
+            else:
+                return None  # Optional field not present, skip validation
+
+        # Run validator function
+        try:
+            is_valid = self.validator_func(value)
+            if not is_valid:
+                return self.error_message
+        except Exception as e:
+            return f"Validation error for '{self.field}': {str(e)}"
+
+        return None
+
+    def _get_nested_value(self, data: Dict, field_path: str) -> Any:
+        """
+        Get value from nested dictionary using dot notation
+
+        Examples:
+            _get_nested_value({"user": {"name": "John"}}, "user.name") -> "John"
+        """
+        keys = field_path.split('.')
+        value = data
+
+        for key in keys:
+            if isinstance(value, dict) and key in value:
+                value = value[key]
+            else:
+                return None
+
+        return value
+
+
+def validate_with_rules(data: Dict, rules: List[ValidationRule]) -> Tuple[bool, List[str]]:
+    """
+    Validate data against a list of validation rules
+
+    Args:
+        data: Data dictionary to validate
+        rules: List of ValidationRule objects
+
+    Returns:
+        Tuple of (is_valid, error_messages)
+
+    Example:
+        rules = [
+            ValidationRule("name", lambda v: len(v) > 0, "Name cannot be empty"),
+            ValidationRule("age", lambda v: v >= 18, "Must be 18 or older"),
+        ]
+        is_valid, errors = validate_with_rules(user_data, rules)
+    """
+    errors = []
+
+    for rule in rules:
+        error = rule.validate(data)
+        if error:
+            errors.append(error)
+
+    return (len(errors) == 0, errors)
+
+
 class PhaseValidator:
-    """Validates that each phase produces required deliverables with proof"""
+    """
+    Validates that each phase produces required deliverables with proof
+
+    NOTE: These validators can be refactored to use the declarative ValidationRule
+    system for cleaner, more maintainable code. Example:
+
+    Phase 1 validation using declarative rules:
+        rules = [
+            ValidationRule("selected_tools", lambda v: len(v) > 0, "No tools selected"),
+            ValidationRule("reasoning", lambda v: v.strip(), "Missing reasoning"),
+        ]
+        return validate_with_rules(output, rules)
+
+    This pattern is recommended for future refactoring but existing validation
+    logic is preserved for stability.
+    """
 
     @staticmethod
     def validate_phase1_tool_selection(output: Dict[str, Any]) -> Tuple[bool, List[str]]:
@@ -28,23 +150,30 @@ class PhaseValidator:
         - Each tool has clear justification
         - Target is specified
         """
-        errors = []
+        # Using declarative validation rules
+        rules = [
+            ValidationRule(
+                "selected_tools",
+                lambda v: len(v) > 0,
+                "No tools selected"
+            ),
+            ValidationRule(
+                "reasoning",
+                lambda v: v and v.strip(),
+                "Missing overall reasoning for tool selection"
+            ),
+        ]
 
-        # Check tools selected
+        # Basic structural validation
+        is_valid, errors = validate_with_rules(output, rules)
+
+        # Additional validation for tool details
         tools = output.get('selected_tools', [])
-        if not tools:
-            errors.append("No tools selected")
-
-        # Check each tool has justification
         for tool in tools:
             if 'name' not in tool:
                 errors.append(f"Tool missing 'name' field: {tool}")
             if 'justification' not in tool or not tool['justification'].strip():
                 errors.append(f"Tool '{tool.get('name', 'unknown')}' missing justification")
-
-        # Check reasoning exists
-        if 'reasoning' not in output or not output['reasoning'].strip():
-            errors.append("Missing overall reasoning for tool selection")
 
         return (len(errors) == 0, errors)
 

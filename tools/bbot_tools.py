@@ -21,6 +21,7 @@ import os
 import time
 from datetime import datetime
 from pathlib import Path
+from utils.command_runner import CommandRunner
 
 
 def _find_bbot_executable():
@@ -48,41 +49,20 @@ def _find_bbot_executable():
     return "bbot"  # Fallback to command name
 
 
-def _run_subprocess_with_drain(cmd, timeout):
+def _run_bbot_command(cmd, timeout):
     """
-    Run subprocess while draining stdout/stderr to prevent blocking.
-    Returns (returncode, elapsed_time) - output is written to files by bbot.
-
-    Uses DEVNULL to completely suppress output and avoid terminal I/O issues.
+    Run BBOT command using CommandRunner.
+    BBOT writes results to JSON files, so we suppress output.
+    Returns (returncode, elapsed_time).
     """
     # Resolve executable path
     if cmd[0] == "bbot":
         cmd[0] = _find_bbot_executable()
 
-    # Completely suppress stdout/stderr to avoid terminal I/O blocking
-    # BBOT writes its results to JSON files anyway
-    try:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL
-        )
-    except FileNotFoundError:
-        # Re-raise to be caught by caller
-        raise
+    # Run command - BBOT writes its results to JSON files anyway
+    exec_result = CommandRunner.run(cmd, timeout=timeout)
 
-    start_time = time.time()
-    try:
-        process.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
-        raise
-
-    elapsed = time.time() - start_time
-
-    return process.returncode, elapsed
+    return exec_result.returncode, exec_result.elapsed_time
 
 
 def bbot_scan(target, preset=None, modules=None, flags=None, output_dir=None, timeout=600):
@@ -112,8 +92,8 @@ def bbot_scan(target, preset=None, modules=None, flags=None, output_dir=None, ti
 
         print(f"  Running: {' '.join(cmd)}")
 
-        # Use non-blocking subprocess execution
-        _, elapsed = _run_subprocess_with_drain(cmd, timeout)
+        # Use CommandRunner for execution
+        _, elapsed = _run_bbot_command(cmd, timeout)
 
         findings = []
         subdomains = []
@@ -214,8 +194,8 @@ def bbot_subdomain_enum(target, passive=False, timeout=600):
 
         print(f"  Running: {' '.join(cmd)}")
 
-        # Use non-blocking subprocess execution
-        _, elapsed = _run_subprocess_with_drain(cmd, timeout)
+        # Use CommandRunner for execution
+        _, elapsed = _run_bbot_command(cmd, timeout)
 
         subdomains = []
         findings = []
@@ -312,8 +292,8 @@ def bbot_web_scan(target, timeout=600):
 
         print(f"  Running: {' '.join(cmd)}")
 
-        # Use non-blocking subprocess execution
-        _, elapsed = _run_subprocess_with_drain(cmd, timeout)
+        # Use CommandRunner for execution
+        _, elapsed = _run_bbot_command(cmd, timeout)
 
         findings = []
         technologies = []
@@ -376,8 +356,8 @@ def bbot_quick_scan(target, timeout=300):
 
         print(f"  Running: {' '.join(cmd)}")
 
-        # Use non-blocking subprocess execution
-        _, elapsed = _run_subprocess_with_drain(cmd, timeout)
+        # Use CommandRunner for execution
+        _, elapsed = _run_bbot_command(cmd, timeout)
 
         findings = []
         event_types = {}

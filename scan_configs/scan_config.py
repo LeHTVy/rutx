@@ -308,14 +308,10 @@ def load_scan_config(config_path: str) -> ScanConfig:
         FileNotFoundError: If config file doesn't exist
         ValueError: If config is invalid
     """
-    config_file = Path(config_path)
+    from utils.config_loader import ConfigLoader
 
-    if not config_file.exists():
-        raise FileNotFoundError(f"Configuration file not found: {config_path}")
-
-    # Load YAML
-    with open(config_file, 'r', encoding='utf-8') as f:
-        config_dict = yaml.safe_load(f)
+    # Load YAML using ConfigLoader
+    config_dict = ConfigLoader.load_yaml(config_path)
 
     # Validate against schema
     validate_scan_config(config_dict)
@@ -405,15 +401,14 @@ def save_scan_config(config: ScanConfig, output_path: str) -> str:
         }
     }
 
-    output_file = Path(output_path)
-    output_file.parent.mkdir(parents=True, exist_ok=True)
+    from utils.config_loader import ConfigLoader
 
-    with open(output_file, 'w', encoding='utf-8') as f:
-        yaml.dump(yaml_config, f, default_flow_style=False, sort_keys=False)
+    # Use ConfigLoader for atomic write
+    ConfigLoader.save_yaml(output_path, yaml_config, atomic=True, sort_keys=False)
 
     print(f"[SUCCESS] Saved configuration to {output_path}")
 
-    return str(output_file)
+    return str(Path(output_path))
 
 
 # Example usage

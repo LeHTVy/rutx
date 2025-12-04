@@ -125,19 +125,29 @@ class AuditLogger:
         """
         Save prompt snapshot for reproducibility
 
+        Delegates to PromptManager.save_prompt_snapshot() for consistency.
+
         Args:
             phase_name: Name of the phase (phase1_tool_selection, etc.)
             prompt_content: The exact prompt sent to LLM
         """
-        prompt_file = self.prompts_dir / f"{phase_name}.md"
+        from prompt_templates import save_prompt_snapshot
 
-        with open(prompt_file, 'w', encoding='utf-8') as f:
-            f.write(f"# {phase_name}\n\n")
-            f.write(f"**Session**: {self.session_id}\n")
-            f.write(f"**Target**: {self.target}\n")
-            f.write(f"**Timestamp**: {datetime.now().isoformat()}\n\n")
-            f.write("---\n\n")
-            f.write(prompt_content)
+        # Add metadata header before delegating
+        full_prompt = f"# {phase_name}\n\n"
+        full_prompt += f"**Session**: {self.session_id}\n"
+        full_prompt += f"**Target**: {self.target}\n"
+        full_prompt += f"**Timestamp**: {datetime.now().isoformat()}\n\n"
+        full_prompt += "---\n\n"
+        full_prompt += prompt_content
+
+        # Delegate to PromptManager (which handles file creation)
+        save_prompt_snapshot(
+            session_id=self.session_id,
+            phase_name=phase_name,
+            prompt_content=full_prompt,
+            output_dir=str(self.audit_dir.parent)  # audit_logs directory
+        )
 
     def get_event_history(self) -> list:
         """

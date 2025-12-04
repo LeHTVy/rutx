@@ -7,15 +7,16 @@ Works with local Ollama LLM only
 from typing import Optional
 import config
 from utils.tracing import setup_tracing, get_tracing_manager, TracingManager
-from guardrails import InputGuardrail, OutputGuardrail, CommandValidator
+from guardrails import InputGuardrail, OutputGuardrail
 
 
 class SNODEIntegration:
     """Manages SNODE AI feature integration (tracing + guardrails)"""
-    
+
     def __init__(self):
         self.tracing_manager: Optional[TracingManager] = None
-        self.validator: Optional[CommandValidator] = None
+        self.input_guardrail: Optional[InputGuardrail] = None
+        self.output_guardrail: Optional[OutputGuardrail] = None
         self.enabled = False
     
     def initialize(self):
@@ -35,11 +36,13 @@ class SNODEIntegration:
             except Exception as e:
                 print(f"   ⚠️  Tracing setup failed: {e}")
         
-        # Setup guardrails
+        # Setup guardrails - directly use InputGuardrail and OutputGuardrail
         if config.ENABLE_GUARDRAILS:
             try:
-                self.validator = CommandValidator(
-                    strict_input=config.STRICT_INPUT_VALIDATION,
+                self.input_guardrail = InputGuardrail(
+                    strict_mode=config.STRICT_INPUT_VALIDATION
+                )
+                self.output_guardrail = OutputGuardrail(
                     allow_destructive=config.ALLOW_DESTRUCTIVE_COMMANDS
                 )
                 print("   ✅ Guardrails enabled (Input + Output validation)")
@@ -52,47 +55,47 @@ class SNODEIntegration:
     def validate_user_input(self, user_input: str) -> tuple:
         """
         Validate user input for prompt injection
-        
+
         Returns:
             (is_valid, reason)
         """
         if not config.ENABLE_GUARDRAILS or not config.PROMPT_INJECTION_DETECTION:
             return True, ""
-        
-        if self.validator:
-            is_valid, reason = self.validator.validate_user_input(user_input)
+
+        if self.input_guardrail:
+            is_valid, reason = self.input_guardrail.validate(user_input)
             if not is_valid:
                 print(f"\n🛡️  GUARDRAIL BLOCKED: {reason}")
                 print(f"   Input: \"{user_input[:100]}...\"")
             return is_valid, reason
-        
+
         return True, ""
     
     def validate_command(self, command: str) -> tuple:
         """
         Validate command for dangerous operations
-        
+
         Returns:
             (is_safe, reason)
         """
         if not config.ENABLE_GUARDRAILS or not config.DANGEROUS_COMMAND_FILTER:
             return True, ""
-        
-        if self.validator:
-            is_safe, reason = self.validator.validate_command(command)
+
+        if self.output_guardrail:
+            is_safe, reason, _ = self.output_guardrail.validate(command)
             if not is_safe:
                 print(f"\n🛡️  GUARDRAIL BLOCKED: {reason}")
                 print(f"   Command: \"{command}\"")
-                
+
                 # Try to sanitize if enabled
                 if config.AUTO_SANITIZE_COMMANDS:
-                    sanitized = self.validator.output_guardrail.sanitize(command)
+                    sanitized = self.output_guardrail.sanitize(command)
                     if sanitized != command:
                         print(f"   💡 Suggested safe version: \"{sanitized}\"")
                         return False, f"{reason} (suggested: {sanitized})"
-            
+
             return is_safe, reason
-        
+
         return True, ""
     
     def create_trace_span(self, name: str, attributes: dict = None):

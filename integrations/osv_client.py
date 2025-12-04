@@ -1,8 +1,8 @@
-import requests
 from typing import List, Dict, Optional
-from datetime import datetime
+from integrations.base_cve_client import BaseCVEClient
 
-class OSVClient:
+
+class OSVClient(BaseCVEClient):
     """
     Client for OSV (Open Source Vulnerabilities) database
 
@@ -14,10 +14,7 @@ class OSVClient:
     BASE_URL = "https://api.osv.dev/v1"
 
     def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "SNODE-AI-CVE-Scanner"
-        })
+        super().__init__(base_url=self.BASE_URL, timeout=10)
 
     def query_by_cve(self, cve_id: str) -> Optional[Dict]:
         """
@@ -37,22 +34,18 @@ class OSVClient:
                 "database_specific": {...}
             }
         """
-        try:
-            url = f"{self.BASE_URL}/vulns/{cve_id}"
-            response = self.session.get(url, timeout=10)
+        url = f"{self.base_url}/vulns/{cve_id}"
+        result = self._make_http_request(url, method="GET", provider_name="OSV")
 
-            if response.status_code == 200:
-                return self._parse_osv_vuln(response.json())
-            elif response.status_code == 404:
-                return None
-            else:
-                response.raise_for_status()
-
-        except requests.RequestException as e:
-            print(f"OSV API error for {cve_id}: {e}")
+        if result.get("success"):
+            return self._parse_vulnerability(result["data"])
+        elif result.get("status_code") == 404:
+            return None
+        else:
+            print(f"OSV API error for {cve_id}: {result.get('error')}")
             return None
 
-    def query_batch(self, cve_ids: List[str]) -> Dict[str, Dict]:
+    def batch_query(self, cve_ids: List[str]) -> Dict[str, Dict]:
         """
         Batch query multiple CVEs (more efficient)
 
@@ -68,39 +61,38 @@ class OSVClient:
         results = {}
 
         # OSV batch endpoint
-        url = f"{self.BASE_URL}/querybatch"
+        url = f"{self.base_url}/querybatch"
 
         # Build batch request
         queries = [{"id": cve_id} for cve_id in cve_ids]
+        payload = {"queries": queries}
 
-        try:
-            response = self.session.post(
-                url,
-                json={"queries": queries},
-                timeout=30
-            )
-            response.raise_for_status()
+        # Use base class HTTP method
+        result = self._make_http_request(
+            url,
+            method="POST",
+            payload=payload,
+            timeout=30,
+            provider_name="OSV"
+        )
 
-            batch_results = response.json().get("results", [])
+        if result.get("success"):
+            batch_results = result["data"].get("results", [])
 
-            for i, result in enumerate(batch_results):
+            for i, batch_result in enumerate(batch_results):
                 cve_id = cve_ids[i]
-                vulns = result.get("vulns", [])
+                vulns = batch_result.get("vulns", [])
 
                 if vulns:
-                    results[cve_id] = self._parse_osv_vuln(vulns[0])
-
-        except requests.RequestException as e:
-            print(f"OSV batch query error: {e}")
-            # Fallback to individual queries
-            for cve_id in cve_ids:
-                result = self.query_by_cve(cve_id)
-                if result:
-                    results[cve_id] = result
+                    results[cve_id] = self._parse_vulnerability(vulns[0])
+        else:
+            print(f"OSV batch query error: {result.get('error')}")
+            # Fallback to individual queries using base class method
+            return super().batch_query(cve_ids)
 
         return results
 
-    def _parse_osv_vuln(self, vuln_data: Dict) -> Dict:
+    def _parse_vulnerability(self, vuln_data: Dict) -> Dict:
         """
         Parse OSV vulnerability data into standardized format
 
@@ -151,36 +143,15 @@ class OSVClient:
         # Extract references
         references = [ref.get("url") for ref in vuln_data.get("references", [])]
 
-        return {
-            "cve_id": cve_id,
-            "description": vuln_data.get("summary", vuln_data.get("details", ""))[:500],
-            "published_date": vuln_data.get("published"),
-            "modified_date": vuln_data.get("modified"),
-            "cvss_v3_score": cvss_v3_score,
-            "cvss_v3_severity": cvss_v3_severity,
-            "cvss_v3_vector": cvss_v3_vector,
-            "affected_packages": affected_packages[:20],
-            "references": references[:10],
-            "data_source": "osv",
-            "last_synced": datetime.now().isoformat()
-        }
+        # Use base class standardization method
+        return self._standardize_cve_data(
+            cve_id=cve_id,
+            description=vuln_data.get("summary", vuln_data.get("details", "")),
+            published_date=vuln_data.get("published"),
+            modified_date=vuln_data.get("modified"),
+            cvss_score=cvss_v3_score,
+            cvss_vector=cvss_v3_vector,
+            references=references,
+            affected_packages=affected_packages
+        )
 
-    def _extract_cvss_score(self, vector: str) -> Optional[float]:
-        """Extract base score from CVSS vector string"""
-        # CVSS vectors don't contain the score, need to calculate or fetch separately
-        # For OSV, they should provide it in the severity field
-        # Placeholder - real implementation would use cvss library
-        return None
-
-    def _cvss_to_severity(self, score: Optional[float]) -> Optional[str]:
-        """Convert CVSS score to severity label"""
-        if score is None:
-            return None
-        elif score >= 9.0:
-            return "CRITICAL"
-        elif score >= 7.0:
-            return "HIGH"
-        elif score >= 4.0:
-            return "MEDIUM"
-        else:
-            return "LOW"

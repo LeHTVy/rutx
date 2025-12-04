@@ -31,12 +31,193 @@ except ImportError:
 
 
 # ============================================================================
-# PHASE 1: TOOL SELECTION
+# PHASE 1: TOOL SELECTION - TIER 1 ENHANCED
 # ============================================================================
+
+# TIER 1 Enhancement 1: Chain-of-Thought Reasoning Template
+COT_REASONING_TEMPLATE = """
+🧠 **CHAIN-OF-THOUGHT REASONING** (Think step-by-step BEFORE selecting tools):
+
+**STEP 1: ANALYZE USER INTENT**
+- What is the user specifically asking for?
+- What is the TARGET TYPE? (IP address / Domain / Web app / API / Network range)
+- What is the SCOPE? (Single host / Multiple hosts / Domain enumeration)
+
+**STEP 2: IDENTIFY PRIMARY GOAL**
+- Information Gathering? (Reconnaissance / OSINT)
+- Service Discovery? (Port scanning / Service detection)
+- Vulnerability Assessment? (CVE detection / Security audit)
+- Subdomain Enumeration? (DNS discovery)
+
+**STEP 3: CONSULT EFFECTIVENESS SCORES**
+- Which tools have scores >= 0.85 for this target type?
+- Are there EXCELLENT (0.9+) tools available?
+- Which tool is the PRIMARY choice vs SUPPLEMENTARY?
+
+**STEP 4: APPLY CRITICAL CONSTRAINTS**
+⚡ TIME: Prefer FAST tools unless user explicitly requests "comprehensive" or "thorough"
+🎭 STEALTH: Consider noise level (only use aggressive scans if requested)
+🔐 PRIVILEGES: Don't select admin-only tools when running as user
+⛔ **FORBIDDEN TOOLS** (NEVER SELECT THESE):
+   - nmap_all_ports (30-60 min, too slow)
+   - nmap_comprehensive_scan (60+ min, extremely slow)
+   EXCEPTION: Only if user explicitly says "all ports" or "comprehensive"
+
+**STEP 5: SELECT MINIMAL TOOL SET**
+- Choose 1-3 tools MAXIMUM (efficiency over completeness)
+- Prioritize tools with HIGHEST effectiveness for target type
+- Consider tool PREREQUISITES (e.g., service detection before vuln scan)
+- Explain WHY each tool is the BEST choice
+
+**STEP 6: FORMAT YOUR DECISION**
+- Use proper JSON format
+- Include your reasoning chain
+- Reference effectiveness scores in justification
+- Be specific about what each tool will accomplish
+
+---
+"""
+
+# TIER 1 Enhancement 2: Few-Shot Learning Examples
+FEW_SHOT_EXAMPLES = """
+📚 **LEARN FROM THESE EXAMPLES** (Good vs Bad Selections):
+
+✅ **EXAMPLE 1 - GOOD: Subdomain Enumeration**
+User Request: "Find all subdomains of example.com"
+Target Type: Domain
+Intent: subdomain_enumeration
+
+Selected Tools:
+[
+  {
+    "name": "bbot_subdomain_enum",
+    "arguments": {"domain": "example.com"},
+    "justification": "BBOT is EXCELLENT (0.90 effectiveness) for subdomain enumeration. Fast recursive scanning with OSINT integration. Best tool for this specific task."
+  }
+]
+
+✅ Why this is correct:
+- Detected intent correctly (subdomain_enum)
+- Selected tool with 0.90 effectiveness for subdomains
+- Only 1 tool needed (efficient)
+- Fast execution time (~1-3 minutes)
+
+---
+
+✅ **EXAMPLE 2 - GOOD: Vulnerability Assessment**
+User Request: "Check 192.168.1.1 for vulnerabilities"
+Target Type: IP address (network_host)
+Intent: vulnerability_scan
+
+Selected Tools:
+[
+  {
+    "name": "nmap_service_detection",
+    "arguments": {"target": "192.168.1.1"},
+    "justification": "Service detection is PREREQUISITE for vulnerability scanning. Effectiveness 0.95 for network hosts. Identifies services and versions first."
+  },
+  {
+    "name": "nmap_vuln_scan",
+    "arguments": {"target": "192.168.1.1"},
+    "justification": "NSE vulnerability scanning (0.90 effectiveness). Checks discovered services for known CVEs. Requires service detection first."
+  }
+]
+
+✅ Why this is correct:
+- Recognized prerequisite relationship (services BEFORE vulns)
+- Both tools have 0.85+ effectiveness
+- Logical workflow (detection → assessment)
+- 2 tools is reasonable for this complex task
+
+---
+
+❌ **EXAMPLE 3 - BAD: Wrong Tool for Task**
+User Request: "Find subdomains of example.com"
+Target Type: Domain
+Intent: subdomain_enumeration
+
+Selected Tools:
+[
+  {
+    "name": "nmap_service_detection",  ← WRONG!
+    "arguments": {"target": "example.com"},
+    "justification": "Scanning the domain"
+  }
+]
+
+❌ Why this is WRONG:
+- nmap_service_detection is for PORT SCANNING, not subdomain discovery
+- Effectiveness for subdomains: 0.65 (LIMITED)
+- Wrong tool for the task!
+✅ CORRECT: Use bbot_subdomain_enum (0.90 effectiveness for subdomains)
+
+---
+
+❌ **EXAMPLE 4 - BAD: Forbidden Slow Tool**
+User Request: "Quick scan of 192.168.1.1"
+Target Type: IP address
+Intent: quick_scan
+
+Selected Tools:
+[
+  {
+    "name": "nmap_all_ports",  ← FORBIDDEN!
+    "arguments": {"target": "192.168.1.1"},
+    "justification": "Comprehensive port scan"
+  }
+]
+
+❌ Why this is WRONG:
+- User said "QUICK" but nmap_all_ports takes 30-60 MINUTES
+- This is a FORBIDDEN tool (too slow for normal use)
+- Completely ignores user's time constraint!
+✅ CORRECT: Use nmap_quick_scan (~30 seconds, 0.75 effectiveness)
+
+---
+
+✅ **EXAMPLE 5 - GOOD: Subdomain + Port Scanning Workflow**
+User Request: "Enumerate subdomains and scan for open ports on example.com"
+Target Type: Domain
+Intent: subdomain_enum + port_scan
+
+Selected Tools:
+[
+  {
+    "name": "bbot_subdomain_enum",
+    "arguments": {"domain": "example.com"},
+    "justification": "PHASE 1: Discover subdomains (0.90 effectiveness). Fast recursive enumeration."
+  },
+  {
+    "name": "nmap_stealth_batch_scan",
+    "arguments": {"targets": "{discovered_subdomains}", "ports": "top-1000"},
+    "justification": "PHASE 2: Port scan discovered IPs (0.88 effectiveness). Stealthy batch scanning of enumerated targets."
+  }
+]
+
+✅ Why this is correct:
+- Recognizes 2-phase workflow (discover THEN scan)
+- Both tools have high effectiveness (0.88-0.90)
+- Efficient workflow pattern
+- Output of tool 1 feeds into tool 2
+
+---
+
+🎯 **KEY LEARNING POINTS:**
+1. Match tool PRIMARY PURPOSE to user intent
+2. Check effectiveness scores (prefer 0.85+)
+3. Respect user's time constraints (quick = fast tools)
+4. Understand tool prerequisites (services before vulns)
+5. NEVER select forbidden slow tools (nmap_all_ports, comprehensive_scan)
+6. Keep it minimal (1-3 tools max)
+7. Explain your reasoning with specific effectiveness scores
+
+---
+"""
 
 def get_phase1_prompt(tool_list: str, user_request: str = "") -> str:
     """
     Build Phase 1 (Tool Selection) prompt using template system
+    TIER 1 ENHANCED: Now includes Chain-of-Thought + Few-Shot Examples
 
     Args:
         tool_list: Formatted list of available tools
@@ -53,35 +234,61 @@ def get_phase1_prompt(tool_list: str, user_request: str = "") -> str:
     # Load prompt from template (NEW architecture - no fallbacks)
     base_prompt = load_prompt('phase1_tool_selection', variables)
 
-    # Add enhanced features if available (same as old version)
+    # TIER 1 Enhancement: Insert Chain-of-Thought and Few-Shot Examples
+    # This goes BEFORE the base prompt to guide thinking
+    enhanced_prompt = COT_REASONING_TEMPLATE + FEW_SHOT_EXAMPLES + "\n\n" + base_prompt
+
+    # TIER 1 Enhancement 3: Emphasize Effectiveness with Better Formatting
     if ENHANCED_FEATURES_AVAILABLE and user_request:
         target_type = detect_target_type(user_request)
         effectiveness_info = get_effectiveness_summary(target_type)
+
+        # Get best tools for emphasis
+        best_tools = get_best_tools(target_type, min_score=0.85, limit=5)
+        best_tools_str = "\n".join([f"   • {tool}: {score:.2f}" for tool, score in best_tools])
 
         suggested_pattern = suggest_pattern(user_request, target_type)
         pattern_info = ""
         if suggested_pattern:
             pattern_info = f"\n**SUGGESTED ATTACK PATTERN:**\n{get_pattern_summary(suggested_pattern)}\n"
 
+        # TIER 1: Enhanced formatting with clear emphasis
         enhanced_guidance = f"""
 
-**INTELLIGENT GUIDANCE FOR THIS REQUEST:**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 **INTELLIGENT GUIDANCE FOR THIS SPECIFIC REQUEST**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Detected Target Type: {target_type}
+📌 **DETECTED TARGET TYPE:** {target_type.upper().replace('_', ' ')}
 
+🏆 **TOP TOOLS FOR {target_type.upper()} (Use These First):**
+{best_tools_str}
+
+📊 **FULL EFFECTIVENESS BREAKDOWN:**
 {effectiveness_info}
 {pattern_info}
 
-**SELECTION STRATEGY:**
-1. Prioritize tools with highest effectiveness scores (0.9+)
-2. Consider following the suggested pattern if applicable
-3. Select 1-3 tools maximum for efficiency
-4. Explain why each tool was selected
+💡 **YOUR SELECTION STRATEGY (Follow This Order):**
+1. ✅ PRIORITIZE tools with 0.85+ effectiveness scores
+2. ✅ Select 1-3 tools MAXIMUM (efficiency is key)
+3. ✅ Match tool PRIMARY PURPOSE to user's intent
+4. ✅ Consider prerequisites (e.g., service detection BEFORE vuln scan)
+5. ✅ Reference effectiveness scores in your justification
+6. ✅ Explain SPECIFICALLY what each tool will accomplish
+
+⚠️  **CRITICAL REMINDERS:**
+- User says "quick"? → Choose FAST tools (effectiveness 0.75+ is acceptable)
+- IP address? → Use nmap/masscan (0.9+ effectiveness)
+- Domain? → Use bbot/amass for subdomains (0.9+ effectiveness)
+- Vulnerability scan? → ALWAYS do service detection FIRST
+- ⛔ NEVER: nmap_all_ports, nmap_comprehensive_scan (unless explicitly requested)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 """
-        base_prompt += enhanced_guidance
+        enhanced_prompt += enhanced_guidance
 
-    return base_prompt
+    return enhanced_prompt
 
 
 # ============================================================================

@@ -6,8 +6,11 @@ Supports: Ollama, OpenAI, Anthropic, Google Gemini, Groq
 
 import requests
 import json
-from typing import Dict, List, Optional
+import logging
+from typing import Dict, List, Optional, Callable
 from llm_config import LLMConfig
+
+logger = logging.getLogger(__name__)
 
 
 class LLMClient:
@@ -64,222 +67,250 @@ class LLMClient:
         else:
             return {"error": f"Unsupported provider: {self.provider}"}
 
-    def _call_ollama(self, messages: List[Dict], timeout: int) -> Dict:
-        """Call Ollama local LLM"""
-        try:
-            payload = {
-                "model": self.model,
-                "messages": messages,
-                "stream": False
-            }
+    def _make_http_request(
+        self,
+        endpoint: str,
+        payload: Dict,
+        timeout: int,
+        headers: Optional[Dict] = None,
+        provider_name: str = "LLM"
+    ) -> Dict:
+        """
+        Common HTTP request logic for all LLM providers.
 
+        This consolidates duplicate request.post() patterns across 5 provider methods.
+
+        Args:
+            endpoint: API endpoint URL
+            payload: JSON payload to send
+            timeout: Request timeout in seconds
+            headers: Optional HTTP headers
+            provider_name: Provider name for error messages
+
+        Returns:
+            Dict with either response data or error information
+        """
+        try:
             response = requests.post(
-                self.endpoint,
+                endpoint,
+                headers=headers,
                 json=payload,
                 timeout=timeout
             )
 
             if response.status_code == 200:
-                return response.json()
+                return {"success": True, "data": response.json()}
             else:
+                logger.error(f"{provider_name} request failed with status {response.status_code}")
                 return {
-                    "error": f"Ollama request failed with status {response.status_code}",
-                    "details": response.text
+                    "success": False,
+                    "error": f"{provider_name} request failed with status {response.status_code}",
+                    "details": response.text,
+                    "status_code": response.status_code
                 }
 
         except requests.exceptions.Timeout:
-            return {"error": f"Ollama request timed out after {timeout} seconds"}
-        except requests.exceptions.ConnectionError:
+            logger.error(f"{provider_name} request timed out after {timeout} seconds")
             return {
-                "error": "Cannot connect to Ollama. Is it running?",
-                "hint": "Start Ollama with: ollama serve"
+                "success": False,
+                "error": f"{provider_name} request timed out after {timeout} seconds"
+            }
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"Cannot connect to {provider_name}: {e}")
+            return {
+                "success": False,
+                "error": f"Cannot connect to {provider_name}",
+                "details": str(e)
             }
         except Exception as e:
-            return {"error": f"Ollama request failed: {str(e)}"}
+            logger.error(f"{provider_name} request failed: {e}")
+            return {
+                "success": False,
+                "error": f"{provider_name} request failed: {str(e)}"
+            }
+
+    def _call_ollama(self, messages: List[Dict], timeout: int) -> Dict:
+        """Call Ollama local LLM"""
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False
+        }
+
+        result = self._make_http_request(
+            endpoint=self.endpoint,
+            payload=payload,
+            timeout=timeout,
+            provider_name="Ollama"
+        )
+
+        if result.get("success"):
+            return result["data"]
+        else:
+            # Add Ollama-specific hint for connection errors
+            if "Cannot connect" in result.get("error", ""):
+                result["hint"] = "Start Ollama with: ollama serve"
+            return result
 
     def _call_openai(self, messages: List[Dict], timeout: int) -> Dict:
         """Call OpenAI API"""
         if not self.api_key:
             return {"error": "OpenAI API key not configured"}
 
-        try:
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
 
-            payload = {
-                "model": self.model,
-                "messages": messages
-            }
+        payload = {
+            "model": self.model,
+            "messages": messages
+        }
 
-            response = requests.post(
-                self.endpoint,
-                headers=headers,
-                json=payload,
-                timeout=timeout
-            )
+        result = self._make_http_request(
+            endpoint=self.endpoint,
+            payload=payload,
+            timeout=timeout,
+            headers=headers,
+            provider_name="OpenAI"
+        )
 
-            if response.status_code == 200:
-                data = response.json()
-                # Convert OpenAI format to Ollama-like format
-                return {
-                    "message": {
-                        "role": "assistant",
-                        "content": data["choices"][0]["message"]["content"]
-                    }
+        if result.get("success"):
+            data = result["data"]
+            # Convert OpenAI format to Ollama-like format
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": data["choices"][0]["message"]["content"]
                 }
-            else:
-                return {
-                    "error": f"OpenAI request failed with status {response.status_code}",
-                    "details": response.text
-                }
-
-        except Exception as e:
-            return {"error": f"OpenAI request failed: {str(e)}"}
+            }
+        else:
+            return result
 
     def _call_anthropic(self, messages: List[Dict], timeout: int) -> Dict:
         """Call Anthropic Claude API"""
         if not self.api_key:
             return {"error": "Anthropic API key not configured"}
 
-        try:
-            headers = {
-                "x-api-key": self.api_key,
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json"
-            }
+        headers = {
+            "x-api-key": self.api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json"
+        }
 
-            # Extract system message if present
-            system_message = None
-            anthropic_messages = []
-            for msg in messages:
-                if msg["role"] == "system":
-                    system_message = msg["content"]
-                else:
-                    anthropic_messages.append(msg)
-
-            payload = {
-                "model": self.model,
-                "messages": anthropic_messages,
-                "max_tokens": 4096
-            }
-
-            if system_message:
-                payload["system"] = system_message
-
-            response = requests.post(
-                self.endpoint,
-                headers=headers,
-                json=payload,
-                timeout=timeout
-            )
-
-            if response.status_code == 200:
-                data = response.json()
-                # Convert Anthropic format to Ollama-like format
-                return {
-                    "message": {
-                        "role": "assistant",
-                        "content": data["content"][0]["text"]
-                    }
-                }
+        # Extract system message if present
+        system_message = None
+        anthropic_messages = []
+        for msg in messages:
+            if msg["role"] == "system":
+                system_message = msg["content"]
             else:
-                return {
-                    "error": f"Anthropic request failed with status {response.status_code}",
-                    "details": response.text
-                }
+                anthropic_messages.append(msg)
 
-        except Exception as e:
-            return {"error": f"Anthropic request failed: {str(e)}"}
+        payload = {
+            "model": self.model,
+            "messages": anthropic_messages,
+            "max_tokens": 4096
+        }
+
+        if system_message:
+            payload["system"] = system_message
+
+        result = self._make_http_request(
+            endpoint=self.endpoint,
+            payload=payload,
+            timeout=timeout,
+            headers=headers,
+            provider_name="Anthropic"
+        )
+
+        if result.get("success"):
+            data = result["data"]
+            # Convert Anthropic format to Ollama-like format
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": data["content"][0]["text"]
+                }
+            }
+        else:
+            return result
 
     def _call_google(self, messages: List[Dict], timeout: int) -> Dict:
         """Call Google Gemini API"""
         if not self.api_key:
             return {"error": "Google API key not configured"}
 
-        try:
-            # Google Gemini uses a different format
-            endpoint = f"https://generativelanguage.googleapis.com/v1/models/{self.model}:generateContent?key={self.api_key}"
+        # Google Gemini uses a different format
+        endpoint = f"https://generativelanguage.googleapis.com/v1/models/{self.model}:generateContent?key={self.api_key}"
 
-            # Convert messages to Google format
-            contents = []
-            for msg in messages:
-                role = "user" if msg["role"] in ["user", "system"] else "model"
-                contents.append({
-                    "role": role,
-                    "parts": [{"text": msg["content"]}]
-                })
+        # Convert messages to Google format
+        contents = []
+        for msg in messages:
+            role = "user" if msg["role"] in ["user", "system"] else "model"
+            contents.append({
+                "role": role,
+                "parts": [{"text": msg["content"]}]
+            })
 
-            payload = {
-                "contents": contents
+        payload = {
+            "contents": contents
+        }
+
+        result = self._make_http_request(
+            endpoint=endpoint,
+            payload=payload,
+            timeout=timeout,
+            provider_name="Google"
+        )
+
+        if result.get("success"):
+            data = result["data"]
+            # Convert Google format to Ollama-like format
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": text
+                }
             }
-
-            response = requests.post(
-                endpoint,
-                json=payload,
-                timeout=timeout
-            )
-
-            if response.status_code == 200:
-                data = response.json()
-                # Convert Google format to Ollama-like format
-                text = data["candidates"][0]["content"]["parts"][0]["text"]
-                return {
-                    "message": {
-                        "role": "assistant",
-                        "content": text
-                    }
-                }
-            else:
-                return {
-                    "error": f"Google request failed with status {response.status_code}",
-                    "details": response.text
-                }
-
-        except Exception as e:
-            return {"error": f"Google request failed: {str(e)}"}
+        else:
+            return result
 
     def _call_groq(self, messages: List[Dict], timeout: int) -> Dict:
         """Call Groq API (OpenAI-compatible)"""
         if not self.api_key:
             return {"error": "Groq API key not configured"}
 
-        try:
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
 
-            payload = {
-                "model": self.model,
-                "messages": messages
-            }
+        payload = {
+            "model": self.model,
+            "messages": messages
+        }
 
-            response = requests.post(
-                self.endpoint,
-                headers=headers,
-                json=payload,
-                timeout=timeout
-            )
+        result = self._make_http_request(
+            endpoint=self.endpoint,
+            payload=payload,
+            timeout=timeout,
+            headers=headers,
+            provider_name="Groq"
+        )
 
-            if response.status_code == 200:
-                data = response.json()
-                # Convert Groq format to Ollama-like format
-                return {
-                    "message": {
-                        "role": "assistant",
-                        "content": data["choices"][0]["message"]["content"]
-                    }
+        if result.get("success"):
+            data = result["data"]
+            # Convert Groq format to Ollama-like format
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": data["choices"][0]["message"]["content"]
                 }
-            else:
-                return {
-                    "error": f"Groq request failed with status {response.status_code}",
-                    "details": response.text
-                }
-
-        except Exception as e:
-            return {"error": f"Groq request failed: {str(e)}"}
+            }
+        else:
+            return result
 
     def get_provider_info(self) -> Dict:
         """Get information about current LLM configuration"""

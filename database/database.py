@@ -97,37 +97,27 @@ class DatabaseManager:
         """Get a new database session."""
         return self._session_factory()
 
-    @contextmanager
-    def session_scope(self) -> Generator[Session, None, None]:
-        """
-        Provide a transactional scope around a series of operations.
-
-        Usage:
-            with db_manager.session_scope() as session:
-                session.add(some_object)
-                session.commit()
-        """
-        session = self.get_session()
-        try:
-            yield session
-            session.commit()
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
-
     @property
     def engine(self):
         """Get the SQLAlchemy engine."""
         return self._engine
 
     def health_check(self) -> bool:
-        """Check if database connection is working."""
+        """
+        Check if database connection is working.
+        Uses the global db_session_scope() function.
+        """
         try:
-            with self.session_scope() as session:
+            session = self.get_session()
+            try:
                 session.execute("SELECT 1")
-            return True
+                session.commit()
+                return True
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
         except Exception:
             return False
 
@@ -183,5 +173,12 @@ def db_session_scope() -> Generator[Session, None, None]:
             # Auto-commit on exit
     """
     manager = get_db_manager()
-    with manager.session_scope() as session:
+    session = manager.get_session()
+    try:
         yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()

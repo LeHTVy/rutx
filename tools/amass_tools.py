@@ -22,6 +22,7 @@ import os
 import time
 import threading
 from datetime import datetime
+from utils.command_runner import CommandRunner
 
 
 def _run_subprocess_with_output(cmd, timeout):
@@ -275,17 +276,18 @@ def amass_db_list(domain=None):
         if domain:
             cmd.extend(["-d", domain])
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False
-        )
+        exec_result = CommandRunner.run(cmd, timeout=60)
+
+        if not exec_result.success:
+            return {
+                "success": False,
+                "error": exec_result.error,
+                "stderr": exec_result.stderr
+            }
 
         db_entries = []
-        if result.stdout:
-            db_entries = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
+        if exec_result.stdout:
+            db_entries = [line.strip() for line in exec_result.stdout.strip().split('\n') if line.strip()]
 
         return {
             "success": True,
@@ -297,8 +299,6 @@ def amass_db_list(domain=None):
             "timestamp": datetime.now().isoformat()
         }
 
-    except FileNotFoundError:
-        return {"success": False, "error": "amass command not found."}
     except Exception as ex:
         return {"success": False, "error": str(ex)}
 

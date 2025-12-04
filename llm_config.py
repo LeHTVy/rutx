@@ -62,20 +62,14 @@ class LLMConfig:
 
     def _load_config(self) -> Dict:
         """Load existing configuration or return empty dict"""
-        if self.config_file.exists():
-            try:
-                with open(self.config_file, 'r') as f:
-                    return json.load(f)
-            except Exception as e:
-                print(f"Warning: Failed to load config: {e}")
-                return {}
-        return {}
+        from utils.config_loader import ConfigLoader
+        return ConfigLoader.load_json(str(self.config_file), defaults={})
 
     def _save_config(self, config: Dict) -> None:
         """Save configuration to disk"""
+        from utils.config_loader import ConfigLoader
         try:
-            with open(self.config_file, 'w') as f:
-                json.dump(config, f, indent=2)
+            ConfigLoader.save_json(str(self.config_file), config, atomic=True)
         except Exception as e:
             print(f"Error saving config: {e}")
 
