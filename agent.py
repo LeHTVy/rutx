@@ -852,12 +852,17 @@ Select the most appropriate tool for the user's request."""
                 for r in shodan_results:
                     scan_data = r["result"]
                     # Shodan batch format: results = {ip: {ports: [...], ...}}
+                    # Shodan batch format: results = [{ip, data, status}, ...]
                     if "results" in scan_data:
-                        for ip, ip_data in scan_data["results"].items():
-                            ports = ip_data.get("ports", [])
-                            if ports:
-                                hosts_with_ports.add(ip)
-                                total_open_ports += len(ports)
+                        for item in scan_data["results"]:
+                            if isinstance(item, dict):
+                                ip = item.get("ip")
+                                ip_data = item.get("data", {})
+                                ports = ip_data.get("ports", [])
+                                if ip and ports:
+                                    hosts_with_ports.add(ip)
+                                    total_open_ports += len(ports)
+
                 
                 if hosts_with_ports:
                     print(f"  📊 Shodan fallback: Found {len(hosts_with_ports)} hosts with {total_open_ports} ports")
