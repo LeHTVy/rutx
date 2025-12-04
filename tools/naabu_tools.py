@@ -235,12 +235,12 @@ def naabu_critical_ports(targets: Union[str, List[str]]) -> Dict[str, Any]:
     return naabu_scan(targets, ports=critical_ports, rate=5000)
 
 
-def naabu_batch_scan(targets: str, ports: str = "1-65535", rate: int = 1000, timeout: int = None) -> Dict[str, Any]:
+def naabu_batch_scan(targets: Union[str, List[str]], ports: str = "1-65535", rate: int = 1000, timeout: int = None) -> Dict[str, Any]:
     """
     Batch scan multiple targets with Naabu (for medium/low priority targets)
 
     Args:
-        targets: Comma-separated list of targets
+        targets: Comma-separated string OR list of targets
         ports: Port range (default: 1-65535 for comprehensive)
         rate: Scan rate in packets/sec (default: 1000 for stealth)
         timeout: Timeout in seconds (default: auto-calculated based on targets/ports)
@@ -248,8 +248,13 @@ def naabu_batch_scan(targets: str, ports: str = "1-65535", rate: int = 1000, tim
     Returns:
         dict: Scan results with all targets
     """
-    # Convert comma-separated string to list
-    target_list = [t.strip() for t in targets.split(",")]
+    # Handle both string and list inputs
+    if isinstance(targets, list):
+        target_list = targets
+    else:
+        # Convert comma-separated string to list
+        target_list = [t.strip() for t in targets.split(",")]
+
 
     # Calculate dynamic timeout if not provided
     if timeout is None:

@@ -2763,8 +2763,6 @@ Be specific about CVEs, provide CVSS scores if known, and reference specific vul
 
         messages = [
             {"role": "system", "content": system_prompt},
-            # IMPORTANT: Explicit user message to prevent LLM from asking for data
-            # Smaller models (llama3.2, mistral) may ignore system prompt if user message is vague
             {"role": "user", "content": """The scan data is in your system prompt above (between === SCAN DATA === markers).
 
 DO NOT ask for data. DO NOT say "please provide". The data is ALREADY in your system prompt.
