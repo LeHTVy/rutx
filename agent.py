@@ -2763,10 +2763,21 @@ Be specific about CVEs, provide CVSS scores if known, and reference specific vul
 
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": "Analyze the scan results and provide a comprehensive security report."}
+            # IMPORTANT: Explicit user message to prevent LLM from asking for data
+            # Smaller models (llama3.2, mistral) may ignore system prompt if user message is vague
+            {"role": "user", "content": """The scan data is in your system prompt above (between === SCAN DATA === markers).
+
+DO NOT ask for data. DO NOT say "please provide". The data is ALREADY in your system prompt.
+
+Your FIRST sentence MUST describe what you found. Start like this:
+- "The scan found [X] subdomains including..." 
+- "The scan found [X] open ports on..."
+- "No scan data was provided" (only if system prompt is truly empty)
+
+NOW analyze the data from your system prompt and write the security report."""}
         ]
 
-        print("\n🔍 Analyzing results with enriched context (programmatic report + DB data)...")
+
 
         # Use config timeout (TIMEOUT_OLLAMA) for LLM analysis
         response = self._call_ollama(messages, timeout=TIMEOUT_OLLAMA)
