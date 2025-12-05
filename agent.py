@@ -1755,6 +1755,31 @@ Select the most appropriate tool for the user's request."""
     def _detect_scan_type(self, scan_results: List[Dict]) -> str:
         """Detect scan type based on tools used in scan results"""
         tools_used = [r["tool"] for r in scan_results]
+        tools_lower = [t.lower() for t in tools_used]
+        
+        # =====================================================================
+        # 4-STAGE WORKFLOW DETECTION (MUST BE FIRST!)
+        # Detects: DNS Resolution + Shodan OSINT + Naabu Discovery + Nmap Service
+        # =====================================================================
+        has_dns = any("dns" in t for t in tools_lower)
+        has_shodan = any("shodan" in t for t in tools_lower)
+        has_naabu = any("naabu" in t for t in tools_lower)
+        has_nmap = any("nmap" in t for t in tools_lower)
+        
+        # 4-stage workflow: At minimum Shodan + Naabu + Nmap (DNS is implicit in resolution)
+        if has_shodan and has_naabu and has_nmap:
+            return "4stage"
+        
+        # Also detect 4-stage when: Shodan + Nmap but Naabu had no results
+        # (This happens when Naabu found 0 ports and we fell back to Shodan)
+        if has_shodan and has_nmap and not has_naabu:
+            # Check if we have batch nmap (indicates 4-stage fallback)
+            if any("batch" in t or "service_detection" in t for t in tools_lower):
+                return "4stage"
+        
+        # =====================================================================
+        # STANDARD SCAN TYPE DETECTION
+        # =====================================================================
         
         # Check for subdomain tools
         subdomain_tools = ["amass_enum", "amass_intel", "bbot_subdomain_enum", "bbot_web_scan"]
@@ -1765,8 +1790,8 @@ Select the most appropriate tool for the user's request."""
         if "nmap_vuln_scan" in tools_used:
             return "vuln_scan"
         
-        # Check for Shodan/OSINT
-        shodan_tools = ["shodan_lookup", "shodan_host", "shodan_search"]
+        # Check for Shodan/OSINT (only if JUST Shodan, no other scans)
+        shodan_tools = ["shodan_lookup", "shodan_host", "shodan_search", "shodan_batch_lookup"]
         if any(tool in tools_used for tool in shodan_tools):
             # If ONLY shodan, it's osint, otherwise it's enrichment
             nmap_tools = [t for t in tools_used if "nmap" in t]
@@ -1779,7 +1804,7 @@ Select the most appropriate tool for the user's request."""
         if any(tool in tools_used for tool in masscan_tools):
             return "masscan"
 
-        # Check for naabu tools
+        # Check for naabu tools (only if standalone, not part of 4-stage)
         naabu_tools = ["naabu_scan", "naabu_batch_scan", "naabu_port_scan"]
         if any(tool in tools_used for tool in naabu_tools):
             return "naabu"
@@ -2356,7 +2381,261 @@ Be specific, actionable, and prioritize by risk level. Reference specific findin
                 return analysis
 
 
-        # NAABU PORT SCAN: Generate programmatic report (like Masscan)
+        # =====================================================================
+        # 4-STAGE WORKFLOW REPORT: Combined Shodan + Naabu + Nmap
+        # This is the primary handler for port scanning subdomains
+        # =====================================================================
+        if scan_type == "4stage":
+            print(f"  🎯 Generating combined 4-stage workflow report...")
+            
+            # Extract data from all stages
+            shodan_data = None
+            naabu_data = None
+            nmap_results = []
+            dns_data = None
+            
+            for r in scan_results:
+                tool = r.get("tool", "").lower()
+                result = r.get("result", {})
+                
+                if "dns" in tool:
+                    dns_data = result
+                elif "shodan" in tool:
+                    shodan_data = result
+                elif "naabu" in tool:
+                    naabu_data = result
+                elif "nmap" in tool:
+                    nmap_results.append(result)
+            
+            # Build combined report
+            analysis = """
+════════════════════════════════════════════════════════════
+📋 4-STAGE PORT SCAN REPORT
+════════════════════════════════════════════════════════════
+
+"""
+            
+            # Stage 1: DNS Resolution Summary
+            if dns_data:
+                total_resolved = dns_data.get("total_resolved", 0)
+                unique_ips = dns_data.get("unique_ips", 0)
+                analysis += f"""## STAGE 1: DNS RESOLUTION
+- **Subdomains Processed:** {dns_data.get('total_subdomains', 'N/A')}
+- **Successfully Resolved:** {total_resolved}
+- **Unique IPs:** {unique_ips}
+- **Deduplicated:** {total_resolved - unique_ips if total_resolved and unique_ips else 'N/A'}
+
+"""
+            
+            # Stage 2: Shodan OSINT Summary
+            if shodan_data and shodan_data.get("success"):
+                results = shodan_data.get("results", {})
+                total_ports = shodan_data.get("total_ports", 0)
+                total_services = shodan_data.get("total_services", 0)
+                total_cves = shodan_data.get("total_cves", 0)
+                successful = shodan_data.get("successful", 0)
+                
+                analysis += f"""## STAGE 2: SHODAN OSINT ENRICHMENT
+- **IPs Queried:** {len(results) if results else shodan_data.get('total_queried', 'N/A')}
+- **IPs Found in Shodan:** {successful}
+- **Total Open Ports (OSINT):** {total_ports}
+- **Total Services Identified:** {total_services}
+- **Total CVEs Found:** {total_cves}
+
+"""
+                
+                # High threat IPs
+                high_threat_ips = []
+                for ip, data in results.items():
+                    if data.get("vulns") and len(data.get("vulns", [])) > 5:
+                        high_threat_ips.append((ip, len(data.get("vulns", []))))
+                
+                if high_threat_ips:
+                    analysis += "### ⚠️ HIGH THREAT IPs (5+ CVEs)\n\n"
+                    for ip, cve_count in sorted(high_threat_ips, key=lambda x: x[1], reverse=True)[:10]:
+                        analysis += f"- **{ip}**: {cve_count} CVEs\n"
+                    analysis += "\n"
+                
+                # CVE Summary
+                if total_cves > 0:
+                    all_cves = set()
+                    for ip, data in results.items():
+                        all_cves.update(data.get("vulns", []))
+                    
+                    if all_cves:
+                        analysis += f"### 🔒 VULNERABILITY SUMMARY\n\n"
+                        analysis += f"**Total Unique CVEs:** {len(all_cves)}\n\n"
+                        # Show first 20 CVEs
+                        for cve in sorted(all_cves)[:20]:
+                            analysis += f"- {cve}\n"
+                        if len(all_cves) > 20:
+                            analysis += f"- ... and {len(all_cves) - 20} more CVEs\n"
+                        analysis += "\n"
+            
+            # Stage 3: Naabu Summary
+            if naabu_data:
+                analysis += f"""## STAGE 3: NAABU PORT DISCOVERY
+- **Scan Completed:** {'✅ Yes' if naabu_data.get('success') else '❌ No'}
+- **Open Ports Found:** {naabu_data.get('total_open_ports', 0)}
+- **Note:** {'Naabu found no open ports. Analysis based on Shodan + Nmap data.' if naabu_data.get('total_open_ports', 0) == 0 else 'Ports forwarded to Nmap for service detection.'}
+
+"""
+            
+            # Stage 4: Nmap Service Detection (SOURCE OF TRUTH)
+            analysis += """## STAGE 4: NMAP SERVICE DETECTION (Source of Truth)
+
+"""
+            
+            if nmap_results:
+                total_hosts = 0
+                total_open_ports = 0
+                all_services = []
+                host_details = []
+                
+                for nmap_result in nmap_results:
+                    if nmap_result.get("success"):
+                        # Extract host and port data
+                        hosts = nmap_result.get("hosts", [])
+                        open_ports = nmap_result.get("open_ports", [])
+                        services = nmap_result.get("services", [])
+                        
+                        total_hosts += nmap_result.get("hosts_discovered", 0) or len(hosts)
+                        total_open_ports += nmap_result.get("open_ports_count", 0) or len(open_ports)
+                        all_services.extend(services)
+                        
+                        # Collect host details
+                        for host in hosts:
+                            host_details.append(host)
+                
+                analysis += f"**Hosts Scanned:** {total_hosts}\n"
+                analysis += f"**Open Ports Detected:** {total_open_ports}\n"
+                analysis += f"**Services Identified:** {len(all_services)}\n\n"
+                
+                # Group by service type for quick overview
+                if all_services:
+                    service_types = {}
+                    for svc in all_services:
+                        svc_name = svc.get("name", "unknown")
+                        if svc_name not in service_types:
+                            service_types[svc_name] = []
+                        service_types[svc_name].append(svc)
+                    
+                    analysis += "### Service Distribution\n\n"
+                    for svc_name, svcs in sorted(service_types.items(), key=lambda x: len(x[1]), reverse=True)[:15]:
+                        analysis += f"- **{svc_name}**: {len(svcs)} instance(s)\n"
+                    analysis += "\n"
+                
+                # Critical services detection
+                critical_ports = {3306: "MySQL", 5432: "PostgreSQL", 1433: "MSSQL", 
+                                  3389: "RDP", 445: "SMB", 6379: "Redis", 27017: "MongoDB"}
+                high_risk_ports = {22: "SSH", 21: "FTP", 23: "Telnet", 25: "SMTP"}
+                
+                critical_findings = []
+                high_risk_findings = []
+                
+                for svc in all_services:
+                    port = svc.get("port", 0)
+                    if port in critical_ports:
+                        critical_findings.append((port, critical_ports[port], svc.get("version", "unknown")))
+                    elif port in high_risk_ports:
+                        high_risk_findings.append((port, high_risk_ports[port], svc.get("version", "unknown")))
+                
+                if critical_findings:
+                    analysis += "### 🚨 CRITICAL SERVICES EXPOSED\n\n"
+                    for port, name, version in critical_findings:
+                        analysis += f"- **{name}** (port {port}): {version}\n"
+                    analysis += "\n"
+                
+                if high_risk_findings:
+                    analysis += "### ⚠️ HIGH-RISK SERVICES\n\n"
+                    for port, name, version in high_risk_findings:
+                        analysis += f"- **{name}** (port {port}): {version}\n"
+                    analysis += "\n"
+            else:
+                analysis += "**Note:** No Nmap results available. See Shodan data above for port information.\n\n"
+            
+            # Recommendations
+            analysis += """---
+
+## RECOMMENDATIONS
+
+### Immediate Actions (0-24h)
+1. Review any database services (MySQL, PostgreSQL, Redis, MongoDB) exposed to internet
+2. Block RDP and SMB ports from external access
+3. Investigate high-CVE hosts identified by Shodan
+
+### Short-term (1-7 days)
+1. Run vulnerability scans on hosts with critical services
+2. Audit SSH access - ensure key-based authentication
+3. Review and update firewall rules
+
+### Medium-term (7-30 days)
+1. Implement network segmentation
+2. Deploy intrusion detection on critical hosts
+3. Establish continuous monitoring
+
+"""
+            
+            # Add LLM cyber analyst insights
+            print(f"  🤖 LLM Cyber Analyst reviewing 4-stage findings...")
+            
+            analyst_prompt = f"""You are a senior cybersecurity analyst. Analyze this 4-stage port scan report and provide strategic insights.
+
+{analysis}
+
+Provide:
+1. **THREAT ASSESSMENT** - What are the top 3 security risks identified?
+2. **ATTACK SURFACE ANALYSIS** - What attack vectors are exposed?
+3. **PRIORITIZED REMEDIATION** - What should be fixed first and why?
+4. **COMPLIANCE CONCERNS** - Any PCI-DSS/HIPAA/SOC2 issues?
+
+Be specific and reference actual findings from the report. Keep response concise but actionable."""
+
+            try:
+                llm_messages = [
+                    {"role": "system", "content": "You are a senior cybersecurity analyst specializing in penetration testing and vulnerability assessment."},
+                    {"role": "user", "content": analyst_prompt}
+                ]
+                
+                llm_response = self._call_ollama(llm_messages, timeout=TIMEOUT_OLLAMA)
+                
+                if "error" not in llm_response:
+                    llm_insights = llm_response.get("message", {}).get("content", "")
+                    
+                    if llm_insights and len(llm_insights.strip()) > 100:
+                        analysis += "\n---\n\n# 🧠 CYBER ANALYST INSIGHTS\n\n"
+                        analysis += llm_insights
+                        print(f"  ✅ Cyber analyst insights added ({len(llm_insights)} chars)")
+                    else:
+                        print(f"  ⚠️  Cyber analyst response too short")
+                else:
+                    print(f"  ⚠️  Cyber analyst LLM error: {llm_response.get('error', 'unknown')}")
+            except Exception as e:
+                print(f"  ⚠️  Cyber analyst failed: {e}")
+            
+            # Save to database
+            if self.session_manager and self.db_session_id:
+                try:
+                    # Calculate risk based on findings
+                    risk_score = 0
+                    if shodan_data:
+                        cves = shodan_data.get("total_cves", 0)
+                        risk_score = min(100, cves * 2 + 20)
+                    
+                    risk_level = "HIGH" if risk_score > 60 else ("MEDIUM" if risk_score > 30 else "LOW")
+                    
+                    self.session_manager.set_analysis_results(
+                        self.db_session_id,
+                        {"analysis": analysis[:15000]},
+                        risk_score,
+                        risk_level
+                    )
+                except Exception:
+                    pass
+            
+            return analysis
+
+
         if scan_type == "naabu":
             # Extract naabu data from results
             naabu_data = None
