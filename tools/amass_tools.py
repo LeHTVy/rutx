@@ -19,10 +19,35 @@ Examples from docs:
 import subprocess
 import json
 import os
+import shutil
 import time
 import threading
 from datetime import datetime
 from utils.command_runner import CommandRunner
+
+
+def _find_amass_executable() -> str:
+    """Find amass executable - check snap and common paths"""
+    # Check common paths first (snap is where it's often installed on Ubuntu)
+    home = os.path.expanduser("~")
+    paths = [
+        "/snap/bin/amass",  # Ubuntu snap
+        f"{home}/go/bin/amass",
+        "/home/hellrazor/go/bin/amass",  # Explicit for sudo
+        "/usr/local/bin/amass",
+        "/usr/bin/amass",
+    ]
+    
+    for path in paths:
+        if os.path.exists(path) and os.access(path, os.X_OK):
+            return path
+    
+    # Check system PATH
+    which_result = shutil.which("amass")
+    if which_result:
+        return which_result
+    
+    return "amass"  # Fallback
 
 
 def _run_subprocess_with_output(cmd, timeout):
@@ -82,7 +107,7 @@ def _run_subprocess_with_output(cmd, timeout):
     return ''.join(stdout_lines), elapsed
 
 
-def amass_enum(domain, passive=False, brute=False, timeout=600):
+def amass_enum(domain, passive=False, brute=False, timeout=1800):
     """
     Perform subdomain enumeration using Amass enum subcommand.
     Uses stdout parsing for reliable subdomain extraction.
@@ -96,7 +121,7 @@ def amass_enum(domain, passive=False, brute=False, timeout=600):
         domain: Target domain to enumerate
         passive: Use passive reconnaissance only (no active probing)
         brute: Enable brute force subdomain enumeration
-        timeout: Timeout in seconds (default: 600 = 10 minutes)
+        timeout: Timeout in seconds (default: 1800 = 30 minutes)
 
     Returns:
         dict: Structured result with subdomains found
@@ -111,7 +136,7 @@ def amass_enum(domain, passive=False, brute=False, timeout=600):
 
         # Build command - note: -json flag has issues in some amass versions
         # So we parse stdout instead which is more reliable
-        cmd = ["amass", "enum", "-d", domain]
+        cmd = [_find_amass_executable(), "enum", "-d", domain]
 
         if passive:
             cmd.append("-passive")
@@ -123,18 +148,54 @@ def amass_enum(domain, passive=False, brute=False, timeout=600):
         # Use non-blocking subprocess execution
         stdout, elapsed = _run_subprocess_with_output(cmd, timeout)
 
-        # Parse stdout - Amass outputs one subdomain per line
+        # Parse stdout - Amass outputs one subdomain per line, then ASN info
         subdomains = []
+        asn_info = []
+        ip_ranges = []
+        current_asn = None
+        
         if stdout:
             for line in stdout.strip().split('\n'):
                 line = line.strip()
                 # Skip empty lines and error messages
                 if not line or line.startswith('Error') or line.startswith('Failed'):
                     continue
+                if line.startswith('OWASP Amass') or line.startswith('---') or 'has finished' in line.lower():
+                    continue
+                if 'names discovered' in line.lower():
+                    continue
+                if 'being migrat' in line.lower():
+                    continue
+                    
+                # Parse ASN lines: "ASN: 14061 - DIGITALOCEAN-ASN - DigitalOcean, LLC"
+                if line.startswith('ASN:'):
+                    import re
+                    asn_match = re.match(r'ASN:\s*(\d+)\s*-\s*(\S+)\s*-?\s*(.*)', line)
+                    if asn_match:
+                        current_asn = {
+                            "asn": asn_match.group(1),
+                            "name": asn_match.group(2),
+                            "org": asn_match.group(3).strip() if asn_match.group(3) else asn_match.group(2),
+                            "ranges": []
+                        }
+                        asn_info.append(current_asn)
+                    continue
+                
+                # Parse IP range lines (indented, under ASN)
+                if line.startswith('\t') or (current_asn and '/' in line and 'Subdomain' in line):
+                    import re
+                    range_match = re.match(r'\s*(\d+\.\d+\.\d+\.\d+/\d+)\s+(\d+)\s+Subdomain', line)
+                    if range_match and current_asn:
+                        current_asn["ranges"].append({
+                            "cidr": range_match.group(1),
+                            "subdomain_count": int(range_match.group(2))
+                        })
+                        ip_ranges.append(range_match.group(1))
+                    continue
+                
                 # Check if line contains the domain (is a valid subdomain)
                 if domain in line and '.' in line:
                     # Handle case where line might have extra info
-                    # Usually it's just the subdomain
                     if ' ' not in line:
                         subdomains.append(line)
                     else:
@@ -162,10 +223,14 @@ def amass_enum(domain, passive=False, brute=False, timeout=600):
             "mode": "passive" if passive else ("brute" if brute else "active"),
             "subdomains_found": len(subdomains),
             "subdomains": subdomains,
+            # NEW: ASN/ISP information for security analysis
+            "asn_info": asn_info,
+            "ip_ranges": ip_ranges,
+            "hosting_providers": [asn["org"] for asn in asn_info] if asn_info else [],
             "json_output_file": output_file if os.path.exists(output_file) else None,
             "elapsed_seconds": round(elapsed, 2),
             "command": ' '.join(cmd),
-            "summary": f"Amass enum found {len(subdomains)} subdomains for {domain}",
+            "summary": f"Amass enum found {len(subdomains)} subdomains for {domain}" + (f" across {len(asn_info)} ASNs" if asn_info else ""),
             "raw_output": stdout[:2000] if stdout else None,
             "timestamp": datetime.now().isoformat()
         }
@@ -191,7 +256,7 @@ def amass_enum(domain, passive=False, brute=False, timeout=600):
         }
 
 
-def amass_intel(domain, whois=True, timeout=300):
+def amass_intel(domain, whois=True, timeout=1800):
     """
     Gather intelligence on a target domain using Amass intel subcommand.
 
@@ -202,13 +267,13 @@ def amass_intel(domain, whois=True, timeout=300):
     Args:
         domain: Target domain
         whois: Include WHOIS information (default: True)
-        timeout: Timeout in seconds (default: 300 = 5 minutes)
+        timeout: Timeout in seconds (default: 1800 = 30 minutes)
 
     Returns:
         dict: Intelligence data about the target
     """
     try:
-        cmd = ["amass", "intel", "-d", domain]
+        cmd = [_find_amass_executable(), "intel", "-d", domain]
 
         if whois:
             cmd.append("-whois")
@@ -271,7 +336,7 @@ def amass_db_list(domain=None):
         dict: Database contents
     """
     try:
-        cmd = ["amass", "db", "-list"]
+        cmd = [_find_amass_executable(), "db", "-list"]
 
         if domain:
             cmd.extend(["-d", domain])
@@ -315,7 +380,7 @@ AMASS_TOOLS = [
                     "domain": {"type": "string", "description": "Target domain (e.g., 'example.com')"},
                     "passive": {"type": "boolean", "description": "Use passive reconnaissance only (no probing) - default: false"},
                     "brute": {"type": "boolean", "description": "Enable brute force subdomain enumeration - default: false"},
-                    "timeout": {"type": "integer", "description": "Timeout in seconds (default: 600)"}
+                    "timeout": {"type": "integer", "description": "Timeout in seconds (default: 1800)"}
                 },
                 "required": ["domain"]
             }
@@ -331,7 +396,7 @@ AMASS_TOOLS = [
                 "properties": {
                     "domain": {"type": "string", "description": "Target domain for intelligence gathering"},
                     "whois": {"type": "boolean", "description": "Include WHOIS information - default: true"},
-                    "timeout": {"type": "integer", "description": "Timeout in seconds (default: 300)"}
+                    "timeout": {"type": "integer", "description": "Timeout in seconds (default: 1800)"}
                 },
                 "required": ["domain"]
             }

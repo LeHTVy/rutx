@@ -18,20 +18,20 @@ Active Tools:
 - Output Manager: Handles large scan outputs efficiently
 """
 
-# LLM Configuration (Dynamic - loaded from llm_config.json)
-# Use llm_config.py for interactive setup
+# LLM Configuration (Dynamic - loaded from llm_configs/)
+# Use llm_configs/ for interactive setup
 try:
-    from llm_config import load_llm_config
-    _llm_config = load_llm_config()
+    from llm_configs import get_llm_config
+    _llm_config = get_llm_config().get_config()
     OLLAMA_ENDPOINT = _llm_config.get("endpoint", "http://localhost:11434/api/chat")
-    MODEL_NAME = _llm_config.get("model", "llama3.2:latest")
+    MODEL_NAME = _llm_config.get("model", "deepseek-r1:latest")
     LLM_PROVIDER = _llm_config.get("provider", "ollama")
     TIMEOUT_OLLAMA = _llm_config.get("timeout", 1800)
 except Exception as e:
     # Fallback to defaults if config not found
     print(f"⚠️  LLM config not loaded: {e}. Using defaults.")
     OLLAMA_ENDPOINT = "http://localhost:11434/api/chat"
-    MODEL_NAME = "llama3.2:latest"
+    MODEL_NAME = "deepseek-r1:latest"
     LLM_PROVIDER = "ollama"
     TIMEOUT_OLLAMA = 1800
 
@@ -107,11 +107,6 @@ DATABASE_URL = f"sqlite:///{DATA_DIR / 'pentest.db'}"
 ENABLE_DATABASE = True  # Enable database persistence for scan results
 AUTO_PARSE_RESULTS = True  # Automatically parse and store tool outputs
 
-# Mock Database Settings (for integrated_security_agent.py)
-CMDB_DATABASE = {
-    "192.168.1.100": {"asset_name": "DC-01-PROD", "criticality": "High", "owner": "IT"},
-    "10.0.0.5": {"asset_name": "Dev-Workstation-12", "criticality": "Low", "owner": "Ivan"}
-}
 
 PROMPT_INJECTION_DETECTION = True  # Detect prompt injection attempts
 DANGEROUS_COMMAND_FILTER = True  # Filter dangerous commands before execution

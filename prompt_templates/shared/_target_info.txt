@@ -1,3 +1,0 @@
-Target: {{TARGET}}
-Session ID: {{SESSION_ID}}
-Scan Type: {{SCAN_TYPE}}

@@ -28,17 +28,21 @@ def _find_bbot_executable():
     """Find bbot executable in common locations"""
     import shutil
     
-    # Check PATH first
     bbot_path = shutil.which("bbot")
     if bbot_path:
         return bbot_path
-        
-    # Check common user directories (pipx, local bin)
+    
+    # Get project root for venv path
+    project_root = Path(__file__).parent.parent
+    
     common_paths = [
+        str(project_root / "venv" / "bin" / "bbot"),  # Project venv (highest priority)
+        "/home/hellrazor/rutx/venv/bin/bbot",  # Explicit project venv
+        "/home/hellrazor/bbot-venv/bin/bbot",  
+        os.path.expanduser("~/bbot-venv/bin/bbot"),  
         os.path.expanduser("~/.local/bin/bbot"),
         "/usr/local/bin/bbot",
         "/opt/bbot/bin/bbot",
-        # Check sudo user's home if running as root
         os.path.expanduser(f"~{os.environ.get('SUDO_USER', '')}/.local/bin/bbot") if os.environ.get('SUDO_USER') else None
     ]
     
@@ -46,7 +50,7 @@ def _find_bbot_executable():
         if path and os.path.exists(path) and os.access(path, os.X_OK):
             return path
             
-    return "bbot"  # Fallback to command name
+    return "bbot"  
 
 
 def _run_bbot_command(cmd, timeout):
@@ -55,17 +59,15 @@ def _run_bbot_command(cmd, timeout):
     BBOT writes results to JSON files, so we suppress output.
     Returns (returncode, elapsed_time).
     """
-    # Resolve executable path
     if cmd[0] == "bbot":
         cmd[0] = _find_bbot_executable()
 
-    # Run command - BBOT writes its results to JSON files anyway
     exec_result = CommandRunner.run(cmd, timeout=timeout)
 
     return exec_result.returncode, exec_result.elapsed_time
 
 
-def bbot_scan(target, preset=None, modules=None, flags=None, output_dir=None, timeout=600):
+def bbot_scan(target, preset=None, modules=None, flags=None, output_dir=None, timeout=1800):
     """Perform BBOT scan on target with specified preset or modules."""
     try:
         if output_dir is None:
@@ -178,7 +180,7 @@ def bbot_scan(target, preset=None, modules=None, flags=None, output_dir=None, ti
         return {"success": False, "error": str(ex), "target": target}
 
 
-def bbot_subdomain_enum(target, passive=False, timeout=600):
+def bbot_subdomain_enum(target, passive=False, timeout=1800):
     """Subdomain enumeration using BBOT subdomain-enum preset."""
     try:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -279,7 +281,7 @@ def bbot_subdomain_enum(target, passive=False, timeout=600):
         return {"success": False, "error": str(ex), "target": target}
 
 
-def bbot_web_scan(target, timeout=600):
+def bbot_web_scan(target, timeout=1800):
     """Web-focused reconnaissance using BBOT web-basic preset."""
     try:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -343,7 +345,7 @@ def bbot_web_scan(target, timeout=600):
         return {"success": False, "error": str(ex), "target": target}
 
 
-def bbot_quick_scan(target, timeout=300):
+def bbot_quick_scan(target, timeout=1800):
     """Quick scan with safe modules and fast mode."""
     try:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -416,7 +418,7 @@ BBOT_TOOLS = [
                     "preset": {"type": "string", "description": "BBOT preset: subdomain-enum, web-basic, spider, kitchen-sink"},
                     "modules": {"type": "string", "description": "Comma-separated modules"},
                     "flags": {"type": "string", "description": "Module flags: safe, passive, aggressive"},
-                    "timeout": {"type": "integer", "description": "Timeout in seconds (default: 600)"}
+                    "timeout": {"type": "integer", "description": "Timeout in seconds (default: 1800)"}
                 },
                 "required": ["target"]
             }
@@ -462,7 +464,7 @@ BBOT_TOOLS = [
                 "type": "object",
                 "properties": {
                     "target": {"type": "string", "description": "Target domain, IP, or range"},
-                    "timeout": {"type": "integer", "description": "Timeout in seconds (default: 300)"}
+                    "timeout": {"type": "integer", "description": "Timeout in seconds (default: 1800)"}
                 },
                 "required": ["target"]
             }

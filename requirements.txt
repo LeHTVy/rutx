@@ -1,30 +1,42 @@
+# ─────────────────────────────────────────────────────────────────
+# SNODE - AI-Powered Pentesting Agent
+# Python Dependencies
+# ─────────────────────────────────────────────────────────────────
+
 # Core Dependencies
 requests>=2.31.0
 sqlalchemy>=2.0.0
 PyYAML>=6.0
 
+# LangChain + LLM
+langchain>=1.0.0
+langchain-core>=1.0.0
+langchain-ollama>=1.0.0
 
-# Phoenix Tracing & Observability (Optional - for SNODE Integration)
-# NOTE: For LOCAL Ollama LLM only - no OpenAI dependencies needed
+# LangGraph (for workflows)
+langgraph>=1.0.0
+langgraph-checkpoint>=3.0.0
+
+# ChromaDB (for CVE RAG)
+chromadb>=1.0.0
+
+# HTTP Client
+httpx>=0.28.0
+
+# Phoenix Tracing & Observability (Optional)
 arize-phoenix>=4.0.0
 opentelemetry-api>=1.20.0
 opentelemetry-sdk>=1.20.0
 
-# Optional: Environment variable management
-# python-dotenv>=1.0.0
-
-# Note: These are external security tools that must be installed separately:
-# - nmap: https://nmap.org/download.html
-# - amass: https://github.com/owasp-amass/amass
-# - bbot: https://github.com/blacklanternsecurity/bbot
+# ─────────────────────────────────────────────────────────────────
+# External Security Tools (install separately)
+# ─────────────────────────────────────────────────────────────────
+# Install script: ./install_tools.sh
 #
-# Install on Debian/Ubuntu:
-#   sudo apt update
-#   sudo apt install nmap
-#   go install -v github.com/owasp-amass/amass/v4/...@master
-#   pipx install bbot
+# Go Tools (install via `go install`):
+#   - httpx, nuclei, subfinder, katana, dalfox, gau, arjun, naabu
 #
-# Install on Windows:
-#   Download nmap from https://nmap.org/download.html
-#   Download amass from https://github.com/owasp-amass/amass/releases
-#   pip install bbot
+# System Tools:
+#   - nmap, nikto, gobuster, ffuf, rustscan, sqlmap
+#
+# See install_tools.sh for full installation commands

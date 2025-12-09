@@ -14,9 +14,51 @@ Benefits:
 import subprocess
 import time
 import logging
+import sys
+import threading
 from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────────────────────────────
+# Progress Spinner
+# ─────────────────────────────────────────────────────────────────
+
+class ProgressSpinner:
+    """Animated spinner for long-running commands"""
+    
+    CHARS = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    
+    def __init__(self, message: str = "Running"):
+        self.message = message
+        self.running = False
+        self.thread = None
+        self.start_time = None
+    
+    def _spin(self):
+        idx = 0
+        while self.running:
+            elapsed = time.time() - self.start_time
+            char = self.CHARS[idx % len(self.CHARS)]
+            sys.stdout.write(f"\r  {char} {self.message}... ({elapsed:.0f}s)")
+            sys.stdout.flush()
+            idx += 1
+            time.sleep(0.1)
+        # Clear spinner line
+        sys.stdout.write("\r" + " " * 50 + "\r")
+        sys.stdout.flush()
+    
+    def start(self):
+        self.running = True
+        self.start_time = time.time()
+        self.thread = threading.Thread(target=self._spin, daemon=True)
+        self.thread.start()
+    
+    def stop(self):
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=0.5)
 
 
 class CommandExecutionResult:
@@ -66,24 +108,26 @@ class CommandRunner:
     @staticmethod
     def run(
         command: List[str],
-        timeout: int = 300,
+        timeout: int = 1800,
         capture_output: bool = True,
         text: bool = True,
         check: bool = False,
         cwd: Optional[str] = None,
-        env: Optional[Dict[str, str]] = None
+        env: Optional[Dict[str, str]] = None,
+        show_progress: bool = True
     ) -> CommandExecutionResult:
         """
         Execute a command with consistent timeout and error handling.
 
         Args:
             command: List of command arguments (e.g., ['nmap', '-sV', 'target.com'])
-            timeout: Maximum execution time in seconds (default: 300)
+            timeout: Maximum execution time in seconds (default: 1800)
             capture_output: Whether to capture stdout/stderr (default: True)
             text: Whether to decode output as text (default: True)
             check: Whether to raise exception on non-zero exit (default: False)
             cwd: Working directory for command execution
             env: Environment variables for the command
+            show_progress: Show spinner for long-running commands (default: True)
 
         Returns:
             CommandExecutionResult with success status, output, and timing
@@ -98,6 +142,13 @@ class CommandRunner:
 
         start_time = time.time()
         error_message = None
+        
+        # Start spinner for progress indication
+        spinner = None
+        if show_progress:
+            tool_name = command[0].split("/")[-1] if command else "command"
+            spinner = ProgressSpinner(f"Running {tool_name}")
+            spinner.start()
 
         try:
             result = subprocess.run(
@@ -107,9 +158,14 @@ class CommandRunner:
                 timeout=timeout,
                 check=check,
                 cwd=cwd,
-                env=env
+                env=env,
+                stdin=subprocess.DEVNULL  # Prevent stdin consumption
             )
             elapsed = time.time() - start_time
+            
+            # Stop spinner
+            if spinner:
+                spinner.stop()
 
             # Determine success based on return code
             success = result.returncode == 0
@@ -131,6 +187,8 @@ class CommandRunner:
             )
 
         except subprocess.TimeoutExpired as e:
+            if spinner:
+                spinner.stop()
             elapsed = time.time() - start_time
             error_message = f"Command timed out after {timeout} seconds"
             logger.error(error_message)
@@ -146,6 +204,8 @@ class CommandRunner:
             )
 
         except FileNotFoundError as e:
+            if spinner:
+                spinner.stop()
             elapsed = time.time() - start_time
             error_message = f"Command not found: {command[0]}"
             logger.error(f"{error_message} - {e}")
@@ -161,6 +221,8 @@ class CommandRunner:
             )
 
         except Exception as e:
+            if spinner:
+                spinner.stop()
             elapsed = time.time() - start_time
             error_message = f"Unexpected error: {type(e).__name__}: {str(e)}"
             logger.error(f"Command execution failed: {error_message}")
@@ -178,7 +240,7 @@ class CommandRunner:
     @staticmethod
     def run_with_retries(
         command: List[str],
-        timeout: int = 300,
+        timeout: int = 1800,
         max_retries: int = 3,
         retry_delay: float = 2.0
     ) -> CommandExecutionResult:
@@ -217,7 +279,7 @@ class CommandRunner:
 # Convenience function for backward compatibility
 def run_command(
     command: List[str],
-    timeout: int = 300
+    timeout: int = 1800
 ) -> Dict[str, Any]:
     """
     Backward-compatible wrapper that returns a dictionary.

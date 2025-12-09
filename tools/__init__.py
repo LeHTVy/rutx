@@ -15,6 +15,20 @@ from .shodan_tools import SHODAN_TOOLS, execute_shodan_tool
 from .masscan_tools import MASSCAN_TOOLS, execute_masscan_tool
 from .naabu_tools import NAABU_TOOLS, execute_naabu_tool
 from .dns_tools import DNS_TOOLS, execute_dns_tool
+from .subfinder_tools import TOOL_METADATA as SUBFINDER_TOOLS, subfinder_enum
+
+# Build SUBFINDER_TOOLS_LIST for consistency
+SUBFINDER_TOOLS_LIST = [
+    {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": meta["description"],
+            "parameters": meta["args_schema"]
+        }
+    }
+    for name, meta in SUBFINDER_TOOLS.items()
+]
 
 # ============================================================================
 # OUTPUT MANAGEMENT (inline)
@@ -109,7 +123,7 @@ def execute_output_manager_tool(tool_name, tool_args):
 # COMBINE ALL TOOLS
 # ============================================================================
 
-ALL_TOOLS = NMAP_TOOLS + AMASS_TOOLS + BBOT_TOOLS + SHODAN_TOOLS + MASSCAN_TOOLS + NAABU_TOOLS + DNS_TOOLS + OUTPUT_MANAGER_TOOLS
+ALL_TOOLS = NMAP_TOOLS + AMASS_TOOLS + BBOT_TOOLS + SHODAN_TOOLS + MASSCAN_TOOLS + NAABU_TOOLS + DNS_TOOLS + SUBFINDER_TOOLS_LIST + OUTPUT_MANAGER_TOOLS
 
 
 def get_all_tool_names():
@@ -151,6 +165,8 @@ def execute_tool(tool_name: str, tool_args: dict):
         return execute_dns_tool(tool_name, tool_args)
     if tool_name in [t['function']['name'] for t in OUTPUT_MANAGER_TOOLS]:
         return execute_output_manager_tool(tool_name, tool_args)
+    if tool_name == "subfinder_enum":
+        return subfinder_enum(**tool_args)
 
     return {"error": f"Unknown tool: {tool_name}"}
 

@@ -23,7 +23,7 @@ def naabu_scan(
     targets: Union[str, List[str]],
     ports: str = "1-65535",
     rate: int = 5000,
-    timeout: int = 600
+    timeout: int = 1800
 ) -> Dict[str, Any]:
     """
     Run naabu port scan on targets
