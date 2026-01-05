@@ -48,6 +48,7 @@ class AgentState(TypedDict):
     
     # Planning
     suggested_tools: List[str]
+    suggested_commands: Dict[str, str]  # {tool_name: command_name} from semantic search
     suggestion_message: str
     tool_params: Dict[str, Any]
     
@@ -471,11 +472,23 @@ def planner_node(state: AgentState) -> AgentState:
     context["current_phase"] = current_phase
     print(f"  📊 Phase {current_phase} ({PHASE_NAMES.get(current_phase, 'Unknown')}): {phase_reason}")
     
-    # === STEP 1: SEMANTIC SEARCH FOR CANDIDATE TOOLS ===
+    # === STEP 1: SEMANTIC SEARCH FOR CANDIDATE TOOLS + COMMANDS ===
+    tool_command_map = {}  # {tool_name: best_command}
     try:
         tool_index = ToolIndex()
-        candidates = tool_index.search(state["query"], n_results=5)
-        print(f"  🔍 Semantic search found: {[c['name'] for c in candidates]}")
+        candidates = tool_index.search(state["query"], n_results=10)  # Get more for command variety
+        
+        # Extract tool:command mappings from semantic search
+        for c in candidates:
+            tool_name = c.get("name", "")
+            command_name = c.get("command", "")
+            # Keep first (best scoring) command for each tool
+            if tool_name and tool_name not in tool_command_map:
+                tool_command_map[tool_name] = command_name
+        
+        print(f"  🔍 Semantic search found: {list(tool_command_map.keys())}")
+        if any(tool_command_map.values()):
+            print(f"  📋 Commands: {tool_command_map}")
     except Exception as e:
         print(f"  ⚠️ Tool index error: {e}, using fallback")
         candidates = []
@@ -504,10 +517,15 @@ def planner_node(state: AgentState) -> AgentState:
     
     # === SHORTCUT: If user explicitly named tools, use them directly (skip LLM) ===
     if user_mentioned_tools:
+        # Get commands for user-mentioned tools from semantic search
+        user_commands = {t: tool_command_map.get(t, "") for t in user_mentioned_tools}
         print(f"  ✅ Using user-requested tools directly: {user_mentioned_tools}")
+        if any(user_commands.values()):
+            print(f"  📋 With commands: {user_commands}")
         return {
             **state,
             "suggested_tools": user_mentioned_tools,
+            "suggested_commands": user_commands,
             "suggestion_message": f"Running {', '.join(user_mentioned_tools)} as requested.",
             "tool_params": {"domain": domain} if domain else {},
             "context": context,
@@ -626,9 +644,14 @@ Return ONLY valid JSON, no extra text.'''
     
     # NO FALLBACK - If LLM didn't return valid tools, fail clearly
     if tools:
+        # Get commands for selected tools from semantic search results
+        selected_commands = {t: tool_command_map.get(t, "") for t in tools}
+        if any(selected_commands.values()):
+            print(f"  📋 With commands: {selected_commands}")
         return {
             **state,
             "suggested_tools": tools,
+            "suggested_commands": selected_commands,
             "suggestion_message": message or f"I suggest using {tools[0]} for this task.",
             "tool_params": params,
             "context": context,
@@ -849,7 +872,12 @@ def executor_node(state: AgentState) -> AgentState:
         tool_params = params.copy()
         domain = params.get("domain", params.get("target", ""))
         subdomains = context.get("subdomains", [])
-        command = None  
+        
+        # PRIORITY 1: Use command from semantic search (via suggested_commands)
+        suggested_commands = state.get("suggested_commands", {})
+        command = suggested_commands.get(tool_name)
+        if command:
+            print(f"  📋 Using semantic command: {tool_name}:{command}")
         
         BATCH_SIZE = 50 
         
@@ -942,55 +970,55 @@ def executor_node(state: AgentState) -> AgentState:
                     else:
                         tool_params["query"] = domain or "apache"
             
-            # NMAP: Smart command selection based on user-specified flags
-            if tool_name == "nmap":
+            # NMAP: Smart command selection (FALLBACK - only if no semantic command)
+            if tool_name == "nmap" and not command:
                 user_query = state.get("query", "").lower()
                 
                 # Detect scan type from user query
                 if "-ss" in user_query or "syn scan" in user_query or "stealth" in user_query:
                     command = "syn_scan"
-                    print(f"  🔍 Nmap: SYN scan (-sS) selected")
+                    print(f"  🔍 Nmap: SYN scan (-sS) selected (keyword)")
                 elif "-su" in user_query or "udp" in user_query:
                     command = "udp_scan"
-                    print(f"  🔍 Nmap: UDP scan (-sU) selected")
+                    print(f"  🔍 Nmap: UDP scan (-sU) selected (keyword)")
                 elif "-st" in user_query or "tcp connect" in user_query:
                     command = "tcp_scan"
-                    print(f"  🔍 Nmap: TCP connect scan (-sT) selected")
+                    print(f"  🔍 Nmap: TCP connect scan (-sT) selected (keyword)")
                 elif "-sv" in user_query or "version" in user_query:
                     command = "version_scan"
-                    print(f"  🔍 Nmap: Version scan (-sV) selected")
+                    print(f"  🔍 Nmap: Version scan (-sV) selected (keyword)")
                 elif "-o" in user_query or "os detect" in user_query:
                     command = "os_detect"
-                    print(f"  🔍 Nmap: OS detection (-O) selected")
+                    print(f"  🔍 Nmap: OS detection (-O) selected (keyword)")
                 elif "-a" in user_query or "aggressive" in user_query:
                     command = "aggressive"
-                    print(f"  🔍 Nmap: Aggressive scan (-A) selected")
+                    print(f"  🔍 Nmap: Aggressive scan (-A) selected (keyword)")
                 elif "vuln" in user_query or "vulnerab" in user_query:
                     command = "vuln_scan"
-                    print(f"  🔍 Nmap: Vulnerability scripts selected")
+                    print(f"  🔍 Nmap: Vulnerability scripts selected (keyword)")
                 elif "full" in user_query or "all ports" in user_query or "-p-" in user_query:
                     command = "full_scan"
-                    print(f"  🔍 Nmap: Full scan selected")
+                    print(f"  🔍 Nmap: Full scan selected (keyword)")
                 elif "ping" in user_query or "-sn" in user_query:
                     command = "ping_sweep"
-                    print(f"  🔍 Nmap: Ping sweep selected")
+                    print(f"  🔍 Nmap: Ping sweep selected (keyword)")
                 elif "service" in user_query or "-sc" in user_query:
                     command = "service_scan"
-                    print(f"  🔍 Nmap: Service scan (-sC) selected")
+                    print(f"  🔍 Nmap: Service scan (-sC) selected (keyword)")
                 # command will remain None for default (quick_scan)
             
-            # GOBUSTER: Smart command selection
-            if tool_name == "gobuster":
+            # GOBUSTER: Smart command selection (FALLBACK)
+            if tool_name == "gobuster" and not command:
                 user_query = state.get("query", "").lower()
                 if "dns" in user_query or "subdomain" in user_query:
                     command = "dns"
-                    print(f"  🔍 Gobuster: DNS mode selected")
+                    print(f"  🔍 Gobuster: DNS mode selected (keyword)")
                 elif "redirect" in user_query or "302" in user_query or "wildcard" in user_query:
                     command = "dir_redirects"
-                    print(f"  🔍 Gobuster: Directory scan (ignore redirects) selected")
+                    print(f"  🔍 Gobuster: Directory scan (ignore redirects) selected (keyword)")
             
-            # HYDRA: Smart command selection based on target URL/port
-            if tool_name == "hydra":
+            # HYDRA: Smart command selection based on target URL/port (FALLBACK)
+            if tool_name == "hydra" and not command:
                 url = tool_params.get("url", "")
                 target = tool_params.get("target", "")
                 
@@ -1027,8 +1055,8 @@ def executor_node(state: AgentState) -> AgentState:
                     command = "http_post"
                     print(f"  🔐 Hydra: Defaulting to HTTP brute-force")
         
-            # MEDUSA: Smart command selection based on target/ports
-            if tool_name == "medusa":
+            # MEDUSA: Smart command selection based on target/ports (FALLBACK)
+            if tool_name == "medusa" and not command:
                 url = tool_params.get("url", "")
                 target = tool_params.get("target", "")
                 query = state.get("query", "").lower()
