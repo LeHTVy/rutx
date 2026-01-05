@@ -1,0 +1,34 @@
+Dựa trên các nguồn tài liệu, 18 cổng mạng phổ biến này được coi là "bản đồ" giúp các hacker xác định các điểm yếu và cách thức xâm nhập vào một hệ thống. Dưới đây là danh sách chi tiết được chia thành các nhóm dựa trên chức năng và mức độ rủi ro:
+
+### 1. Nhóm "Khủng long" (Các giao thức cũ, không mã hóa)
+Đây là những giao thức từ thời kỳ đầu của internet, nơi bảo mật chưa được chú trọng và mọi dữ liệu đều được gửi dưới dạng văn bản thuần túy (clear text):
+*   **Cổng 21 (FTP - File Transfer Protocol):** Dùng để di chuyển tệp tin. Điểm yếu lớn nhất là nó gửi tên đăng nhập và mật khẩu mà không hề mã hóa, cho phép hacker dễ dàng đánh cắp thông tin qua các công cụ như Wireshark.
+*   **Cổng 23 (Telnet):** Cho phép điều khiển máy tính từ xa bằng lệnh văn bản. Nó hoàn toàn không có mã hóa, giống như việc "hét to mã PIN ngân hàng trong một sân vận động đông đúc".
+*   **Cổng 80 (HTTP):** Giao thức web tiêu chuẩn không mã hóa. Hacker yêu thích cổng này để thực hiện các cuộc tấn công "người đứng giữa" (man-in-the-middle), tiêm mã độc hoặc đánh cắp dữ liệu người dùng.
+
+### 2. Nhóm "Cửa thép" (Các phiên bản bảo mật)
+Đây là những phiên bản nâng cấp có mã hóa, nhưng vẫn có thể bị tấn công nếu cấu hình yếu:
+*   **Cổng 22 (SSH - Secure Shell):** Thay thế an toàn cho Telnet, bảo vệ kết nối bằng lớp mã hóa dày đặc. Tuy nhiên, đây là mục tiêu hàng đầu cho các cuộc tấn công dò mật khẩu (brute force).
+*   **Cổng 443 (HTTPS):** Giao thức web bảo mật sử dụng SSL/TLS. Hacker tấn công cổng này bằng cách tìm kiếm các chứng chỉ hết hạn hoặc lỗ hổng phần mềm như "Heartbleed".
+
+### 3. Nhóm "Nhân viên bưu điện" (Email)
+Ba cổng này phối hợp với nhau để chuyển phát thư điện tử:
+*   **Cổng 25 (SMTP):** Dùng để gửi thư đi. Hacker sử dụng nó để liệt kê người dùng (user enumeration), từ đó xác nhận các tài khoản tồn tại để tấn công.
+*   **Cổng 110 (POP3):** Dùng để nhận thư về máy. Nếu bị đánh chặn, hacker có thể đọc toàn bộ email vì nó thường không an toàn.
+*   **Cổng 143 (IMAP):** Cho phép đồng bộ email trên nhiều thiết bị. Các phiên bản cũ vẫn xác thực bằng văn bản thuần túy, dễ bị đánh cắp thông tin đăng nhập.
+
+### 4. Nhóm "Hệ thống ống nước" (Cơ sở hạ tầng)
+Đây là các dịch vụ chạy ngầm duy trì hoạt động của internet:
+*   **Cổng 53 (DNS):** Dịch vụ phân giải tên miền thành địa chỉ IP. Hacker có thể sử dụng "DNS tunneling" để tuồn dữ liệu bị đánh cắp ra ngoài qua tường lửa.
+*   **Cổng 67 & 68 (DHCP):** Dùng để cấp phát địa chỉ IP trong mạng. Hacker có thể giả danh máy chủ DHCP để điều hướng toàn bộ lưu lượng truy cập của bạn đi qua máy tính của chúng.
+*   **Cổng 123 (NTP):** Đồng bộ thời gian giữa các máy tính. Cổng này thường bị lợi dụng cho các cuộc tấn công từ chối dịch vụ (DoS) khuếch đại.
+
+### 5. Nhóm "Báu vật" (Kiểm soát trực tiếp và Dữ liệu)
+Nếu các cổng này mở ra internet, đó là một thảm họa về bảo mật:
+*   **Cổng 139 & 445 (NetBIOS & SMB):** Dùng để chia sẻ tệp tin trong mạng Windows. Cổng 445 là cổng bị tấn công nhiều nhất trong lịch sử do lỗ hổng **EternalBlue**, từng gây ra đại dịch mã độc tống tiền WannaCry.
+*   **Cổng 3389 (RDP - Remote Desktop Protocol):** Cung cấp giao diện đồ họa để điều khiển máy tính từ xa. Hacker thường sử dụng phương pháp "nhồi thông tin xác thực" (credential stuffing) để chiếm quyền kiểm soát, tắt diệt virus và cài mã độc.
+*   **Cổng 1521 (Oracle), 3306 (MySQL), 5432 (PostgreSQL):** Đây là các cổng cơ sở dữ liệu chứa thông tin nhạy cảm như thẻ tín dụng, hồ sơ y tế. Chúng không bao giờ được phép đối mặt trực tiếp với internet.
+
+**Tóm lại**, việc hiểu rõ các cổng này không chỉ là ghi nhớ những con số, mà là hiểu rõ rủi ro đi kèm: cổng 21, 23, 80 liên quan đến tấn công đánh chặn; cổng 445 liên quan đến mã độc tống tiền; và các cổng cơ sở dữ liệu là nơi xảy ra các vụ rò rỉ dữ liệu quy mô lớn.
+
+Bạn có thể tưởng tượng hệ thống mạng như một **tòa nhà lớn**: các cổng mạng là những cánh cửa ra vào khác nhau. Có những cửa làm bằng kính (cổng 21, 23) giúp bạn thấy mọi thứ bên trong nhưng rất dễ vỡ; có những cửa thép (cổng 22, 443) an toàn hơn nhưng nếu bạn dùng chìa khóa yếu, trộm vẫn có thể vào; và những "đường ống nước" (cổng 53, 67) dù nhỏ hẹp nhưng nếu không bịt kín, kẻ gian vẫn có thể lẻn vào hoặc tuồn đồ đạc ra ngoài.

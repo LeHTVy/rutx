@@ -1,6 +1,5 @@
 #!/bin/bash
-# SNODE - AI-Powered Pentesting Agent
-# Run with: sudo snode
-
+# SNODE Launcher - Uses new modular /app architecture
 cd /home/hellrazor/rutx
-exec /home/hellrazor/rutx/venv/bin/python3 snode.py "$@"
+source venv/bin/activate
+python -W ignore::RuntimeWarning -c "from app.cli.main import main; main()" "$@"

@@ -1,0 +1,6 @@
+{
+  "provider": "ollama",
+  "model": "deepseek-r1:latest",
+  "temperature": 0,
+  "endpoint": "http://localhost:11434"
+}
