@@ -595,18 +595,23 @@ TOOL_METADATA: Dict[str, Dict[str, Any]] = {
     },
     "wpscan": {
         "category": "web",
-        "description": "WordPress vulnerability scanner",
-        "tags": ["wordpress", "cms", "vulnerability", "plugin", "theme"],
+        "description": "WordPress vulnerability scanner (with WAF bypass)",
+        "tags": ["wordpress", "cms", "vulnerability", "plugin", "theme", "waf"],
         "commands": {
             "enum": {
-                "description": "Enumerate plugins, themes, users",
-                "use_cases": ["find wp vulnerabilities", "wordpress audit"],
+                "description": "Enumerate plugins, themes, users (with random user-agent)",
+                "use_cases": ["find wp vulnerabilities", "wordpress audit", "wp security scan"],
                 "params": ["url"],
             },
             "brute": {
                 "description": "WordPress login brute-force",
                 "use_cases": ["crack wp login", "wordpress password"],
                 "params": ["url", "users", "wordlist"],
+            },
+            "stealth": {
+                "description": "Slow stealth scan with throttling to evade WAF",
+                "use_cases": ["bypass waf", "slow wordpress scan", "evade detection"],
+                "params": ["url"],
             },
         },
     },
@@ -1046,12 +1051,27 @@ TOOL_METADATA: Dict[str, Dict[str, Any]] = {
     "msfconsole": {
         "category": "exploit",
         "description": "Metasploit Framework - exploitation and post-exploitation",
-        "tags": ["metasploit", "exploit", "shell", "payload", "post-exploitation", "cve"],
+        "tags": ["metasploit", "exploit", "shell", "payload", "post-exploitation", "cve", "lfi", "rce"],
         "commands": {
+            "search": {
+                "description": "Search for exploits and modules",
+                "use_cases": ["find exploit", "search vulnerability", "find cve module"],
+                "params": ["query"],
+            },
             "exec": {
                 "description": "Execute single MSF command",
                 "use_cases": ["run metasploit command", "msf automation"],
                 "params": ["command"],
+            },
+            "info": {
+                "description": "Get info about a module",
+                "use_cases": ["module details", "exploit info"],
+                "params": ["module"],
+            },
+            "aux_scan": {
+                "description": "Run auxiliary scanner module against target",
+                "use_cases": ["scan with metasploit", "aux module run"],
+                "params": ["module", "target"],
             },
             "resource": {
                 "description": "Run resource script",

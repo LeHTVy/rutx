@@ -18,7 +18,7 @@ def get_specs() -> List[ToolSpec]:
             name="shodan",
             category=ToolCategory.OSINT,
             description="Search engine for Internet-connected devices",
-            executable_names=["shodan"],
+            executable_names=["/home/hellrazor/rutx/venv/bin/shodan", "shodan"],
             install_hint="pip install shodan && shodan init YOUR_API_KEY",
             commands={
                 "host": CommandTemplate(
@@ -250,6 +250,7 @@ def execute_clatscope(command: str, params: dict) -> dict:
             params.get("api_key")
         ),
         "reverse_dns": lambda: osint.reverse_dns(params.get("ip")),
+        "find_origin": lambda: osint.find_origin(params.get("domain")),
     }
     
     if command not in command_map:

@@ -68,14 +68,19 @@ def get_specs() -> List[ToolSpec]:
             install_hint="gem install wpscan",
             commands={
                 "enum": CommandTemplate(
-                    args=["--url", "{url}", "--enumerate", "vp,vt,u", "--no-banner"],
+                    args=["--url", "{url}", "--enumerate", "vp,vt,u", "--random-user-agent", "--no-banner"],
                     timeout=600,
-                    success_codes=[0]
+                    success_codes=[0, 4]  # 4 = WAF detected but continued
                 ),
                 "brute": CommandTemplate(
-                    args=["--url", "{url}", "-U", "{users}", "-P", "{wordlist}", "--no-banner"],
+                    args=["--url", "{url}", "-U", "{users}", "-P", "{wordlist}", "--random-user-agent", "--no-banner"],
                     timeout=900,
                     success_codes=[0]
+                ),
+                "stealth": CommandTemplate(
+                    args=["--url", "{url}", "--enumerate", "vp,vt,u", "--random-user-agent", "--throttle", "500", "--no-banner"],
+                    timeout=900,
+                    success_codes=[0, 4]
                 ),
             }
         ),

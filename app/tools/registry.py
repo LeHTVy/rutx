@@ -89,6 +89,8 @@ class ToolSpec:
             "/usr/local/bin",
             "/snap/bin",
             os.path.expanduser("~/go/bin"),
+            # Custom SNODE tools
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools", "custom"),
         ]
         
         for name in self.executable_names:
@@ -97,6 +99,10 @@ class ToolSpec:
                 full_path = Path(path_dir) / name
                 if full_path.exists() and os.access(full_path, os.X_OK):
                     return str(full_path)
+                # Also try with .py extension for Python scripts
+                py_path = Path(path_dir) / f"{name}.py"
+                if py_path.exists():
+                    return f"python3 {py_path}"
             
             # Fall back to which
             path = shutil.which(name)
@@ -293,8 +299,12 @@ class ToolRegistry:
         if template.requires_sudo:
             args.append("sudo")
         
-        # Add executable
-        args.append(spec.executable_path)
+        # Add executable - handle 'python3 /path/to/script.py' format
+        if spec.executable_path and ' ' in spec.executable_path:
+            # Split python3 /path/script.py into separate args
+            args.extend(spec.executable_path.split())
+        else:
+            args.append(spec.executable_path)
         
         # Process template args
         for arg in template.args:

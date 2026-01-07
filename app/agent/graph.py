@@ -543,6 +543,32 @@ def planner_node(state: AgentState) -> AgentState:
         subs = context.get("subdomains", [])[:5]
         context_str += f"• Subdomains: {', '.join(subs)}...\n"
     
+    # Add OPEN PORTS information for intelligent brute-force tool selection
+    open_ports_raw = context.get("open_ports", [])
+    # Extract port numbers (could be dicts with 'port' key or raw ints)
+    open_ports = []
+    for p in open_ports_raw:
+        if isinstance(p, dict):
+            open_ports.append(p.get("port", 0))
+        else:
+            open_ports.append(int(p) if str(p).isdigit() else 0)
+    open_ports = [p for p in open_ports if p > 0]
+    
+    if open_ports:
+        context_str += f"• OPEN PORTS: {', '.join(str(p) for p in open_ports[:20])}\n"
+        # Map ports to services for LLM
+        port_services = {
+            22: "SSH", 21: "FTP", 23: "Telnet", 3389: "RDP", 445: "SMB",
+            3306: "MySQL", 5432: "PostgreSQL", 1433: "MSSQL", 1521: "Oracle",
+            80: "HTTP", 443: "HTTPS", 8080: "HTTP-Alt", 2082: "cPanel", 2083: "cPanel-SSL",
+            2086: "WHM", 2087: "WHM-SSL", 25: "SMTP", 110: "POP3", 143: "IMAP"
+        }
+        detected_services = [port_services.get(p) for p in open_ports if p in port_services]
+        if detected_services:
+            context_str += f"• SERVICES AVAILABLE: {', '.join(set(detected_services))}\n"
+    else:
+        context_str += "• NO PORT SCAN completed yet (run nmap first before brute-force)\n"
+    
     tools_run = context.get("tools_run", [])
     if tools_run:
         context_str += f"• Already ran: {', '.join(tools_run)}\n"
@@ -602,6 +628,15 @@ RULES:
 - **CRITICAL: If user explicitly names tools, include ALL requested tools**
 - If user doesn't specify tools, pick the single best one for the current phase
 - If CVEs are mentioned, prefer tools that can detect them (like nuclei)
+
+**BRUTE-FORCE RULES (CRITICAL):**
+- ONLY suggest hydra/medusa for SSH if port 22 is in OPEN PORTS
+- ONLY suggest hydra/medusa for FTP if port 21 is in OPEN PORTS
+- ONLY suggest hydra/medusa for RDP if port 3389 is in OPEN PORTS
+- ONLY suggest cpanelbrute if port 2083/2087 is in OPEN PORTS
+- If no port scan done yet, suggest nmap FIRST before brute-force tools
+- DO NOT suggest brute-force tools for services that are not confirmed open!
+
 - Return JSON: {{"tools": ["tool1", "tool2"], "message": "I suggest..."}}
 - "tools" should be an ARRAY, even if only one tool
 
@@ -692,6 +727,72 @@ def confirm_node(state: AgentState) -> AgentState:
             "next_action": "respond"
         }
 
+
+def validate_tool_params(tool_name: str, command: str, params: dict, registry) -> tuple:
+    """
+    Validate that all required parameters are available for a tool command.
+    Returns (is_valid, missing_params, error_message).
+    """
+    spec = registry.tools.get(tool_name)
+    if not spec:
+        return False, [], f"Tool not found: {tool_name}"
+    
+    template = spec.commands.get(command) if command else None
+    if not template:
+        # Try default command
+        default_cmds = ["scan", "quick", "quick_scan", "enum", "default"]
+        for cmd in default_cmds:
+            if cmd in spec.commands:
+                template = spec.commands[cmd]
+                break
+    
+    if not template:
+        return False, [], f"No command found for {tool_name}"
+    
+    # Extract required params from args template
+    import re
+    missing = []
+    for arg in template.args:
+        placeholders = re.findall(r'\{(\w+)\}', arg)
+        for p in placeholders:
+            if not params.get(p):
+                missing.append(p)
+    
+    if missing:
+        return False, missing, f"Missing parameters: {', '.join(missing)}"
+    
+    return True, [], ""
+
+
+def get_adaptive_timeout(base_timeout: int, context: dict, tool_name: str) -> int:
+    """
+    Scale timeout based on number of targets and tool type.
+    """
+    n_subdomains = len(context.get("subdomains", []))
+    n_ports = len(context.get("open_ports", []))
+    
+    # Base scaling factor
+    scale = 1
+    
+    # Scale for multi-target scans
+    if n_subdomains > 10:
+        scale = max(scale, n_subdomains // 10)
+    
+    # Minimum timeouts for slow tools
+    min_timeouts = {
+        "nmap": 300,
+        "nuclei": 600,
+        "wpscan": 300,
+        "nikto": 300,
+        "amass": 600,
+        "masscan": 300,
+    }
+    
+    min_t = min_timeouts.get(tool_name, base_timeout)
+    scaled = max(min_t, base_timeout * scale)
+    
+    # Cap at 30 minutes
+    return min(scaled, 1800)
 
 def executor_node(state: AgentState) -> AgentState:
     """
@@ -944,10 +1045,27 @@ def executor_node(state: AgentState) -> AgentState:
             # Single target mode
             if tool_name in ["nuclei", "nmap", "masscan"]:
                 tool_params["target"] = domain
-            if tool_name in ["wpscan", "nikto", "httpx", "katana"]:
+            if tool_name in ["wpscan", "nikto", "httpx", "katana", "wafw00f", "whatweb", "arjun", "dirsearch", "feroxbuster"]:
                 tool_params["url"] = f"https://{domain}" if domain and not domain.startswith("http") else domain
             if tool_name in ["subfinder", "amass", "bbot", "dig"]:
                 tool_params["domain"] = domain
+            
+            # SHODAN: Smart command selection based on target type
+            if tool_name == "shodan":
+                import re
+                target = domain or params.get("target", "")
+                # Check if target is an IP address
+                ip_pattern = r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$'
+                if re.match(ip_pattern, target):
+                    command = "host"
+                    tool_params["target"] = target
+                    print(f"  🔍 Shodan: Using 'host' for IP {target}")
+                else:
+                    # Use search with hostname: filter (works on free tier)
+                    # domain command requires paid API
+                    command = "search"
+                    tool_params["query"] = f"hostname:{target}"
+                    print(f"  🔍 Shodan: Using 'search hostname:{target}'")
             
             # Exploit tools need special handling
             if tool_name == "msfconsole":
@@ -970,168 +1088,50 @@ def executor_node(state: AgentState) -> AgentState:
                     else:
                         tool_params["query"] = domain or "apache"
             
-            # NMAP: Smart command selection (FALLBACK - only if no semantic command)
-            if tool_name == "nmap" and not command:
-                user_query = state.get("query", "").lower()
-                
-                # Detect scan type from user query
-                if "-ss" in user_query or "syn scan" in user_query or "stealth" in user_query:
-                    command = "syn_scan"
-                    print(f"  🔍 Nmap: SYN scan (-sS) selected (keyword)")
-                elif "-su" in user_query or "udp" in user_query:
-                    command = "udp_scan"
-                    print(f"  🔍 Nmap: UDP scan (-sU) selected (keyword)")
-                elif "-st" in user_query or "tcp connect" in user_query:
-                    command = "tcp_scan"
-                    print(f"  🔍 Nmap: TCP connect scan (-sT) selected (keyword)")
-                elif "-sv" in user_query or "version" in user_query:
-                    command = "version_scan"
-                    print(f"  🔍 Nmap: Version scan (-sV) selected (keyword)")
-                elif "-o" in user_query or "os detect" in user_query:
-                    command = "os_detect"
-                    print(f"  🔍 Nmap: OS detection (-O) selected (keyword)")
-                elif "-a" in user_query or "aggressive" in user_query:
-                    command = "aggressive"
-                    print(f"  🔍 Nmap: Aggressive scan (-A) selected (keyword)")
-                elif "vuln" in user_query or "vulnerab" in user_query:
-                    command = "vuln_scan"
-                    print(f"  🔍 Nmap: Vulnerability scripts selected (keyword)")
-                elif "full" in user_query or "all ports" in user_query or "-p-" in user_query:
-                    command = "full_scan"
-                    print(f"  🔍 Nmap: Full scan selected (keyword)")
-                elif "ping" in user_query or "-sn" in user_query:
-                    command = "ping_sweep"
-                    print(f"  🔍 Nmap: Ping sweep selected (keyword)")
-                elif "service" in user_query or "-sc" in user_query:
-                    command = "service_scan"
-                    print(f"  🔍 Nmap: Service scan (-sC) selected (keyword)")
-                # command will remain None for default (quick_scan)
-            
-            # GOBUSTER: Smart command selection (FALLBACK)
-            if tool_name == "gobuster" and not command:
-                user_query = state.get("query", "").lower()
-                if "dns" in user_query or "subdomain" in user_query:
-                    command = "dns"
-                    print(f"  🔍 Gobuster: DNS mode selected (keyword)")
-                elif "redirect" in user_query or "302" in user_query or "wildcard" in user_query:
-                    command = "dir_redirects"
-                    print(f"  🔍 Gobuster: Directory scan (ignore redirects) selected (keyword)")
-            
-            # HYDRA: Smart command selection based on target URL/port (FALLBACK)
-            if tool_name == "hydra" and not command:
-                url = tool_params.get("url", "")
-                target = tool_params.get("target", "")
-                
-                # Detect protocol from URL
-                if url.startswith("https://") or url.startswith("http://"):
-                    # HTTP-based target
-                    if ":2087" in url or "cpanel" in url.lower() or "whm" in url.lower():
-                        command = "cpanel"
-                        print(f"  🔐 Hydra: cPanel detected, using HTTPS form brute-force")
-                    elif ":2083" in url:
-                        command = "cpanel"  # cPanel user login
-                        print(f"  🔐 Hydra: cPanel user login detected")
-                    else:
-                        # Check if we have form details for POST
-                        if tool_params.get("form") or tool_params.get("fail_msg"):
-                            command = "http_post"
-                            print(f"  🔐 Hydra: HTTP target, using HTTP form brute-force")
-                        else:
-                            # Fallback to GET/Basic Auth
-                            command = "http_get"
-                            if not tool_params.get("path"):
-                                tool_params["path"] = "/"
-                            print(f"  🔐 Hydra: HTTP target (no form details), using HTTP GET/Basic Auth")
-                elif ":22" in target or "ssh" in state.get("query", "").lower():
-                    command = "ssh"
-                elif ":21" in target or "ftp" in state.get("query", "").lower():
-                    command = "ftp"
-                elif ":3389" in target or "rdp" in state.get("query", "").lower():
-                    command = "rdp"
-                elif ":445" in target or "smb" in state.get("query", "").lower():
-                    command = "smb"
-                else:
-                    # Default to http_post for web targets
-                    command = "http_post"
-                    print(f"  🔐 Hydra: Defaulting to HTTP brute-force")
+        # ============================================================
+        # COMMAND SELECTION: Trust semantic search, use default as fallback
+        # ============================================================
+        # The semantic search already picked the best command for the context.
+        # No hardcoded keyword matching - pure semantic + LLM reasoning.
         
-            # MEDUSA: Smart command selection based on target/ports (FALLBACK)
-            if tool_name == "medusa" and not command:
-                url = tool_params.get("url", "")
-                target = tool_params.get("target", "")
-                query = state.get("query", "").lower()
-                open_ports = context.get("open_ports", [])
-                
-                # Check for specific services in open ports or query
-                if ":22" in target or "ssh" in query or 22 in open_ports:
-                    command = "ssh"
-                    print(f"  🔐 Medusa: SSH detected")
-                elif ":21" in target or "ftp" in query or 21 in open_ports:
-                    command = "ftp"
-                    print(f"  🔐 Medusa: FTP detected")
-                elif ":3389" in target or "rdp" in query or 3389 in open_ports:
-                    command = "rdp"
-                    print(f"  🔐 Medusa: RDP detected")
-                elif ":3306" in target or "mysql" in query or 3306 in open_ports:
-                    command = "mysql"
-                    print(f"  🔐 Medusa: MySQL detected")
-                elif url.startswith("http") or 80 in open_ports or 443 in open_ports:
-                    # Default to HTTP for web targets
-                    command = "http"
-                    print(f"  🔐 Medusa: Web target, using HTTP Basic Auth brute-force")
-                else:
-                    # Fallback to HTTP (most web servers)
-                    command = "http"
-                    print(f"  🔐 Medusa: Defaulting to HTTP (web most common)")
-        
-        # Use specified command or first available
         if command is None:
             available_commands = list(spec.commands.keys())
-            
-            # If multiple commands, ask LLM to pick the best one
-            if len(available_commands) > 1:
-                user_query = state.get("query", "").lower()
-                
-                # Build command descriptions for LLM
-                cmd_descriptions = []
-                for cmd_name in available_commands:
-                    cmd_template = spec.commands[cmd_name]
-                    args = " ".join(cmd_template.args) if hasattr(cmd_template, 'args') else ""
-                    cmd_descriptions.append(f"- {cmd_name}: {args[:80]}")
-                
-                # Quick keyword-to-command mapping first
-                keyword_map = {
-                    # Nmap
-                    "os": "os_detect", "version": "version_scan", "operating system": "os_detect",
-                    "aggressive": "aggressive", "stealth": "syn_scan", "syn": "syn_scan",
-                    "udp": "udp_scan", "full": "full_scan", "vuln": "vuln_scan",
-                    "all ports": "full_scan", "service": "version_scan",
-                    # Nuclei
-                    "fast": "scan_fast", "quick": "scan_fast", "all": "scan_all",
-                    # Gobuster
-                    "redirect": "dir_redirects", "dns": "dns",
-                    # Hydra/Medusa
-                    "ssh": "ssh", "ftp": "ftp", "mysql": "mysql", "rdp": "rdp",
-                    # theHarvester
-                    "subdomain": "subdomains", "email": "all",
-                    # passgen
-                    "keyword": "keywords",
-                }
-                
-                # Check for keyword match
-                for keyword, cmd in keyword_map.items():
-                    if keyword in user_query and cmd in available_commands:
-                        command = cmd
-                        print(f"  🎯 Selected command '{cmd}' based on keyword '{keyword}'")
-                        break
-                
-                # If still no match, use first available
-                if command is None:
-                    command = available_commands[0]
-            else:
-                command = available_commands[0]
+            # Use first available command as default
+            command = available_commands[0] if available_commands else None
         
         print(f"  🔧 Executing {tool_name}:{command}")
+        
+        # ============================================================
+        # VALIDATE PARAMETERS BEFORE EXECUTION
+        # ============================================================
+        is_valid, missing, error_msg = validate_tool_params(tool_name, command, tool_params, registry)
+        if not is_valid and missing:
+            # Try to auto-fill missing params with defaults
+            for param in missing:
+                if param == "wordlist" and not tool_params.get("wordlist"):
+                    tool_params["wordlist"] = "wordlists/common.txt"
+                elif param == "user" and not tool_params.get("user"):
+                    tool_params["user"] = "admin"
+                elif param == "ports" and not tool_params.get("ports"):
+                    tool_params["ports"] = "22,80,443,8080,8443"
+                elif param == "target" and not tool_params.get("target"):
+                    tool_params["target"] = params.get("domain", "")
+            
+            # Re-validate after auto-fill
+            is_valid, still_missing, _ = validate_tool_params(tool_name, command, tool_params, registry)
+            if not is_valid and still_missing:
+                results[tool_name] = {
+                    "success": False,
+                    "output": f"Missing required params: {', '.join(still_missing)}"
+                }
+                print(f"  ⚠️ Skipping {tool_name}: missing {', '.join(still_missing)}")
+                continue
+        
+        # Get adaptive timeout based on target count
+        spec = registry.tools.get(tool_name)
+        template = spec.commands.get(command) if spec and command else None
+        base_timeout = template.timeout if template else 300
+        timeout = get_adaptive_timeout(base_timeout, context, tool_name)
         
         # Define callback for streaming output
         import sys
@@ -1155,11 +1155,12 @@ def executor_node(state: AgentState) -> AgentState:
                     sys.stdout.write(f"    {DIM}{line}{RESET}\n")
                 sys.stdout.flush()
         
-        # Use streaming execution
+        # Use streaming execution with adaptive timeout
         result = registry.execute_stream(
             tool_name, 
             command, 
             tool_params,
+            timeout_override=timeout,
             line_callback=stream_callback
         )
         
@@ -1179,9 +1180,20 @@ def executor_node(state: AgentState) -> AgentState:
             if tool_name in ["subfinder", "amass", "bbot"]:
                 context["has_subdomains"] = True
                 context["last_domain"] = params.get("domain", "")
-                # Store actual subdomains
+                # Store actual subdomains - filter out garbage
                 lines = output.strip().split("\n")
-                subdomains = [l.strip() for l in lines if l.strip() and '.' in l]
+                import re
+                # Valid subdomain pattern: alphanumeric with dots, no spaces
+                subdomain_pattern = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)+$')
+                subdomains = []
+                for line in lines:
+                    line = line.strip()
+                    # Skip empty lines, lines with spaces (not subdomains), IP ranges, URLs
+                    if not line or ' ' in line or '/' in line or 'http' in line.lower():
+                        continue
+                    # Must look like a valid subdomain
+                    if subdomain_pattern.match(line) and len(line) > 4:
+                        subdomains.append(line)
                 context["subdomain_count"] = len(subdomains)
                 context["subdomains"] = subdomains[:50]  # Store up to 50
             
@@ -1242,6 +1254,24 @@ def executor_node(state: AgentState) -> AgentState:
                         http_probes.append(line.strip())
                 if http_probes:
                     context["http_probes"] = http_probes[:50]
+                
+                # Detect WAF/CDN from response patterns
+                try:
+                    from app.rag.security_tech import SECURITY_TECH_DB
+                    detected_security = []
+                    output_lower = output.lower()
+                    
+                    for tech_id, tech in SECURITY_TECH_DB.items():
+                        for pattern in tech.detection_patterns:
+                            if pattern.lower() in output_lower:
+                                detected_security.append(tech_id)
+                                break
+                    
+                    if detected_security:
+                        context["detected_security_tech"] = list(set(detected_security))
+                        print(f"  🛡️ Security tech detected: {', '.join(detected_security)}")
+                except Exception:
+                    pass
             
             # ─────────────────────────────────────────────────────────
             # VULNERABILITY SCANNING TOOLS
@@ -1570,12 +1600,77 @@ def executor_node(state: AgentState) -> AgentState:
     tools_run.extend(tools)
     context["tools_run"] = list(set(tools_run))  # Deduplicate
     
+    # ============================================================
+    # UNIVERSAL SECURITY TECH DETECTION (all tool outputs)
+    # ============================================================
+    try:
+        from app.rag.security_tech import SECURITY_TECH_DB
+        
+        # Combine all outputs for scanning
+        all_output = ""
+        for tool, data in results.items():
+            if data.get("output"):
+                all_output += data["output"].lower()
+        
+        detected_security = context.get("detected_security_tech", [])
+        for tech_id, tech in SECURITY_TECH_DB.items():
+            for pattern in tech.detection_patterns:
+                if pattern.lower() in all_output:
+                    if tech_id not in detected_security:
+                        detected_security.append(tech_id)
+                        print(f"  🛡️ {tech.name} detected in output")
+                    break
+        
+        if detected_security:
+            context["detected_security_tech"] = list(set(detected_security))
+    except Exception:
+        pass
+    
     return {
         **state,
         "execution_results": results,
         "context": context,
         "next_action": "analyze"
     }
+
+
+def _get_security_tech_context(context: dict) -> str:
+    """Generate security tech bypass context for the LLM."""
+    detected_security = context.get("detected_security_tech", [])
+    if not detected_security:
+        return ""
+    
+    try:
+        from app.rag.security_tech import SECURITY_TECH_DB
+        
+        security_context = "\n- **SECURITY DEFENSES DETECTED:**\n"
+        for tech_id in detected_security[:3]:  # Top 3
+            tech = SECURITY_TECH_DB.get(tech_id)
+            if tech:
+                security_context += f"  * {tech.name} ({tech.category}): {tech.description[:80]}...\n"
+                security_context += f"    BYPASS METHODS:\n"
+                for method in tech.bypass_methods[:2]:  # Top 2 methods
+                    security_context += f"      - {method['method']}: {method['description'][:60]}...\n"
+                if tech.origin_discovery and tech.category == "cdn_waf":
+                    security_context += f"    ORIGIN IP DISCOVERY: {', '.join(tech.origin_discovery[:2])}\n"
+        
+        # Add live web research for latest bypass techniques
+        try:
+            from app.tools.custom.web_research import research_bypass
+            for tech_id in detected_security[:1]:  # Research top 1 only (rate limit)
+                tech = SECURITY_TECH_DB.get(tech_id)
+                if tech:
+                    research_result = research_bypass(tech.name)
+                    if research_result and "No research" not in research_result:
+                        security_context += f"\n    🌐 WEB RESEARCH:\n"
+                        for line in research_result.split("\n")[:5]:
+                            security_context += f"      {line}\n"
+        except Exception:
+            pass  # Web research is optional
+        
+        return security_context
+    except Exception:
+        return ""
 
 
 def analyzer_node(state: AgentState) -> AgentState:
@@ -1598,14 +1693,80 @@ def analyzer_node(state: AgentState) -> AgentState:
     failed_tools = [t for t, d in results.items() if not d.get("success")]
     
     if not successful_tools:
-        # ALL tools failed - don't send to LLM, show clear error
+        # ALL tools failed - provide INTELLIGENT REASONING about why
+        detected_security = context.get("detected_security_tech", [])
+        
         error_msg = "⚠️ **All scans failed or timed out:**\n\n"
+        
+        # Analyze each failed tool
+        failure_reasons = []
         for tool, data in results.items():
-            error_msg += f"- **{tool}**: {data.get('error', 'Timeout/Unknown error')}\n"
-        error_msg += "\n**Suggestions:**\n"
-        error_msg += "- Check if target is accessible\n"
-        error_msg += "- Try a different tool or target\n"
-        error_msg += "- Check tool installation with `/tools`"
+            error = data.get("error", "") or data.get("output", "")
+            error_lower = error.lower()
+            error_msg += f"- **{tool}**: {error[:100]}...\n" if len(error) > 100 else f"- **{tool}**: {error}\n"
+            
+            # Categorize failure reasons
+            if "timeout" in error_lower or "timed out" in error_lower:
+                failure_reasons.append("timeout")
+            if "connection refused" in error_lower or "no route" in error_lower:
+                failure_reasons.append("connection")
+            if "could not connect" in error_lower:
+                failure_reasons.append("connection")
+        
+        # Generate intelligent analysis
+        error_msg += "\n**🧠 Failure Analysis:**\n"
+        
+        # Check if security tech is causing issues - use SECURITY_TECH_DB dynamically
+        security_explained = False
+        if detected_security:
+            try:
+                from app.rag.security_tech import SECURITY_TECH_DB
+                
+                for tech_id in detected_security:
+                    tech = SECURITY_TECH_DB.get(tech_id)
+                    if tech:
+                        security_explained = True
+                        error_msg += f"\n🛡️ **{tech.name} Detected!** ({tech.category})\n"
+                        error_msg += f"{tech.description}\n\n"
+                        
+                        # Show bypass methods
+                        error_msg += "**Bypass Methods:**\n"
+                        for method in tech.bypass_methods[:3]:
+                            error_msg += f"- {method['method']}: {method['description']}\n"
+                        
+                        # For CDN/WAF, show origin discovery
+                        if tech.category == "cdn_waf" and tech.origin_discovery:
+                            error_msg += "\n**Find Origin IP:**\n"
+                            for od in tech.origin_discovery[:3]:
+                                error_msg += f"- {od}\n"
+                        error_msg += "\n"
+            except Exception:
+                pass
+        
+        # If no security tech detected, check for timeout/connection issues
+        if not security_explained:
+            if "timeout" in failure_reasons or "connection" in failure_reasons:
+                error_msg += """
+⏱️ **Connection/Timeout Issues:**
+- Target may be offline or unreachable
+- Port is filtered/closed (not open on target)
+- Firewall blocking your IP
+- CDN/WAF may be protecting the target
+
+**Try:**
+1. Run `httpx` first to confirm target is up
+2. Do port scan with `nmap` to find open ports
+3. Check if target has CDN protection with `httpx -title -tech-detect`
+"""
+            else:
+                error_msg += """
+🔧 **Possible Tool Issues:**
+- Missing required parameters
+- Wrong target format
+- Tool not installed properly
+
+Check tool installation with `/tools`
+"""
         
         return {
             **state,
@@ -1649,7 +1810,13 @@ def analyzer_node(state: AgentState) -> AgentState:
         version_pattern = r'([a-zA-Z]+)[/\s](\d+\.\d+(?:\.\d+)?)'
         versions = re.findall(version_pattern, results_str)
         for name, ver in versions:
-            if name.lower() not in ["http", "www", "ssl", "tls"]:
+            # Exclude common false positives from nmap/tool output
+            exclude = ["http", "www", "ssl", "tls", "tcp", "udp", "port", "about", 
+                       "nmap", "version", "time", "rate", "host", "scan", "open",
+                       "filtered", "closed", "service", "state", "reason", "latency",
+                       "for", "and", "the", "not", "owasp", "amass", "github", "com",
+                       "names", "discovered", "routed", "subdomain", "enumeration"]
+            if name.lower() not in exclude and len(name) > 2:
                 detected_tech.append(f"{name} {ver}")
         
         # Store detected tech for exploit tools to use
@@ -1691,6 +1858,7 @@ CONTEXT:
 - Ports scanned: {context.get('has_ports', False)}
 - Technologies detected: {context.get('detected_tech', [])}
 - Tools already run: {context.get('tools_run', [])}
+{_get_security_tech_context(context)}
 
 YOUR ANALYSIS MUST:
 
@@ -1911,47 +2079,53 @@ def respond_node(state: AgentState) -> AgentState:
 
 
 def question_node(state: AgentState) -> AgentState:
-    """Answer simple questions using context and conversation history."""
+    """Answer using LLM knowledge + scan context + web research."""
     llm = OllamaClient()
-    
-    # Build context from stored data
     context = state.get("context", {})
-    messages = state.get("messages", [])
+    query = state["query"]
     
-    # Get last scan results from messages
-    last_results = ""
-    for msg in reversed(messages[-10:]):
-        if msg.get("role") == "assistant" and "port" in msg.get("content", "").lower():
-            last_results = msg.get("content", "")[:500]
-            break
+    context_str = f"""Target: {context.get('last_domain', 'Not set')}
+Technologies: {context.get('detected_tech', [])}"""
     
-    # Build context string
-    context_str = f"""
-Domain: {context.get('last_domain', 'Not set')}
-Subdomains found: {context.get('subdomain_count', 0)}
-Last scan: {context.get('last_scan', 'None')}
-
-Recent output:
-{last_results if last_results else 'No recent scan results'}
-"""
+    # Try web research for questions that might need fresh info
+    web_context = ""
+    needs_research = any(kw in query.lower() for kw in [
+        "latest", "new", "recent", "2024", "2025", "2026",
+        "how to", "what is", "explain", "tutorial", "guide",
+        "bypass", "exploit", "vulnerability", "cve-", "poc"
+    ])
     
-    prompt = f"""You are SNODE, a penetration testing AI assistant.
-Answer this question using the context below:
-
-CONTEXT:
-{context_str}
-
-QUESTION: {state["query"]}
-
-If the question is about previous results, use the context to answer.
-If you don't have the information, say so briefly.
-"""
+    if needs_research:
+        try:
+            from app.tools.custom.web_research import search_and_format
+            research = search_and_format(query)
+            if research:
+                web_context = f"\n\nWEB RESEARCH RESULTS:\n{research}"
+                print(f"  🌐 Searched web for: {query[:50]}...")
+        except Exception:
+            pass
     
-    response = llm.generate(prompt, timeout=30)
+    prompt = f"""You are an expert cybersecurity professional with access to web search.
+
+QUESTION: {query}
+
+SESSION: {context_str}
+{web_context}
+
+INSTRUCTIONS:
+1. For general questions (cPanel, ASN, CVE, tools) - USE YOUR KNOWLEDGE!
+2. If WEB RESEARCH RESULTS are provided above, USE them to give accurate answers.
+3. For scan results, use the session context.
+4. Cite sources from web research when applicable.
+5. Be specific and actionable in your answers.
+
+Answer:"""
+    
+    response = llm.generate(prompt, timeout=60)
     
     return {
         **state,
-        "response": response or "I don't have that information. Try running a scan first.",
+        "response": response or "Please rephrase.",
         "next_action": "end"
     }
 

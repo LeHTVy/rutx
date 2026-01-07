@@ -52,45 +52,45 @@ def get_specs() -> List[ToolSpec]:
             commands={
                 # Basic scans
                 "quick_scan": CommandTemplate(
-                    args=["-T4", "-F", "{target}"],
+                    args=["-v", "-F", "{target}"],
                     timeout=120,
                     success_codes=[0]
                 ),
                 "syn_scan": CommandTemplate(
                     # -sS: TCP SYN scan (stealth, requires root)
-                    args=["-sS", "-T4", "-p", "{ports}", "{target}"],
+                    args=["-v", "-sS", "-p", "{ports}", "{target}"],
                     timeout=300,
                     requires_sudo=True,
                     success_codes=[0]
                 ),
                 "tcp_scan": CommandTemplate(
                     # -sT: TCP connect scan (no root needed)
-                    args=["-sT", "-T4", "-p", "{ports}", "{target}"],
+                    args=["-v", "-sT", "-p", "{ports}", "{target}"],
                     timeout=300,
                     success_codes=[0]
                 ),
                 "udp_scan": CommandTemplate(
                     # -sU: UDP scan (requires root, very slow)
-                    args=["-sU", "-T4", "--top-ports", "100", "{target}"],
+                    args=["-v", "-sU", "--top-ports", "100", "{target}"],
                     timeout=600,
                     requires_sudo=True,
                     success_codes=[0]
                 ),
                 # Service/Version detection
                 "service_scan": CommandTemplate(
-                    args=["-sV", "-sC", "-T4", "-p", "{ports}", "{target}"],
+                    args=["-v", "-sV", "-sC", "-p", "{ports}", "{target}"],
                     timeout=300,
                     success_codes=[0]
                 ),
                 "version_scan": CommandTemplate(
                     # -sV: Version detection only
-                    args=["-sV", "-T4", "-p", "{ports}", "{target}"],
+                    args=["-v", "-sV", "-p", "{ports}", "{target}"],
                     timeout=300,
                     success_codes=[0]
                 ),
                 "os_detect": CommandTemplate(
                     # -O: OS detection (requires root)
-                    args=["-O", "-T4", "{target}"],
+                    args=["-v", "-O", "{target}"],
                     timeout=300,
                     requires_sudo=True,
                     success_codes=[0]
@@ -98,26 +98,26 @@ def get_specs() -> List[ToolSpec]:
                 # Aggressive scans
                 "aggressive": CommandTemplate(
                     # -A: OS detection, version, scripts, traceroute
-                    args=["-A", "-T4", "-p", "{ports}", "{target}"],
+                    args=["-v", "-A", "-p", "{ports}", "{target}"],
                     timeout=600,
                     requires_sudo=True,
                     success_codes=[0]
                 ),
                 "full_scan": CommandTemplate(
-                    args=["-sV", "-sC", "-A", "-T4", "-p-", "{target}"],
+                    args=["-v", "-sV", "-sC", "-A", "-p-", "{target}"],
                     timeout=1800,  # 30 min for full scan
                     success_codes=[0]
                 ),
                 # Script scans
                 "vuln_scan": CommandTemplate(
                     # NSE vulnerability scripts
-                    args=["--script", "vuln", "-T4", "-p", "{ports}", "{target}"],
+                    args=["-v", "--script", "vuln", "-p", "{ports}", "{target}"],
                     timeout=600,
                     success_codes=[0]
                 ),
                 "default_scripts": CommandTemplate(
                     # -sC: Default scripts
-                    args=["-sC", "-T4", "-p", "{ports}", "{target}"],
+                    args=["-v", "-sC", "-p", "{ports}", "{target}"],
                     timeout=300,
                     success_codes=[0]
                 ),
@@ -129,13 +129,14 @@ def get_specs() -> List[ToolSpec]:
                     success_codes=[0]
                 ),
                 "top_ports": CommandTemplate(
-                    args=["-sV", "--top-ports", "{count}", "{target}"],
+                    args=["-v", "-sV", "--top-ports", "{count}", "{target}"],
                     timeout=300,
                     success_codes=[0]
                 ),
                 "from_file": CommandTemplate(
-                    args=["-sV", "-T4", "-p", "{ports}", "-iL", "{file}"],
-                    timeout=600,
+                    # --stats-every 10s shows progress for large scans
+                    args=["-v", "-sV", "--stats-every", "10s", "-p", "{ports}", "-iL", "{file}"],
+                    timeout=1800,
                     success_codes=[0]
                 ),
             }

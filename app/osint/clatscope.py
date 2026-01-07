@@ -264,6 +264,112 @@ class ClatScopeOSINT:
         except Exception as e:
             return {"ip": ip, "hostname": None, "error": str(e)}
     
+    def find_origin(self, domain: str) -> dict:
+        """
+        Find real origin IP behind CDN/WAF.
+        Combines multiple techniques: DNS, MX, SSL SANs, historical hints.
+        """
+        import socket
+        import requests
+        
+        results = {
+            "domain": domain,
+            "potential_origins": [],
+            "techniques_used": [],
+            "cdn_detected": None
+        }
+        
+        # 1. Direct DNS resolution (might be CDN IP)
+        try:
+            cdn_ip = socket.gethostbyname(domain)
+            results["current_ip"] = cdn_ip
+            
+            # Check if it's a known CDN IP range
+            ip_info = self.ip_lookup(cdn_ip)
+            org = (ip_info.get("org") or "").lower()
+            isp = (ip_info.get("isp") or "").lower()
+            
+            if any(cdn in org or cdn in isp for cdn in ["cloudflare", "akamai", "fastly", "incapsula", "sucuri"]):
+                results["cdn_detected"] = ip_info.get("org")
+        except:
+            pass
+        
+        # 2. Check MX records (often not behind CDN)
+        try:
+            import dns.resolver
+            mx_records = dns.resolver.resolve(domain, "MX")
+            for mx in mx_records:
+                mx_host = str(mx.exchange).rstrip(".")
+                try:
+                    mx_ip = socket.gethostbyname(mx_host)
+                    # Check if MX IP is different from CDN
+                    if mx_ip != results.get("current_ip"):
+                        results["potential_origins"].append({
+                            "ip": mx_ip,
+                            "source": "MX record",
+                            "hostname": mx_host
+                        })
+                        results["techniques_used"].append("MX record analysis")
+                except:
+                    pass
+        except:
+            pass
+        
+        # 3. Check SSL certificate SANs for other domains/IPs
+        try:
+            ssl_info = self.ssl_cert(domain)
+            if ssl_info.get("san"):
+                for san_type, san_value in ssl_info["san"]:
+                    if san_type == "IP Address":
+                        results["potential_origins"].append({
+                            "ip": san_value,
+                            "source": "SSL SAN IP"
+                        })
+                        results["techniques_used"].append("SSL SAN analysis")
+        except:
+            pass
+        
+        # 4. Check common subdomains that bypass CDN
+        bypass_subdomains = ["direct", "origin", "backend", "server", "mail", "ftp", "cpanel", "whm", "webmail"]
+        for sub in bypass_subdomains:
+            try:
+                test_domain = f"{sub}.{domain}"
+                sub_ip = socket.gethostbyname(test_domain)
+                if sub_ip != results.get("current_ip"):
+                    results["potential_origins"].append({
+                        "ip": sub_ip,
+                        "source": f"Subdomain: {test_domain}"
+                    })
+                    results["techniques_used"].append("Subdomain enumeration")
+                    break  # Found one, likely the origin
+            except:
+                continue
+        
+        # 5. Check SecurityTrails-style historical DNS (via public API if available)
+        try:
+            # Use viewdns.info as free alternative
+            response = requests.get(
+                f"https://viewdns.info/iphistory/?domain={domain}",
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=10
+            )
+            if response.status_code == 200 and "IP History" in response.text:
+                results["techniques_used"].append("DNS history check (manual review needed)")
+                results["dns_history_url"] = f"https://viewdns.info/iphistory/?domain={domain}"
+        except:
+            pass
+        
+        # Deduplicate potential origins
+        seen_ips = set()
+        unique_origins = []
+        for origin in results["potential_origins"]:
+            if origin["ip"] not in seen_ips:
+                seen_ips.add(origin["ip"])
+                unique_origins.append(origin)
+        results["potential_origins"] = unique_origins
+        
+        return results
+    
     def email_breach(self, email: str, api_key: str = None) -> dict:
         """Check Have I Been Pwned for breaches."""
         api_key = api_key or self.config.get("hibp_api_key")
