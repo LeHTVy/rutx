@@ -476,6 +476,90 @@ class ToolRegistry:
                 error=str(e),
                 elapsed_time=elapsed
             )
+    
+    def execute_chain(
+        self,
+        chain: List[Dict[str, Any]],
+        pipe_output: bool = False,
+        stop_on_failure: bool = False
+    ) -> List[ToolResult]:
+        """
+        Execute multiple tools in sequence (tool chaining).
+        
+        Args:
+            chain: List of tool execution specs:
+                   [{"tool": "subfinder", "command": "enumerate", "params": {...}}, ...]
+            pipe_output: If True, pass previous tool's output as input to next
+            stop_on_failure: If True, stop chain on first failure
+            
+        Returns:
+            List of ToolResult for each tool in the chain
+        """
+        results = []
+        previous_output = ""
+        
+        for i, item in enumerate(chain):
+            tool = item.get('tool', '')
+            command = item.get('command', 'default')
+            params = item.get('params', {}).copy()
+            timeout = item.get('timeout')
+            
+            # Pipe previous output if enabled
+            if pipe_output and previous_output and i > 0:
+                # Add previous output as input parameter
+                params['_previous_output'] = previous_output
+                # Also try to set common input params
+                if 'targets' not in params and 'target' not in params:
+                    # Parse output as list of targets
+                    lines = [l.strip() for l in previous_output.split('\n') if l.strip()]
+                    if lines:
+                        params['targets'] = lines[:50]  # Limit
+            
+            # Execute tool
+            result = self.execute(tool, command, params, timeout)
+            results.append(result)
+            
+            # Update previous output
+            if result.success:
+                previous_output = result.output
+            
+            # Stop on failure if configured
+            if stop_on_failure and not result.success:
+                break
+        
+        return results
+    
+    def execute_chain_summary(
+        self,
+        chain: List[Dict[str, Any]],
+        pipe_output: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Execute chain and return summary.
+        
+        Returns:
+            Dict with success, results, combined_output, and timing
+        """
+        import time
+        start = time.time()
+        
+        results = self.execute_chain(chain, pipe_output)
+        
+        elapsed = time.time() - start
+        all_success = all(r.success for r in results)
+        combined_output = "\n\n".join([
+            f"=== {r.tool}:{r.action} ===\n{r.output}"
+            for r in results if r.output
+        ])
+        
+        return {
+            "success": all_success,
+            "tools_executed": len(results),
+            "tools_succeeded": sum(1 for r in results if r.success),
+            "elapsed_time": elapsed,
+            "combined_output": combined_output,
+            "results": results
+        }
 
 
 # Global registry instance

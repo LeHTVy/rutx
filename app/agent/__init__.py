@@ -7,9 +7,26 @@ Clean architecture:
 - User confirms
 - Code executes (registry)
 - LLM analyzes results
+
+Multi-Agent Support:
+- Specialized agents for different phases
+- Agent orchestrator for routing
+- Role-based prompt system
 """
-# Main agent
-from .graph import LangGraphAgent, create_langgraph_agent
+# Main agent (lazy import to avoid langgraph requirement at module level)
+def create_langgraph_agent(*args, **kwargs):
+    from .graph import create_langgraph_agent as _create
+    return _create(*args, **kwargs)
+
+def get_langgraph_agent_class():
+    from .graph import LangGraphAgent
+    return LangGraphAgent
+
+# Role Manager (no langgraph dependency)
+from .roles import RoleManager, AgentRole, get_role_manager
+
+# Orchestrator (uses specialized agents)
+from .orchestrator import AgentOrchestrator, get_orchestrator
 
 # Memory and Evidence
 from .memory import AttackMemory, Fact, Hypothesis
@@ -20,8 +37,15 @@ from .analyzer import Analyzer, AnalyzerDecision, DecisionType
 
 __all__ = [
     # Core Agent
-    "LangGraphAgent",
     "create_langgraph_agent",
+    "get_langgraph_agent_class",
+    
+    # Multi-Agent
+    "RoleManager",
+    "AgentRole", 
+    "get_role_manager",
+    "AgentOrchestrator",
+    "get_orchestrator",
     
     # Analyzer
     "Analyzer",
@@ -38,3 +62,4 @@ __all__ = [
     "Evidence",
     "Finding",
 ]
+
