@@ -14,7 +14,7 @@ class LLMConfig:
     
     DEFAULT_CONFIG = {
         "provider": "ollama",
-        "model": "mistral:latest",  # Supports native tool calling
+        "model": "mistral:latest",  
         "temperature": 0,
         "endpoint": "http://localhost:11434"
     }

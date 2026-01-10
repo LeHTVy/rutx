@@ -879,3 +879,25 @@ class MemoryManager:
         context += self.attack_memory.build_context_summary(max_facts=30)
         return context
 
+
+# ============================================================
+# SINGLETON: AttackMemory instance
+# ============================================================
+
+_attack_memory: Optional[AttackMemory] = None
+
+
+def get_attack_memory() -> AttackMemory:
+    """Get or create the attack memory singleton."""
+    global _attack_memory
+    if _attack_memory is None:
+        _attack_memory = AttackMemory()
+    return _attack_memory
+
+
+def reset_attack_memory() -> None:
+    """Reset attack memory (for new engagement)."""
+    global _attack_memory
+    if _attack_memory:
+        _attack_memory.clear_all()
+    _attack_memory = None

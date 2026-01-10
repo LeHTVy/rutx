@@ -22,6 +22,14 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from app.llm import get_llm_config
 from app.tools.registry import get_registry
+from app.agent.coordinator import get_coordinator
+
+# New infrastructure imports
+from app.agent.context_manager import get_context_manager, SessionContext
+from app.agent.context_aggregator import get_context_aggregator, AggregatedContext
+from app.agent.validators import get_plan_validator, get_tool_validator, ValidationResult
+from app.agent.fallback_manager import get_fallback_manager
+from app.agent.phase_manager import get_phase_manager, PhaseGateAction, PHASE_NAMES
 
 
 # ============================================================
@@ -60,6 +68,16 @@ class AgentState(TypedDict):
     # Memory/Context (accumulated)
     context: Annotated[Dict[str, Any], operator.or_]
     
+    # NEW: Aggregated context from ContextAggregator
+    aggregated_context: Optional[Dict[str, Any]]
+    
+    # NEW: Validation results from validators
+    validation_result: Optional[Dict[str, Any]]
+    
+    # NEW: Fallback tracking
+    retry_count: int
+    fallback_tools: List[str]
+    
     # Output
     response: str
     
@@ -68,95 +86,10 @@ class AgentState(TypedDict):
 
 
 # ============================================================
-# LLM CLIENT (LangChain-Ollama)
+# LLM CLIENT - Imported from app.llm.client
 # ============================================================
 
-# Global model setting for switching
-_current_model = None
-
-def get_current_model() -> str:
-    """Get current model, defaulting to config."""
-    global _current_model
-    if _current_model:
-        return _current_model
-    config = get_llm_config()
-    return config.get_model()
-
-def set_current_model(model: str):
-    """Set the global model for all LLM calls."""
-    global _current_model
-    _current_model = model
-    print(f"  🔄 Model switched to: {model}")
-
-
-class OllamaClient:
-    """LangChain-Ollama client for LLM calls."""
-    
-    def __init__(self, model: str = None):
-        self.model = model or get_current_model()
-        self._llm = None
-    
-    def _get_llm(self):
-        """Lazy initialization of ChatOllama."""
-        if self._llm is None:
-            from langchain_ollama import ChatOllama
-            self._llm = ChatOllama(
-                model=self.model,
-                temperature=0.3,
-                num_ctx=4096,
-            )
-        return self._llm
-    
-    def generate(self, prompt: str, system: str = None, timeout: int = 120) -> str:
-        """Generate response using LangChain-Ollama."""
-        try:
-            import sys
-            import threading
-            import time
-            
-            # Spinner animation
-            spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-            spinner_running = True
-            
-            def spin():
-                i = 0
-                while spinner_running:
-                    sys.stdout.write(f"\r  {spinner_chars[i % len(spinner_chars)]} Thinking ({self.model})...")
-                    sys.stdout.flush()
-                    time.sleep(0.1)
-                    i += 1
-            
-            # Start spinner in background
-            spinner_thread = threading.Thread(target=spin, daemon=True)
-            spinner_thread.start()
-            
-            llm = self._get_llm()
-            
-            # Build messages
-            from langchain_core.messages import HumanMessage, SystemMessage
-            messages = []
-            if system:
-                messages.append(SystemMessage(content=system))
-            messages.append(HumanMessage(content=prompt))
-            
-            # Invoke
-            response = llm.invoke(messages)
-            result = response.content if response else ""
-            
-            # Stop spinner
-            spinner_running = False
-            spinner_thread.join(timeout=0.5)
-            
-            if result:
-                # Strip thinking tags from deepseek-r1
-                import re
-                result = re.sub(r'<think>.*?</think>', '', result, flags=re.DOTALL).strip()
-                print(f"  ✅ LLM responded ({len(result)} chars)")
-            return result
-            
-        except Exception as e:
-            print(f"  ❌ LLM error: {e}")
-            return ""
+from app.llm.client import OllamaClient, get_current_model, set_current_model
 
 
 # ============================================================
@@ -193,6 +126,14 @@ def intent_node(state: AgentState) -> AgentState:
     
     if query in ["no", "n", "cancel", "stop", "abort"]:
         return {**state, "intent": "confirm", "confirmed": False}
+    
+    if query.startswith("no") and len(query) > 5:
+        correction_indicators = ["its", "it's", "the one", "actually", "meant", "in ", "from ", ".za", ".co", ".com"]
+        if any(ind in query for ind in correction_indicators):
+            print(f"  🔄 Target correction detected: routing to verification")
+            context["is_correction"] = True
+            context["correction_query"] = state["query"]
+            return {**state, "intent": "security_task", "context": context}
     
     if query.startswith(("yes", "ok", "let's", "lets", "go with")):
         is_short_confirmation = len(query) < 20
@@ -236,469 +177,514 @@ def intent_node(state: AgentState) -> AgentState:
     domain_pattern = r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}'
     has_domain = bool(re.search(domain_pattern, state["query"]))
     
-    prompt = f'''Classify this user message for a penetration testing assistant.
-
-USER MESSAGE: "{state["query"]}"
-
-CONTEXT:
-{context_summary if context_summary else "No prior context"}
-{"NOTE: Message contains a domain/IP address" if has_domain else ""}
-
-CLASSIFY AS ONE OF:
-- SECURITY_TASK: User wants to RUN NEW SCANS or use security tools
-  Examples: "scan the domain", "find vulnerabilities", "use nuclei", "run nmap"
-  If the message mentions a domain/IP AND wants a NEW scan → SECURITY_TASK
-
-- MEMORY_QUERY: User wants to SEE/RETRIEVE STORED DATA from previous scans
-  Examples: "show me the subdomains", "list the results", "what did we find",
-  "show the scan data", "display stored subdomains", "show me what's in database",
-  "list findings", "what vulnerabilities were found", "show me the data",
-  "show me emails", "list emails", "show hosts", "list IPs", "show ports",
-  "show open ports", "list the emails", "what emails did we find",
-  "show me the scan results", "list discovered paths", "show credentials"
-  If user asks to SHOW/LIST/DISPLAY existing data → MEMORY_QUERY
-
-- QUESTION: User is asking a conceptual question or needs explanation (no action)
-  Examples: "what is XSS", "explain this CVE", "who are you", "how does SQL injection work"
-
-Respond with ONLY one word: SECURITY_TASK or MEMORY_QUERY or QUESTION'''
+    # Load intent prompt
+    from app.agent.prompt_loader import format_prompt
+    
+    prompt = format_prompt("intent_classifier",
+        query=state["query"],
+        context_summary=context_summary if context_summary else "No prior context",
+        domain_note="NOTE: Message contains a domain/IP address" if has_domain else ""
+    )
 
     # ─────────────────────────────────────────────────────────
-    # KEYWORD-BASED MEMORY QUERY DETECTION (before LLM call)
+    # INTELLIGENT INTENT CLASSIFICATION
+    # Uses: Semantic understanding, Context retrieval, Rich prompts
     # ─────────────────────────────────────────────────────────
-    query_lower = state["query"].lower()
     
-    # Check for memory query keywords
-    memory_keywords = [
-        "show me email", "list email", "show email",
-        "show me subdomain", "list subdomain", "show subdomain",
-        "show me host", "list host", "show host",
-        "show me ip", "list ip", "show ip",
-        "show me port", "list port", "show port", "show open port",
-        "show me vuln", "list vuln", "show vuln",
-        "show me path", "list path", "discovered path",
-        "show me cred", "list cred", "cracked",
-        "show me data", "show the data", "list data",
-        "show me result", "show result", "list result",
-        "show me finding", "list finding",
-        "what did we find", "what was found",
-        "show me asn", "list asn",
-        "show me url", "list url", "interesting url",
-        "show me exploit", "list exploit",
-        "show me smb", "list smb", "smb share", "smb user",
-        "show me wordpress", "wp user", "wp plugin",
-        "show me technolog", "list technolog",
-        "show me waf",
-    ]
-    
-    for keyword in memory_keywords:
-        if keyword in query_lower:
-            print(f"  → Intent: MEMORY_QUERY (keyword: '{keyword}')")
-            return {**state, "intent": "memory_query"}
-    
-    print("  🧠 LLM classifying intent...")
+    print("  🧠 Intelligence layer analyzing...")
     
     try:
-        response = llm.generate(prompt, timeout=30)
-        response_clean = response.strip().upper().replace("_", "_")
+        # Use intelligence layer for semantic understanding
+        from app.agent.intelligence import get_intelligence
+        intel = get_intelligence()
         
-        # Extract intent from response
-        if "MEMORY" in response_clean or "QUERY" in response_clean:
-            print("  → Intent: MEMORY_QUERY")
-            return {**state, "intent": "memory_query"}
-        elif "SECURITY" in response_clean or "TASK" in response_clean:
-            print("  → Intent: SECURITY_TASK")
-            return {**state, "intent": "security_task"}
-        elif "QUESTION" in response_clean:
-            print("  → Intent: QUESTION")
-            return {**state, "intent": "question"}
-        else:
-            # Default to security_task if ambiguous (action-oriented)
-            print(f"  → Intent: SECURITY_TASK (default, LLM said: {response[:50]})")
-            return {**state, "intent": "security_task"}
+        # Get semantic understanding of query
+        understanding = intel.understand_query(state["query"], context)
+        
+        # Store understanding in state for later use
+        state["query_understanding"] = understanding
+        
+        # Use intelligence layer for intent classification
+        intent = intel.classify_intent(state["query"], context)
+        
+        # Log what we understood
+        if understanding.get("detected_target"):
+            print(f"  📍 Target: {understanding['detected_target']}")
+        if understanding.get("relevant_tools"):
+            print(f"  🔧 Suggested tools: {', '.join(understanding['relevant_tools'][:3])}")
+        print(f"  → Intent: {intent.upper()}")
+        
+        intent_map = {
+            "SECURITY_TASK": "security_task",
+            "MEMORY_QUERY": "memory_query", 
+            "QUESTION": "question"
+        }
+        return {**state, "intent": intent_map.get(intent, "security_task")}
+        
     except Exception as e:
-        print(f"  ⚠️ Intent LLM failed: {e}, defaulting to security_task")
-        return {**state, "intent": "security_task"}
-
-
-def infer_phase(context: dict, llm) -> dict:
-    """
-    LLM infers the current pentest phase based on context.
-    
-    Returns: {"phase": 1-4, "reason": "..."}
-    
-    Phase 1: Reconnaissance - No data yet, gathering info
-    Phase 2: Scanning - Have targets, finding vulnerabilities
-    Phase 3: Exploitation - Have vulns, attempting access
-    Phase 4: Reporting - Have findings, documenting results
-    """
-    # Build context summary for LLM
-    has_subdomains = context.get("has_subdomains", False)
-    subdomain_count = context.get("subdomain_count", 0)
-    has_ports = context.get("has_ports", False)
-    open_ports = context.get("open_ports", [])
-    vulns_found = context.get("vulns_found", [])
-    services = context.get("services", [])
-    tools_run = context.get("tools_run", [])
-    exploits_run = context.get("exploits_run", [])
-    
-    # Quick heuristic first (no LLM call needed for obvious cases)
-    if exploits_run or "sqlmap" in tools_run or "hydra" in tools_run or "msfconsole" in tools_run:
-        return {"phase": 3, "reason": "Exploitation tools have been run"}
-    
-    if vulns_found or "nuclei" in tools_run or "nikto" in tools_run:
-        return {"phase": 2, "reason": "Vulnerability scanning in progress"}
-    
-    if has_ports or open_ports or "nmap" in tools_run or "masscan" in tools_run:
-        return {"phase": 2, "reason": "Port scanning completed, in scanning phase"}
-    
-    if has_subdomains or subdomain_count > 0:
-        return {"phase": 2, "reason": "Subdomains found, ready for scanning"}
-    
-    if not tools_run:
-        return {"phase": 1, "reason": "No tools run yet, starting reconnaissance"}
-    
-    # For ambiguous cases, ask LLM
-    prompt = f'''You are a penetration testing expert. Analyze this context and determine the current pentest phase.
-
-CURRENT CONTEXT:
-- Subdomains found: {subdomain_count}
-- Ports scanned: {has_ports}
-- Open ports: {open_ports[:5] if open_ports else "none"}
-- Vulnerabilities found: {len(vulns_found)} 
-- Services detected: {services[:5] if services else "none"}
-- Tools already run: {tools_run[-5:] if tools_run else "none"}
-- Exploitation attempted: {bool(exploits_run)}
-
-PENTEST PHASES:
-1 = Reconnaissance (gathering info, OSINT, subdomains)
-2 = Scanning & Enumeration (ports, services, vulnerabilities)
-3 = Exploitation (exploiting vulns, gaining access)
-4 = Reporting (documenting findings)
-
-Return ONLY a JSON: {{"phase": 1, "reason": "brief explanation"}}'''
-
-    try:
-        response = llm.generate(prompt, timeout=30)
-        # Clean response
-        clean = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
+        print(f"  ⚠️ Intelligence layer: {e}, using fallback")
         
-        # Parse JSON
-        import json
-        match = re.search(r'\{[^}]+\}', clean)
-        if match:
-            result = json.loads(match.group())
-            return {
-                "phase": int(result.get("phase", 1)),
-                "reason": result.get("reason", "LLM inference")
-            }
-    except Exception:
-        pass
+        # Fallback to simple LLM classification
+        try:
+            response = llm.generate(prompt, timeout=30)
+            response_clean = response.strip().upper()
+            
+            if "MEMORY" in response_clean:
+                return {**state, "intent": "memory_query"}
+            elif "QUESTION" in response_clean:
+                return {**state, "intent": "question"}
+            else:
+                return {**state, "intent": "security_task"}
+        except Exception:
+            return {**state, "intent": "security_task"}
+
+
+# ============================================================
+# PHASE INFERENCE - Imported from intelligence module
+# ============================================================
+
+from app.agent.intelligence import infer_phase
+
+
+
+def target_verification_node(state: AgentState) -> AgentState:
+    """
+    Verify and resolve target ambiguity using LLM intelligence.
     
-    # Default to phase 1 if inference fails
-    return {"phase": 1, "reason": "Default - starting reconnaissance"}
+    NO HARDCODED KEYWORDS. All extraction and analysis is LLM-driven.
+    
+    Flow:
+    1. If query has clear domain/IP, bypass (existing).
+    2. LLM extracts entity name and user context from FULL query.
+    3. Web search using LLM-generated query.
+    4. LLM analyzes results with user context to resolve or ask.
+    """
+    import re
+    import json
+    
+    intent = state.get("intent")
+    
+    # Only verify for security tasks
+    if intent != "security_task":
+        return state
+        
+    context = state.get("context", {})
+    query = state["query"]
+    
+    # helper to proceed to planner
+    def proceed_to_planner():
+        return {**state, "next_action": "planner"}
+    
+    # ============================================================
+    # CORRECTION DETECTION: Check context flag (set by intent_node)
+    # The LLM extraction will also detect corrections semantically
+    # ============================================================
+    is_correction_from_context = context.get("is_correction", False)
+    
+    # If correction flag is set, clear the old target BEFORE we check for existing targets
+    if is_correction_from_context:
+        old_target = context.get("target_domain")
+        if old_target:
+            print(f"  🗑️ Correction mode: clearing previous target '{old_target}'")
+            context.pop("target_domain", None)
+            context["last_candidate"] = old_target.split(".")[0] if "." in old_target else old_target
+        context["is_correction"] = False  # Reset flag
+    
+    # 1. Check if we already have a verified target in context (SKIP re-verification)
+    # BUT only if this is NOT a correction!
+    if not is_correction_from_context:
+        if context.get("target_domain") and "." in context.get("target_domain"):
+            print(f"  📍 Using verified target: {context.get('target_domain')}")
+            return proceed_to_planner()
+        if context.get("last_domain") and "." in context.get("last_domain"):
+            return proceed_to_planner()
+        
+    # 2. Quick regex check for explicit domain/IP (bypass verification)
+    # NOTE: Even if the domain looks like a typo, store it and proceed
+    # The LLM in planner_node will correct it if needed
+    domain_match = re.search(r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}', query)
+    if domain_match:
+        potential_domain = domain_match.group()
+        # Store it even if it might be a typo - better to have something than nothing
+        if not context.get("last_domain"):
+            context["last_domain"] = potential_domain
+            print(f"  📍 Domain found in query: {potential_domain}")
+        return {**state, "context": context, "next_action": "planner"}
+    
+    ip_match = re.search(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', query)
+    if ip_match:
+        return proceed_to_planner()
+
+    
+    # 3. LLM-ONLY Target Extraction (NO KEYWORD LISTS)
+    try:
+        from app.agent.prompt_loader import format_prompt
+        from app.llm.client import OllamaClient
+        
+        # Build conversation context from recent messages
+        messages = state.get("messages", [])
+        conversation_context = "None"
+        if messages:
+            recent = messages[-6:]  # Last 3 exchanges
+            context_lines = []
+            for msg in recent:
+                role = msg.get("role", "user").upper()
+                content = msg.get("content", "")[:200]
+                context_lines.append(f"{role}: {content}")
+            conversation_context = "\n".join(context_lines) if context_lines else "None"
+        
+        # Also include any stored entities from context
+        if context.get("last_candidate"):
+            conversation_context += f"\n(Previously discussed: {context.get('last_candidate')})"
+        if context.get("target_domain"):
+            conversation_context += f"\n(Resolved domain: {context.get('target_domain')})"
+        
+        extraction_prompt = format_prompt("target_extraction", query=query, conversation_context=conversation_context)
+        llm = OllamaClient()
+        extraction_response = llm.generate(extraction_prompt, timeout=20).strip()
+        
+        # Parse extraction JSON
+        extraction = {}
+        try:
+            json_match = re.search(r'\{.*\}', extraction_response, re.DOTALL)
+            if json_match:
+                extraction = json.loads(json_match.group(), strict=False)
+        except Exception as e:
+            print(f"  ⚠️ Extraction parse error: {e}")
+        
+        entity_name = extraction.get("entity_name", "").strip()
+        user_context = extraction.get("user_context", "")
+        search_query = extraction.get("search_query", "")
+        is_followup = extraction.get("is_followup", False)
+        is_correction = extraction.get("is_correction", False)  # LLM detects corrections semantically
+        resolved_domain = extraction.get("resolved_domain", "")
+        corrected_from = extraction.get("corrected_from")
+        confidence = extraction.get("confidence", "medium")
+        interpretation = extraction.get("interpretation", "")
+        
+        # Log typo corrections
+        if corrected_from:
+            print(f"  ✏️ Corrected typo: '{corrected_from}' → '{entity_name or resolved_domain}'")
+        
+        # Log LLM interpretation for debugging
+        if interpretation:
+            print(f"  💭 Understood: {interpretation}")
+        
+        # ============================================================
+        # LLM DETECTED CORRECTION: Clear old target and re-verify
+        # This is the semantic approach - LLM understands "no its X" is a correction
+        # ============================================================
+        if is_correction:
+            old_target = context.get("target_domain")
+            if old_target:
+                print(f"  🔄 LLM detected correction: clearing '{old_target}'")
+                context.pop("target_domain", None)
+                context["last_candidate"] = old_target.split(".")[0] if "." in old_target else old_target
+        
+        # Handle follow-up references (pronouns, "assess them", etc.)
+        if is_followup and not is_correction:
+            if context.get("last_candidate") and not entity_name:
+                entity_name = context.get("last_candidate")
+                print(f"  🧠 Follow-up detected, using: {entity_name}") 
+            if context.get("target_domain") and not resolved_domain:
+                resolved_domain = context.get("target_domain")
+        
+        # If LLM extracted a domain directly (e.g., "no, its hellogroup.co.za" or corrected typo)
+        if resolved_domain and "." in resolved_domain:
+            print(f"  ✅ Direct domain resolved: {resolved_domain}")
+            context["target_domain"] = resolved_domain
+            context["last_candidate"] = entity_name or resolved_domain.split(".")[0]
+            return {**state, "context": context, "next_action": "planner"}
+        
+        if not entity_name or len(entity_name) < 2:
+            # Last resort: check if we have a stored domain to use
+            if context.get("target_domain"):
+                print(f"  🧠 Using stored domain: {context.get('target_domain')}")
+                return {**state, "next_action": "planner"}
+            print("  ⚠️ No entity extracted. Proceeding to planner.")
+            return proceed_to_planner()
+        
+        print(f"  🤔 Target '{entity_name}' (context: {user_context or 'none'}) detected. Verifying...")
+        
+        # 4. Web Search with LLM-generated query
+        from app.tools.custom.web_research import web_search
+        
+        if not search_query:
+            search_query = f"{entity_name} {user_context} official website".strip()
+        
+        print(f"  🌐 Researching: {search_query}...")
+        research = web_search(search_query, max_results=5)
+        
+        if not research or not research.get("success"):
+            print("  ⚠️ No search results. Proceeding to planner.")
+            return proceed_to_planner()
+        
+        research_str = ""
+        for i, (snip, src) in enumerate(zip(research.get("snippets", []), research.get("sources", []))):
+            research_str += f"Source {i+1}: {src.get('title', 'N/A')} ({src.get('url', '')})\nSnippet: {snip}\n\n"
+        
+        # 5. LLM Analysis with Full Context
+        verification_prompt = format_prompt(
+            "target_verification",
+            entity_name=entity_name,
+            original_query=query,
+            user_context=user_context or "None provided",
+            research_str=research_str
+        )
+        
+        response = llm.generate(verification_prompt, timeout=45).strip()
+        
+        # Parse verification JSON (with strict=False for control chars)
+        analysis = {}
+        try:
+            clean_response = re.sub(r'^```json\s*', '', response, flags=re.MULTILINE)
+            clean_response = re.sub(r'^```\s*', '', clean_response, flags=re.MULTILINE)
+            clean_response = re.sub(r'\s*```$', '', clean_response)
+            clean_response = re.sub(r'//.*$', '', clean_response, flags=re.MULTILINE)  # Remove comments
+            
+            json_match = re.search(r'\{.*\}', clean_response, re.DOTALL)
+            if json_match:
+                analysis = json.loads(json_match.group(), strict=False)
+        except Exception as e:
+            print(f"  ⚠️ Verification parse error: {e}")
+        
+        status = analysis.get("status", "unknown")
+        
+        # Store candidate for follow-up queries
+        context["last_candidate"] = entity_name
+        
+        if status == "clear" and analysis.get("primary_domain"):
+            real_domain = analysis.get("primary_domain")
+            print(f"  ✅ Resolved '{entity_name}' -> '{real_domain}'")
+            return {
+                **state,
+                "response": f"Did you mean **{real_domain}**? I found this as the likely domain for '{entity_name}'.\n\nType 'yes' to proceed with **{real_domain}**, or type the correct domain.",
+                "suggested_tools": [],
+                "context": {**context, "target_domain": real_domain},
+                "next_action": "end"
+            }
+            
+        elif status == "ambiguous":
+            print(f"  ❓ Ambiguous target '{entity_name}'. Asking user...")
+            question = analysis.get("clarification_question", f"I found multiple entities for '{entity_name}'. Could you specify?")
+            
+            candidates_str = ""
+            for c in analysis.get("candidates", [])[:3]:
+                loc = c.get('location', 'Global')
+                if isinstance(loc, list):
+                    loc = ", ".join(loc[:2])
+                candidates_str += f"- **{c.get('name')}** ({loc}): {c.get('domain')} - {c.get('desc', 'N/A')}\n"
+            
+            return {
+                **state,
+                "response": f"{question}\n\nI found these potential matches:\n{candidates_str}\n\nPlease specify which one you mean, or provide the domain directly.",
+                "context": context,
+                "next_action": "end"
+            }
+        else:
+            return proceed_to_planner()
+            
+    except Exception as e:
+        print(f"  ⚠️ Verification error: {e}")
+        return proceed_to_planner()
+
+
 
 
 def planner_node(state: AgentState) -> AgentState:
     """
-    LLM suggests tools using SEMANTIC SEARCH + CONSTRAINED OUTPUT.
+    Plan using specialized agents via Coordinator.
     
-    Architecture:
-    1. Infer current pentest phase from context
-    2. Semantic search finds candidate tools from ToolIndex
-    3. LLM chooses from candidates ONLY (constrained by phase)
-    4. No keyword detection - pure semantic + LLM reasoning
+    ENHANCED with Cursor-style patterns:
+    1. Context Aggregation - Gather all context BEFORE LLM call
+    2. Coordinator routes query to appropriate agent
+    3. Validation - Check plan BEFORE returning to user
+    4. Fallback - Suggest alternatives for unavailable tools
     """
-    from app.rag.tool_index import ToolIndex
-    from app.rag.tool_metadata import PHASE_NAMES, get_tool_phase
-    
-    llm = OllamaClient()
+    coordinator = get_coordinator()
     context = state.get("context", {})
+    query = state["query"]
     
-    # Extract domain/IP from user query if not in context
-    domain_pattern = r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}'
-    ip_pattern = r'\b(?:\d{1,3}\.){3}\d{1,3}\b'
-    url_pattern = r'https?://[^\s]+'
+    # ============================================================
+    # STEP 1: CONTEXT AGGREGATION (Pre-LLM)
+    # ============================================================
+    aggregator = get_context_aggregator()
+    ctx_manager = get_context_manager()
     
-    # First check for full URL
-    url_match = re.search(url_pattern, state["query"])
-    if url_match:
-        context["url_target"] = url_match.group()
-        print(f"  🔗 Extracted URL: {url_match.group()}")
+    # Aggregate all relevant context before planning
+    agg_context = aggregator.aggregate_for_planning(query, state)
     
-    # Check for IP address
-    ip_match = re.search(ip_pattern, state["query"])
-    if ip_match:
-        ip = ip_match.group()
-        context["target_ip"] = ip
-        context["last_domain"] = ip  # Use IP as domain for tools
-        print(f"  🎯 Extracted IP address: {ip}")
-        domain = ip
-    else:
-        domain_match = re.search(domain_pattern, state["query"])
-        if domain_match:
-            domain = domain_match.group()
-            # Filter provider domains from context, but keep for targeting
-            provider_domains = ['windows.net', 'azure.', 'microsoft.', 'amazonaws.', 'cloudfront.', 'google.', 'facebook.']
-            if not any(x in domain.lower() for x in provider_domains):
-                context["last_domain"] = domain
-                print(f"  🎯 Extracted domain from query: {domain}")
+    # Sync ContextManager with current state context
+    if context:
+        ctx_manager.update_context(context)
+    
+    # Get target from aggregated context (prioritized resolution)
+    target = agg_context.target or context.get("target_domain") or context.get("last_domain")
+    
+    # Update context with resolved target
+    if target and not context.get("target_domain"):
+        context["last_domain"] = target
+        ctx_manager.set_target(target, source="planner")
+    
+    # Log aggregated context
+    if agg_context.has_past_data():
+        print(f"  📚 Context: {len(agg_context.relevant_facts)} past findings available")
+    if agg_context.learning_hints:
+        print(f"  ⚡ Learning: {agg_context.learning_hints[0]}")
+    
+    # ============================================================
+    # STEP 2: GET PLAN FROM COORDINATOR
+    # ============================================================
+    print(f"  🧠 Coordination: Routing '{query}'...")
+    
+    try:
+        # Pass enriched context to coordinator
+        enriched_context = {
+            **context,
+            "aggregated_facts": len(agg_context.relevant_facts),
+            "has_past_failures": len(agg_context.past_failures) > 0,
+            "suggested_cves": [c.get("cve_id") for c in agg_context.relevant_cves[:3]],
+        }
+        
+        plan = coordinator.plan_with_agent(query, enriched_context)
+        
+        agent_name = plan.get("agent", "base")
+        tools = plan.get("tools", [])
+        commands = plan.get("commands", {})
+        reasoning = plan.get("reasoning") or f"I have selected {len(tools)} tools to proceed with your request."
+        
+        print(f"  🤖 Agent '{agent_name}' selected tools: {tools}")
+        
+        # ============================================================
+        # STEP 2.5: PHASE GATE CHECK - Enforce pentest phase order
+        # ============================================================
+        phase_mgr = get_phase_manager()
+        phase_status = phase_mgr.get_phase_status(context)
+        current_phase = phase_status["current_phase"]
+        current_phase_name = phase_status["current_phase_name"]
+        
+        # Check each tool against phase gates
+        blocked_tools = []
+        allowed_tools = []
+        gate_message = ""
+        
+        for tool in tools:
+            gate_result = phase_mgr.check_phase_gate(tool, context)
+            
+            if gate_result.is_blocked:
+                blocked_tools.append((tool, gate_result))
+                print(f"  🚫 Phase Gate BLOCKED: {tool} (Phase {gate_result.requested_phase})")
             else:
-                # It's a provider URL - still use it as target but don't save to context
-                if not context.get("last_domain"):
-                    context["target_domain"] = domain  # Temporary target
-                domain = context.get("last_domain", domain)  # Fallback to provider domain if no context
-                print(f"  ℹ️ Provider URL detected, using: {domain}")
-        else:
-            domain = context.get("last_domain", "")
-    
-    # === STEP 0: DETECT USER-MENTIONED TOOLS ===
-    from app.tools.registry import get_registry
-    registry = get_registry()
-    all_tools = registry.list_tools()
-    user_mentioned_tools = []
-    query_lower = state["query"].lower()
-    for tool in all_tools:
-        if tool.lower() in query_lower:
-            user_mentioned_tools.append(tool)
-    
-    if user_mentioned_tools:
-        print(f"  🎯 User mentioned tools: {user_mentioned_tools}")
-    
-    # === STEP 0.5: INFER CURRENT PENTEST PHASE ===
-    phase_info = infer_phase(context, llm)
-    current_phase = phase_info.get("phase", 1)
-    phase_reason = phase_info.get("reason", "")
-    context["current_phase"] = current_phase
-    print(f"  📊 Phase {current_phase} ({PHASE_NAMES.get(current_phase, 'Unknown')}): {phase_reason}")
-    
-    # === STEP 1: SEMANTIC SEARCH FOR CANDIDATE TOOLS + COMMANDS ===
-    tool_command_map = {}  # {tool_name: best_command}
-    try:
-        tool_index = ToolIndex()
-        candidates = tool_index.search(state["query"], n_results=10)  # Get more for command variety
+                allowed_tools.append(tool)
+                if gate_result.action == PhaseGateAction.WARN:
+                    print(f"  ⚠️ Phase Gate WARN: {tool} (Phase {gate_result.requested_phase})")
         
-        # Extract tool:command mappings from semantic search
-        for c in candidates:
-            tool_name = c.get("name", "")
-            command_name = c.get("command", "")
-            # Keep first (best scoring) command for each tool
-            if tool_name and tool_name not in tool_command_map:
-                tool_command_map[tool_name] = command_name
+        # If ALL tools are blocked, return remediation instead of suggestion
+        if blocked_tools and not allowed_tools:
+            tool_name, gate_result = blocked_tools[0]
+            requested_phase_name = PHASE_NAMES.get(gate_result.requested_phase, f"Phase {gate_result.requested_phase}")
+            
+            block_message = f"""🚫 **Phase Gate: Cannot proceed with {requested_phase_name} tools yet**
+
+📍 **Current Phase:** {current_phase} - {current_phase_name}
+🎯 **Requested Phase:** {gate_result.requested_phase} - {requested_phase_name}
+
+**Missing Requirements:**
+"""
+            for req in gate_result.missing_requirements:
+                block_message += f"  • {req}\n"
+            
+            block_message += f"\n💡 **Remediation:** {gate_result.remediation}"
+            block_message += f"\n\n_Progress: {phase_status['progress_summary']}_"
+            
+            return {
+                **state,
+                "suggested_tools": [],
+                "suggestion_message": block_message,
+                "context": context,
+                "next_action": "end"
+            }
         
-        print(f"  🔍 Semantic search found: {list(tool_command_map.keys())}")
-        if any(tool_command_map.values()):
-            print(f"  📋 Commands: {tool_command_map}")
-    except Exception as e:
-        print(f"  ⚠️ Tool index error: {e}, using fallback")
-        candidates = []
-    
-    # FORCE user-mentioned tools into candidates if not already there
-    candidate_names = [c["name"] for c in candidates]
-    for tool in user_mentioned_tools:
-        if tool not in candidate_names:
-            # Add user-mentioned tool to candidates
-            spec = registry.tools.get(tool)
-            if spec:
-                candidates.insert(0, {"name": tool, "description": spec.description})
-                print(f"  ➕ Added user-requested tool: {tool}")
-    
-    # If no candidates found, ask user to clarify
-    if not candidates:
-        return {
-            **state,
-            "response": "❓ I couldn't find matching tools for your request.\n\nPlease be more specific (e.g., 'scan for vulnerabilities' or 'find subdomains').",
-            "next_action": "end"
-        }
-    
-    # Build candidate list for LLM
-    candidate_names = [c["name"] for c in candidates]
-    candidate_str = "\n".join([f"- {c['name']}: {c['description']}" for c in candidates])
-    
-    # === SHORTCUT: If user explicitly named tools, use them directly (skip LLM) ===
-    if user_mentioned_tools:
-        # Get commands for user-mentioned tools from semantic search
-        user_commands = {t: tool_command_map.get(t, "") for t in user_mentioned_tools}
-        print(f"  ✅ Using user-requested tools directly: {user_mentioned_tools}")
-        if any(user_commands.values()):
-            print(f"  📋 With commands: {user_commands}")
-        return {
-            **state,
-            "suggested_tools": user_mentioned_tools,
-            "suggested_commands": user_commands,
-            "suggestion_message": f"Running {', '.join(user_mentioned_tools)} as requested.",
-            "tool_params": {"domain": domain} if domain else {},
-            "context": context,
-            "next_action": "confirm"
-        }
-    
-    # === STEP 2: CONSTRAINED LLM SELECTION (only if user didn't specify tools) ===
-    context_str = ""
-    if context.get("has_subdomains"):
-        count = context.get("subdomain_count", 0)
-        context_str += f"• Found {count} subdomains\n"
-    if context.get("has_ports"):
-        context_str += "• Port scan completed\n"
-    if context.get("subdomains"):
-        subs = context.get("subdomains", [])[:5]
-        context_str += f"• Subdomains: {', '.join(subs)}...\n"
-    
-    # Add OPEN PORTS information for intelligent brute-force tool selection
-    open_ports_raw = context.get("open_ports", [])
-    # Extract port numbers (could be dicts with 'port' key or raw ints)
-    open_ports = []
-    for p in open_ports_raw:
-        if isinstance(p, dict):
-            open_ports.append(p.get("port", 0))
-        else:
-            open_ports.append(int(p) if str(p).isdigit() else 0)
-    open_ports = [p for p in open_ports if p > 0]
-    
-    if open_ports:
-        context_str += f"• OPEN PORTS: {', '.join(str(p) for p in open_ports[:20])}\n"
-        # Map ports to services for LLM
-        port_services = {
-            22: "SSH", 21: "FTP", 23: "Telnet", 3389: "RDP", 445: "SMB",
-            3306: "MySQL", 5432: "PostgreSQL", 1433: "MSSQL", 1521: "Oracle",
-            80: "HTTP", 443: "HTTPS", 8080: "HTTP-Alt", 2082: "cPanel", 2083: "cPanel-SSL",
-            2086: "WHM", 2087: "WHM-SSL", 25: "SMTP", 110: "POP3", 143: "IMAP"
-        }
-        detected_services = [port_services.get(p) for p in open_ports if p in port_services]
-        if detected_services:
-            context_str += f"• SERVICES AVAILABLE: {', '.join(set(detected_services))}\n"
-    else:
-        context_str += "• NO PORT SCAN completed yet (run nmap first before brute-force)\n"
-    
-    tools_run = context.get("tools_run", [])
-    if tools_run:
-        context_str += f"• Already ran: {', '.join(tools_run)}\n"
-    
-    # === CVE-AWARE CONTEXT ENHANCEMENT ===
-    cve_context = ""
-    detected_tech = context.get("detected_tech", [])
-    if detected_tech:
-        try:
-            from app.rag.unified_memory import get_unified_rag
-            rag = get_unified_rag()
-            relevant_cves = rag.search_cves_for_tech(detected_tech[:3])
-            
-            if relevant_cves:
-                cve_context = "\n• Relevant CVEs for detected technologies:\n"
-                for cve in relevant_cves[:3]:
-                    cve_id = cve.get("cve_id", "Unknown")
-                    desc = cve.get("description", "")[:80]
-                    cve_context += f"  - {cve_id}: {desc}...\n"
-                print(f"  🔐 Found {len(relevant_cves)} relevant CVEs for {detected_tech[:3]}")
-        except Exception as e:
-            pass  # CVE enhancement is optional
-    
-    # === CONVERSATION CONTEXT ENHANCEMENT ===
-    conv_context = ""
-    try:
-        from app.rag.unified_memory import get_unified_rag
-        rag = get_unified_rag()
-        past_context = rag.get_relevant_context(state["query"], domain)
+        # If some tools blocked, use only allowed ones and add warning
+        if blocked_tools:
+            tools = allowed_tools
+            blocked_names = [t for t, _ in blocked_tools]
+            reasoning += f"\n\n⚠️ Skipped {len(blocked_tools)} tools due to phase requirements: {', '.join(blocked_names)}"
         
-        if past_context.get("tool_executions"):
-            conv_context = "\n• Recent relevant tool executions:\n"
-            for exec_info in past_context["tool_executions"][:2]:
-                conv_context += f"  - {exec_info.get('tool', 'unknown')}: {exec_info.get('content', '')[:60]}...\n"
-    except Exception:
-        pass  # Conversation context is optional
-    
-    prompt = f'''Choose the best tool(s) for this security task.
-
-USER REQUEST: {state["query"]}
-
-CURRENT PENTEST PHASE: {current_phase} - {PHASE_NAMES.get(current_phase, "Unknown")}
-(1=Recon, 2=Scanning, 3=Exploitation, 4=Reporting)
-
-CANDIDATE TOOLS (choose ONLY from these):
-{candidate_str}
-
-CONTEXT:
-{context_str if context_str else "No prior data"}{cve_context}{conv_context}
-
-RULES:
-- Choose ONLY from the candidate tools listed above
-- Prioritize tools appropriate for the current phase
-- Phase 1 (Recon): subdomain discovery, OSINT, DNS enumeration
-- Phase 2 (Scanning): port scanning, vulnerability scanning, service detection
-- Phase 3 (Exploitation): exploiting vulns, brute-force, gaining access
-- **CRITICAL: If user explicitly names tools, include ALL requested tools**
-- If user doesn't specify tools, pick the single best one for the current phase
-- If CVEs are mentioned, prefer tools that can detect them (like nuclei)
-
-**BRUTE-FORCE RULES (CRITICAL):**
-- ONLY suggest hydra/medusa for SSH if port 22 is in OPEN PORTS
-- ONLY suggest hydra/medusa for FTP if port 21 is in OPEN PORTS
-- ONLY suggest hydra/medusa for RDP if port 3389 is in OPEN PORTS
-- ONLY suggest cpanelbrute if port 2083/2087 is in OPEN PORTS
-- If no port scan done yet, suggest nmap FIRST before brute-force tools
-- DO NOT suggest brute-force tools for services that are not confirmed open!
-
-- Return JSON: {{"tools": ["tool1", "tool2"], "message": "I suggest..."}}
-- "tools" should be an ARRAY, even if only one tool
-
-Return ONLY valid JSON, no extra text.'''
-
-    response = llm.generate(prompt, timeout=60)
-    
-    # Remove thinking tags (deepseek-r1)
-    clean_response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
-    
-    # === STEP 3: PARSE AND VALIDATE ===
-    tools = []
-    message = ""
-    params = {"domain": domain} if domain else {}
-    
-    # Try JSON extraction
-    try:
-        json_match = re.search(r'\{[^{}]*\}', clean_response, re.DOTALL)
-        if json_match:
-            data = json.loads(json_match.group())
+        # ============================================================
+        # STEP 3: VALIDATION (Post-LLM)
+        # ============================================================
+        validator = get_plan_validator()
+        validation = validator.validate_plan(plan, context)
+        
+        # Log validation issues
+        validation_dict = None
+        if not validation.is_valid:
+            print(f"  ⚠️ Validation issues: {', '.join(validation.errors)}")
+            validation_dict = {
+                "is_valid": validation.is_valid,
+                "errors": validation.errors,
+                "warnings": validation.warnings,
+                "suggestions": validation.suggestions,
+            }
             
-            # Handle both "tools" (array) and "tool" (string) for compatibility
-            raw_tools = data.get("tools") or data.get("tool", [])
-            if isinstance(raw_tools, str):
-                raw_tools = [raw_tools]
-            
-            message = data.get("message", "")
-            
-            # Validate all tools are in candidates
-            valid_tools = [t for t in raw_tools if t in candidate_names]
-            if valid_tools:
-                tools = valid_tools
-                print(f"  ✅ LLM selected: {tools} (validated)")
+            # Add suggestions to reasoning
+            if validation.suggestions:
+                reasoning += f"\n\n⚠️ Note: {'; '.join(validation.suggestions)}"
+        elif validation.warnings:
+            print(f"  ⚠️ Warnings: {', '.join(validation.warnings)}")
+        
+        # ============================================================
+        # STEP 4: FALLBACK FOR UNAVAILABLE TOOLS
+        # ============================================================
+        fallback_mgr = get_fallback_manager()
+        adjusted_tools = []
+        fallback_tools = []
+        
+        for tool in tools:
+            if not fallback_mgr.registry.is_available(tool):
+                fallback = fallback_mgr.get_fallback(tool)
+                if fallback:
+                    print(f"  🔄 Fallback: {tool} → {fallback}")
+                    adjusted_tools.append(fallback)
+                    fallback_tools.append(fallback)
+                    # Update commands for fallback tool
+                    if tool in commands:
+                        commands[fallback] = commands.pop(tool)
+                else:
+                    print(f"  ❌ Tool unavailable, no fallback: {tool}")
             else:
-                print(f"  ⚠️ LLM selected '{raw_tools}' but not in candidates, using top candidate")
-                tools = [candidate_names[0]]
-                message = f"I suggest using {candidate_names[0]} for this task."
-    except json.JSONDecodeError:
-        print(f"  ⚠️ JSON parse error")
-    
-    # NO FALLBACK - If LLM didn't return valid tools, fail clearly
-    if tools:
-        # Get commands for selected tools from semantic search results
-        selected_commands = {t: tool_command_map.get(t, "") for t in tools}
-        if any(selected_commands.values()):
-            print(f"  📋 With commands: {selected_commands}")
+                adjusted_tools.append(tool)
+        
+        # Update tools with fallbacks applied
+        tools = adjusted_tools
+        
+        # Store current agent in context for executor
+        context["current_agent"] = agent_name
+        
         return {
             **state,
             "suggested_tools": tools,
-            "suggested_commands": selected_commands,
-            "suggestion_message": message or f"I suggest using {tools[0]} for this task.",
-            "tool_params": params,
+            "suggested_commands": commands,
+            "suggestion_message": reasoning,
             "context": context,
-            "next_action": "confirm"
+            "aggregated_context": agg_context.to_prompt_context() if agg_context else None,
+            "validation_result": validation_dict,
+            "fallback_tools": fallback_tools,
+            "retry_count": state.get("retry_count", 0),
+            "next_action": "end"  # Wait for user approval
         }
-    
-    # LLM failed to respond properly - clear error, no hardcoded fallback
-    return {
-        **state,
-        "response": "⚠️ LLM failed to select a tool. Please try again or specify a tool directly (e.g., 'run nmap on example.com').",
-        "next_action": "end"
-    }
+        
+    except Exception as e:
+        print(f"  ⚠️ Planning failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            **state, 
+            "suggested_tools": [], 
+            "suggestion_message": f"Planning failed: {e}",
+            "next_action": "respond"
+        }
 
 
 
@@ -711,6 +697,13 @@ def confirm_node(state: AgentState) -> AgentState:
     """
     if state.get("confirmed", False):
         selected = state.get("selected_tools") or state.get("tools") or state.get("suggested_tools", [])
+        context = state.get("context", {})
+        if not selected and context.get("target_domain"):
+            print(f"  ✓ Target '{context.get('target_domain')}' confirmed. Getting tool suggestions...")
+            return {
+                **state,
+                "next_action": "planner"
+            }
         
         print(f"  ✓ User confirmed. Running: {selected}")
         
@@ -798,6 +791,11 @@ def executor_node(state: AgentState) -> AgentState:
     """
     Execute tools via registry.
     
+    ENHANCED with Cursor-style patterns:
+    - Uses ContextManager for target resolution
+    - Integrates FallbackManager for failure handling
+    - Records failures for learning
+    
     This is PURE CODE - no LLM involvement.
     Auditable, safe, controlled.
     """
@@ -808,16 +806,25 @@ def executor_node(state: AgentState) -> AgentState:
     tools = state.get("selected_tools", [])
     params = state.get("tool_params", {})
     
-    # CRITICAL: Ensure domain is in params from context
-    if not params.get("domain") and context.get("last_domain"):
-        params["domain"] = context.get("last_domain")
-    if not params.get("domain") and context.get("target_domain"):
-        params["domain"] = context.get("target_domain")
+    # ============================================================
+    # USE CONTEXT MANAGER FOR TARGET RESOLUTION
+    # ============================================================
+    ctx_manager = get_context_manager()
+    fallback_mgr = get_fallback_manager()
+    
+    # Sync context manager with current state
+    if context:
+        ctx_manager.update_context(context)
+    
+    # Get prioritized target from ContextManager
+    resolved_target = ctx_manager.get_target()
+    
+    # CRITICAL: Ensure domain is in params from context (backwards compatible)
+    if not params.get("domain"):
+        params["domain"] = resolved_target or context.get("last_domain") or context.get("target_domain")
         
-    if not params.get("target") and context.get("last_domain"):
-        params["target"] = context.get("last_domain")
-    if not params.get("target") and context.get("target_domain"):
-        params["target"] = context.get("target_domain")
+    if not params.get("target"):
+        params["target"] = resolved_target or context.get("last_domain") or context.get("target_domain")
     
     # Use full URL if available (for web-based attacks)
     if not params.get("url") and context.get("url_target"):
@@ -829,6 +836,7 @@ def executor_node(state: AgentState) -> AgentState:
             parsed = urllib.parse.urlparse(url)
             params["target"] = parsed.netloc
             params["domain"] = parsed.netloc
+
     
     # Also build URL for web tools if needed
     domain = params.get("domain") or params.get("target")
@@ -885,17 +893,9 @@ def executor_node(state: AgentState) -> AgentState:
         params["port"] = "443"
     
     # Default ports for port scanners (masscan, nmap)
-    # Based on 18 critical hacker ports + common web ports
     if not params.get("ports"):
-        # Organized by category:
-        # "Dinosaur" (legacy clear-text): 21 FTP, 23 Telnet, 80 HTTP
-        # "Steel Door" (secure): 22 SSH, 443 HTTPS
-        # "Mail": 25 SMTP, 110 POP3, 143 IMAP, 993 IMAPS, 995 POP3S
-        # "Infrastructure": 53 DNS, 67-68 DHCP, 123 NTP
-        # "Treasure" (control+data): 139 NetBIOS, 445 SMB, 3389 RDP
-        # "Database": 1433 MSSQL, 1521 Oracle, 3306 MySQL, 5432 PostgreSQL
-        # "Web Alt": 8080, 8443, 8888
-        params["ports"] = "21,22,23,25,53,67,68,80,110,123,135,139,143,443,445,993,995,1433,1521,3306,3389,5432,5900,8080,8443,8888"
+        from app.rag.port_metadata import PORT_PROFILES
+        params["ports"] = PORT_PROFILES["critical"]
     
     # Default query for searchsploit (use domain/tech if available)
     if not params.get("query"):
@@ -1010,7 +1010,9 @@ def executor_node(state: AgentState) -> AgentState:
                 if tool_name == "nmap":
                     command = "from_file"
                     batch_params["file"] = target_file
-                    batch_params["ports"] = "22,80,443,8080,8443"
+                    batch_params["file"] = target_file
+                    from app.rag.port_metadata import PORT_PROFILES
+                    batch_params["ports"] = PORT_PROFILES["web"]  # Batch scans usually focus on web ports
                 elif tool_name == "nuclei":
                     # Use scan_list for batch targets
                     batch_params["file"] = target_file
@@ -1054,22 +1056,39 @@ def executor_node(state: AgentState) -> AgentState:
             if tool_name == "shodan":
                 import re
                 target = domain or params.get("target", "")
-                # Check if target is an IP address
-                ip_pattern = r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$'
-                if re.match(ip_pattern, target):
+                user_query = state.get("query", "")
+                
+                # Check for Shodan filters in user query (e.g. ssl:, port:, org:)
+                shodan_filters = ["ssl:", "port:", "org:", "net:", "city:", "country:", "os:"]
+                has_filter = any(f in user_query for f in shodan_filters)
+                
+                # Extract filters from user query if present
+                if has_filter:
+                    query_parts = user_query.split(" on ")
+                    if len(query_parts) > 1:
+                        shodan_query = query_parts[-1].strip()
+                    else:
+                        tokens = user_query.split()
+                        filter_tokens = [t for t in tokens if any(f in t for f in shodan_filters)]
+                        shodan_query = " ".join(filter_tokens) if filter_tokens else f"hostname:{target}"
+                    
+                    command = "search"
+                    tool_params["query"] = shodan_query
+                    print(f"  🔍 Shodan: Using user filters '{shodan_query}'")
+                    
+                # Standard IP check
+                elif re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', target):
                     command = "host"
                     tool_params["target"] = target
                     print(f"  🔍 Shodan: Using 'host' for IP {target}")
+                
                 else:
-                    # Use search with hostname: filter (works on free tier)
-                    # domain command requires paid API
                     command = "search"
                     tool_params["query"] = f"hostname:{target}"
                     print(f"  🔍 Shodan: Using 'search hostname:{target}'")
             
             # Exploit tools need special handling
             if tool_name == "msfconsole":
-                # Build search command based on detected tech or ports
                 detected_tech = context.get("detected_tech", [])
                 if detected_tech:
                     search_term = detected_tech[0] if detected_tech else "apache"
@@ -1133,74 +1152,182 @@ def executor_node(state: AgentState) -> AgentState:
         base_timeout = template.timeout if template else 300
         timeout = get_adaptive_timeout(base_timeout, context, tool_name)
         
-        # Define callback for streaming output
-        import sys
-        def stream_callback(line: str):
-            """Print each line of output in real-time."""
-            if line.strip():
-                # Use ANSI colors for immediate output
-                GREEN = "\033[32m"
-                RED = "\033[31m"
-                YELLOW = "\033[33m"
-                DIM = "\033[2m"
-                RESET = "\033[0m"
-                
-                if "open" in line.lower() or "found" in line.lower():
-                    sys.stdout.write(f"    {GREEN}{line}{RESET}\n")
-                elif "error" in line.lower() or "failed" in line.lower():
-                    sys.stdout.write(f"    {RED}{line}{RESET}\n")
-                elif "warning" in line.lower():
-                    sys.stdout.write(f"    {YELLOW}{line}{RESET}\n")
-                else:
-                    sys.stdout.write(f"    {DIM}{line}{RESET}\n")
-                sys.stdout.flush()
+        # Execute via specialized agent
+        agent_name = context.get("current_agent", "base")
+        agent = get_coordinator().get_agent(agent_name)
         
-        # Use streaming execution with adaptive timeout
-        result = registry.execute_stream(
-            tool_name, 
-            command, 
-            tool_params,
-            timeout_override=timeout,
-            line_callback=stream_callback
-        )
+        print(f"  🤖 Agent '{agent.AGENT_NAME}' executing {tool_name}...")
         
-        results[tool_name] = {
-            "success": result.success,
-            "output": result.output,
-            "error": result.error
-        }
+        # Execute tool (agent decides how)
+        # Note: Streaming temporarily disabled in favor of agent architecture
+        execution_result = agent.execute_tool(tool_name, command, tool_params)
+        
+        results[tool_name] = execution_result
         
         # Update context
-        if result.success:
-            output = result.output
+        if execution_result.get("success"):
+            output = execution_result.get("output", "")
+            
+            # Print output (since we lost streaming)
+            if len(output) < 1000:
+                print(output)
+            else:
+                print(f"{output[:300]}...\n... (truncated) ...\n{output[-300:]}")
+            try:
+                from app.agent.output_parser import get_output_parser
+                parser = get_output_parser()
+                domain = params.get("domain", context.get("last_domain", ""))
+                
+                # Parse output with LLM - extracts subdomains, hosts, ports, vulns, etc.
+                findings = parser.parse(tool_name, output, domain)
+                
+                if findings:
+                    # Update context with extracted findings
+                    parser.update_context(context, findings)
+                    
+                    # Log what was found
+                    found_items = []
+                    if findings.get("subdomains"):
+                        found_items.append(f"{len(findings['subdomains'])} subdomains")
+                    if findings.get("hosts"):
+                        found_items.append(f"{len(findings['hosts'])} hosts")
+                    if findings.get("ports"):
+                        found_items.append(f"{len(findings['ports'])} ports")
+                    if findings.get("vulnerabilities"):
+                        found_items.append(f"{len(findings['vulnerabilities'])} vulns")
+                    if findings.get("emails"):
+                        found_items.append(f"{len(findings['emails'])} emails")
+                    if findings.get("technologies"):
+                        found_items.append(f"{len(findings['technologies'])} technologies")
+                    
+                    if found_items:
+                        print(f"  📊 LLM Parser: {', '.join(found_items)}")
+                    
+                    # Persist to RAG
+                    try:
+                        from app.rag.unified_memory import get_unified_rag
+                        rag = get_unified_rag()
+                        for sub in findings.get("subdomains", [])[:100]:
+                            ip = ""
+                            for h in findings.get("hosts", []):
+                                if h.get("hostname") == sub:
+                                    ip = h.get("ip", "")
+                                    break
+                            rag.add_subdomain(sub, domain, ip=ip, source=tool_name)
+                        for h in findings.get("hosts", [])[:50]:
+                            if h.get("ip"):
+                                rag.add_host(h.get("ip"), h.get("hostname"), domain=domain)
+                        for v in findings.get("vulnerabilities", [])[:20]:
+                            rag.add_vulnerability(v.get("type", ""), v.get("severity", ""), 
+                                                v.get("target", ""), v.get("details", ""),
+                                                tool=tool_name, domain=domain)
+                    except Exception:
+                        pass  # RAG storage is optional enhancement
+                        
+            except Exception as e:
+                # Universal parser failed, continue with specific parsers
+                print(f"  ⚠️ Universal parser: {e}")
             
             # ─────────────────────────────────────────────────────────
+            # TOOL-SPECIFIC ENHANCEMENTS (optional, adds extra context)
             # SUBDOMAIN ENUMERATION TOOLS
             # ─────────────────────────────────────────────────────────
-            if tool_name in ["subfinder", "amass", "bbot"]:
+            if tool_name in ["subfinder", "amass", "bbot", "recon-ng", "theHarvester"]:
                 context["has_subdomains"] = True
                 context["last_domain"] = params.get("domain", "")
-                # Store actual subdomains - filter out garbage
-                lines = output.strip().split("\n")
+                
                 import re
-                # Valid subdomain pattern: alphanumeric with dots, no spaces
-                subdomain_pattern = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)+$')
                 subdomains = []
-                for line in lines:
-                    line = line.strip()
-                    # Skip empty lines, lines with spaces (not subdomains), IP ranges, URLs
-                    if not line or ' ' in line or '/' in line or 'http' in line.lower():
-                        continue
-                    # Must look like a valid subdomain
-                    if subdomain_pattern.match(line) and len(line) > 4:
-                        subdomains.append(line)
+                hosts_with_ips = [] 
+                
+                if tool_name == "recon-ng":
+                    lines = output.strip().split("\n")
+                    current_host = None
+                    for line in lines:
+                        line = line.strip()
+                        host_match = re.search(r'\[\*\]\s*Host:\s*(\S+)', line)
+                        if host_match:
+                            current_host = host_match.group(1)
+                            if current_host and '.' in current_host:
+                                subdomains.append(current_host)
+                        # Match: [*] Ip_Address: 1.2.3.4
+                        ip_match = re.search(r'\[\*\]\s*Ip_Address:\s*(\S+)', line)
+                        if ip_match and current_host:
+                            ip = ip_match.group(1)
+                            hosts_with_ips.append({"host": current_host, "ip": ip})
+                    
+                    # Store hosts with IPs separately for analysis
+                    if hosts_with_ips:
+                        context["hosts"] = [h["host"] for h in hosts_with_ips]
+                        context["ips"] = list(set([h["ip"] for h in hosts_with_ips]))
+                        context["host_ip_map"] = {h["host"]: h["ip"] for h in hosts_with_ips}
+                        print(f"  📍 Found {len(hosts_with_ips)} hosts with IPs from recon-ng")
+                else:
+                    # Standard subdomain parsing for other tools
+                    lines = output.strip().split("\n")
+                    subdomain_pattern = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)+$')
+                    for line in lines:
+                        line = line.strip()
+                        if not line or ' ' in line or '/' in line or 'http' in line.lower():
+                            continue
+                        if subdomain_pattern.match(line) and len(line) > 4:
+                            subdomains.append(line)
+                
+                # Store subdomains
+                subdomains = list(set(subdomains))  # Dedupe
                 context["subdomain_count"] = len(subdomains)
-                context["subdomains"] = subdomains[:50]  # Store up to 50
+                context["subdomains"] = subdomains[:50]
+                
+                # ─────────────────────────────────────────────────────────
+                # PERSIST TO RAG FOR CROSS-SESSION MEMORY
+                # ─────────────────────────────────────────────────────────
+                try:
+                    from app.rag.unified_memory import get_unified_rag
+                    rag = get_unified_rag()
+                    domain = params.get("domain", "")
+                    for sub in subdomains[:100]:
+                        ip = context.get("host_ip_map", {}).get(sub, "")
+                        rag.add_subdomain(sub, domain, ip=ip, source=tool_name)
+                    if subdomains:
+                        print(f"  💾 Stored {len(subdomains[:100])} subdomains in RAG")
+                except Exception as e:
+                    pass
+            
+            # ─────────────────────────────────────────────────────────
+            # ASN EXTRACTION - Runs for ALL tools (amass, httpx, etc.)
+            # ─────────────────────────────────────────────────────────
+            try:
+                import re
+                asn_list = context.get("asns", [])
+                
+                # Pattern: "ASN: 13335 - CLOUDFLARENET - Cloudflare, Inc."
+                asn_pattern = r'ASN:\s*(\d+)\s*[-–]\s*([A-Z0-9_-]+)(?:\s*[-–,]\s*(.+?))?(?:\n|$)'
+                for match in re.finditer(asn_pattern, output, re.IGNORECASE):
+                    asn_num = match.group(1)
+                    asn_name = match.group(2).strip()
+                    asn_org = match.group(3).strip() if match.group(3) else ""
+                    
+                    asn_entry = {
+                        "asn": int(asn_num),
+                        "name": asn_name,
+                        "org": asn_org
+                    }
+                    
+                    # Avoid duplicates
+                    if not any(a.get("asn") == asn_entry["asn"] for a in asn_list):
+                        asn_list.append(asn_entry)
+                
+                if asn_list and len(asn_list) != context.get("asn_count", 0):
+                    context["asns"] = asn_list
+                    context["asn_count"] = len(asn_list)
+                    print(f"  🌐 ASNs detected: {len(asn_list)} (e.g., AS{asn_list[0]['asn']} - {asn_list[0]['name']})")
+            except Exception:
+                pass
             
             # ─────────────────────────────────────────────────────────
             # PORT SCANNING TOOLS
             # ─────────────────────────────────────────────────────────
-            elif tool_name == "nmap":
+            if tool_name == "nmap":
                 context["has_ports"] = True
                 context["last_target"] = params.get("target", "")
                 
@@ -1221,6 +1348,18 @@ def executor_node(state: AgentState) -> AgentState:
                 if open_ports:
                     context["open_ports"] = open_ports
                     context["port_count"] = len(open_ports)
+                    
+                    # Persist to RAG for cross-session memory
+                    try:
+                        from app.rag.unified_memory import get_unified_rag
+                        rag = get_unified_rag()
+                        target = params.get("target", "")
+                        ports = [p["port"] for p in open_ports]
+                        services = {p["port"]: p.get("service", "") for p in open_ports}
+                        rag.add_host(ip=target, ports=ports, services=services, domain=context.get("last_domain", ""))
+                        print(f"  💾 Stored {len(open_ports)} open ports in RAG")
+                    except Exception:
+                        pass
                 
                 # Parse OS detection
                 os_match = re.search(r'OS details?:\s*(.+)', output)
@@ -1272,6 +1411,37 @@ def executor_node(state: AgentState) -> AgentState:
                         print(f"  🛡️ Security tech detected: {', '.join(detected_security)}")
                 except Exception:
                     pass
+                
+                # ─────────────────────────────────────────────────────────
+                # ASN EXTRACTION from amass/other tools
+                # ─────────────────────────────────────────────────────────
+                try:
+                    import re
+                    asn_list = context.get("asns", [])
+                    
+                    # Pattern: "ASN: 13335 - CLOUDFLARENET - Cloudflare, Inc."
+                    asn_pattern = r'ASN:\s*(\d+)\s*[-–]\s*([A-Z0-9_-]+)(?:\s*[-–,]\s*(.+?))?(?:\n|$)'
+                    for match in re.finditer(asn_pattern, output, re.IGNORECASE):
+                        asn_num = match.group(1)
+                        asn_name = match.group(2).strip()
+                        asn_org = match.group(3).strip() if match.group(3) else ""
+                        
+                        asn_entry = {
+                            "asn": int(asn_num),
+                            "name": asn_name,
+                            "org": asn_org
+                        }
+                        
+                        # Avoid duplicates
+                        if not any(a["asn"] == asn_entry["asn"] for a in asn_list):
+                            asn_list.append(asn_entry)
+                    
+                    if asn_list:
+                        context["asns"] = asn_list
+                        context["asn_count"] = len(asn_list)
+                        print(f"  🌐 ASNs detected: {len(asn_list)} (e.g., AS{asn_list[0]['asn']} - {asn_list[0]['name']})")
+                except Exception:
+                    pass
             
             # ─────────────────────────────────────────────────────────
             # VULNERABILITY SCANNING TOOLS
@@ -1306,7 +1476,7 @@ def executor_node(state: AgentState) -> AgentState:
                 nikto_findings = []
                 for line in output.strip().split("\n"):
                     if line.strip().startswith("+") and ":" in line:
-                        nikto_findings.append(line.strip()[2:])  # Remove "+ "
+                        nikto_findings.append(line.strip()[2:])  
                 if nikto_findings:
                     context["nikto_findings"] = nikto_findings[:50]
             
@@ -1540,35 +1710,46 @@ def executor_node(state: AgentState) -> AgentState:
                         context["email_count"] = len(emails)
                 
                 # Parse hosts/subdomains
-                if "[*] Hosts found:" in output:
-                    hosts_section = output.split("[*] Hosts found:")[1]
-                    for marker in ["[*] Performing", "[*] No ", "Read "]:
-                        if marker in hosts_section:
-                            hosts_section = hosts_section.split(marker)[0]
-                            break
-                    hosts = [line.strip() for line in hosts_section.strip().split("\n") 
-                             if line.strip() and "." in line and not line.startswith("-") and not line.startswith("[")]
-                    if hosts:
-                        context["hosts"] = hosts[:100]  # Store up to 100
-                        context["host_count"] = len(hosts)
-                        # Also extract unique subdomains (host before colon if present)
-                        subdomains = list(set([h.split(":")[0] for h in hosts if "." in h.split(":")[0]]))
-                        context["subdomains"] = subdomains[:50]
-                        context["subdomain_count"] = len(subdomains)
-                        context["has_subdomains"] = True
+                # Pattern for hosts: "host1.example.com:ip_address" or just "host1.example.com"
+                hosts_found = []
+                ips_found = []
                 
-                # Parse IPs
-                if "[*] IPs found:" in output:
-                    ips_section = output.split("[*] IPs found:")[1]
-                    for marker in ["[*] Emails found:", "[*] Hosts found:", "[*] No ", "[*] Performing"]:
-                        if marker in ips_section:
-                            ips_section = ips_section.split(marker)[0]
-                            break
-                    ips = [line.strip() for line in ips_section.strip().split("\n") 
-                           if line.strip() and (line.strip()[0].isdigit() or line.strip().startswith("2"))]
-                    if ips:
-                        context["ips"] = ips
-                        context["ip_count"] = len(ips)
+                # Regex for hostnames (subdomains)
+                # Matches: "sub.domain.com" or "sub.domain.com:1.2.3.4"
+                host_pattern = r'([a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z0-9]+)'
+                
+                # Regex for simple IPv4
+                ip_pattern = r'\b(?:\d{1,3}\.){3}\d{1,3}\b'
+                
+                # Process line by line to handle different output formats
+                for line in output.split("\n"):
+                    line = line.strip()
+                    if not line or line.startswith("[*]") or line.startswith("-") or "target:" in line.lower():
+                        continue
+                        
+                    # Extract potential hosts
+                    hosts = re.findall(host_pattern, line)
+                    for h in hosts:
+                        # Exclude IPs from being counted as hosts
+                        if re.match(r'^\d+(\.\d+)+$', h):
+                             continue
+                        if "." in h and len(h) > 5 and not h.startswith("http"):
+                            hosts_found.append(h)
+                    
+                    # Extract potential IPs
+                    ips = re.findall(ip_pattern, line)
+                    for ip in ips:
+                        ips_found.append(ip)
+                
+                if hosts_found:
+                    context["subdomains"] = list(set(hosts_found))
+                    context["subdomain_count"] = len(context["subdomains"])
+                    context["has_subdomains"] = True
+                
+                if ips_found:
+                    context["ips"] = list(set(ips_found))
+
+
                 
                 # Parse ASNs
                 if "[*] ASNS found:" in output or "[*] ASNs found:" in output:
@@ -1625,6 +1806,20 @@ def executor_node(state: AgentState) -> AgentState:
             context["detected_security_tech"] = list(set(detected_security))
     except Exception:
         pass
+    
+    # ============================================================
+    # SYNC TO SHARED MEMORY - Other agents can now access findings
+    # ============================================================
+    try:
+        from app.agent.shared_memory import get_shared_memory
+        shared = get_shared_memory()
+        shared.update_from_dict(context)
+        
+        # Log which agent contributed
+        if tools:
+            shared.add_finding("executor", "tools_run", tools)
+    except Exception:
+        pass  # Shared memory is optional enhancement
     
     return {
         **state,
@@ -1782,136 +1977,101 @@ Check tool installation with `/tools`
             results_str += f"\n{tool}: SUCCESS\n{output}\n"
         else:
             results_str += f"\n{tool}: FAILED - {data.get('error', 'Unknown error')}\n"
+            
+    # NEW: Append specialized agent analysis
+    try:
+        # Check imports locally to avoid global scope issues
+        from app.agent.coordinator import get_coordinator
+        
+        agent_name = context.get("current_agent", "base")
+        agent = get_coordinator().get_agent(agent_name)
+        if agent:
+            # Pass context to analyze_results
+            agent_analysis = agent.analyze_results(results, context)
+            if agent_analysis:
+                results_str += f"\n\nAGENCY ANALYSIS ({agent.AGENT_NAME}):\n{agent_analysis}\n"
+                print(f"  🧠 Included insights from {agent.AGENT_NAME} agent")
+    except Exception as e:
+        print(f"  ⚠️ Agent analysis failed: {e}")
     
     # ============================================================
     cve_context = ""
     try:
         from app.rag.cve_rag import search_cves
+        from app.agent.prompt_loader import format_prompt
+        import re # Ensure re is imported
+        import json # Ensure json is imported
         
-        # ONLY look for actual technology keywords in results
-        # Don't search for domain names - they won't match CVEs
-        tech_keywords = [
-            "wordpress", "apache", "nginx", "php", "mysql", "ssh", "openssh",
-            "ftp", "rdp", "smb", "tomcat", "jenkins", "redis", "mongodb",
-            "postgresql", "mariadb", "iis", "exchange", "sharepoint",
-            "drupal", "joomla", "magento", "cpanel", "plesk", "webmin",
-            "proftpd", "vsftpd", "openssl", "cloudflare", "ubuntu", "debian",
-            "centos", "windows", "fortios", "fortigate", "cisco", "mikrotik"
-        ]
-        
-        detected_tech = []
-        results_lower = results_str.lower()
-        for tech in tech_keywords:
-            if tech in results_lower:
-                detected_tech.append(tech)
-        
-        # Also look for version patterns like "Apache/2.4.41"
-        import re
-        version_pattern = r'([a-zA-Z]+)[/\s](\d+\.\d+(?:\.\d+)?)'
-        versions = re.findall(version_pattern, results_str)
-        for name, ver in versions:
-            # Exclude common false positives from nmap/tool output
-            exclude = ["http", "www", "ssl", "tls", "tcp", "udp", "port", "about", 
-                       "nmap", "version", "time", "rate", "host", "scan", "open",
-                       "filtered", "closed", "service", "state", "reason", "latency",
-                       "for", "and", "the", "not", "owasp", "amass", "github", "com",
-                       "names", "discovered", "routed", "subdomain", "enumeration"]
-            if name.lower() not in exclude and len(name) > 2:
-                detected_tech.append(f"{name} {ver}")
+        # Use LLM to extract technologies (replaces brittle regex)
+        tech_prompt = format_prompt("tech_extractor", results_str=results_str)
+        try:
+            # Quick extraction call (low temp for precision)
+            tech_response = llm.generate(tech_prompt, timeout=30, stream=False)
+            
+            detected_tech = []
+            if tech_response and "None" not in tech_response:
+                # Clean up response (handle potential newlines or bullets)
+                import re
+                clean_response = re.sub(r'[\n\r]+', ', ', tech_response)
+                # Split by comma
+                items = [t.strip() for t in clean_response.split(',')]
+                detected_tech = [t for t in items if t and len(t) > 2]
+                
+            print(f"  🔍 Detected Tech (LLM): {detected_tech}")
+            
+        except Exception as e:
+            print(f"  ⚠️ Tech extraction failed: {e}")
+            detected_tech = []
         
         # Store detected tech for exploit tools to use
         if detected_tech:
             context["detected_tech"] = list(set(detected_tech))[:10]
-            search_query = " ".join(detected_tech[:3])
+            
+            # Search CVEs using the extracted terms
+            search_query = ", ".join(detected_tech[:5])  # Search for top 5 terms
             cve_results = search_cves(search_query, n_results=5, severity="high")
             
             if cve_results.get("cves"):
-                # Store CVEs in context for later display (/cve command)
+                # Store CVEs in context for later display
                 context["last_cves"] = cve_results["cves"]
                 context["cve_query"] = search_query
                 
-                cve_context = "\n\nRELEVANT CVEs:\n"
+                cve_context = "\n\n⚠️ POTENTIAL CVEs (Found via RAG matching):\n"
+                cve_context += "Verify if these actually apply to the target version:\n"
                 for cve in cve_results["cves"][:3]:
                     cve_id = cve.get("cve_id", "Unknown")
                     desc = cve.get("description", "")[:100]
                     severity = cve.get("severity", "Unknown")
-                    cve_context += f"- {cve_id} ({severity}): {desc}...\n"
-                print(f"  🔍 CVE RAG: {len(cve_results['cves'])} CVEs for detected tech: {detected_tech[:3]}")
+                    affected = cve.get("product", "Unknown product")
+                    cve_context += f"- {cve_id} ({severity}) {affected}: {desc}...\n"
+                print(f"  🔍 CVE RAG: found {len(cve_results['cves'])} potential CVEs")
         else:
-            print(f"  ℹ️ CVE RAG: No technologies detected in results (need port/service scan first)")
+            print(f"  ℹ️ CVE RAG: No technologies detected in output")
+            
     except Exception as e:
-        print(f"  ⚠️ CVE RAG: {e}")
+        print(f"  ⚠️ CVE RAG Error: {e}")
     
     # ============================================================
     # PURE LLM ANALYSIS - Attack Chain Focus
     # ============================================================
     
-    prompt = f'''You are an offensive security expert analyzing scan results. Your goal is to find the FASTEST PATH TO EXPLOITATION.
-
-SCAN RESULTS:
-{results_str}
-{cve_context}
-
-CONTEXT:
-- Target domain: {context.get('last_domain', 'unknown')}
-- Subdomains found: {context.get('subdomain_count', 0)}
-- Ports scanned: {context.get('has_ports', False)}
-- Technologies detected: {context.get('detected_tech', [])}
-- Tools already run: {context.get('tools_run', [])}
-{_get_security_tech_context(context)}
-
-YOUR ANALYSIS MUST:
-
-1. **IDENTIFY ATTACK VECTORS** - What can be exploited on the ACTUAL TARGET?
-   - Exposed admin panels (cPanel, WHM, phpMyAdmin) → Default creds / Brute force
-   - Open SSH/FTP/RDP → Brute force with hydra
-   - Web forms/login pages → SQL injection with sqlmap
-   - Known CVEs in detected versions → Search exploits with searchsploit
-   - File upload endpoints → Web shell upload
-   - API endpoints → Parameter fuzzing with ffuf
-
-2. **PRIORITIZE BY EXPLOITABILITY** (most likely to succeed first)
-   - Critical: Known CVEs with public exploits
-   - High: Default credentials, unauthenticated access
-   - Medium: Requires brute force or fuzzing
-   - Low: Information disclosure only
-
-3. **RECOMMEND NEXT ATTACK STEP** - What tool gets us closer to shell?
-   - Found login page? → Use hydra for brute force
-   - Found web form with parameters? → Use sqlmap for SQL injection
-   - Found old software version? → Use searchsploit for exploits
-   - Found open ports? → Use nmap scripts for vuln scan
-   - Need to find endpoints? → Use gobuster or katana first
-
-CRITICAL DISTINCTION - UNDERSTAND TOOL OUTPUT TYPES:
-- **searchsploit** results are from Exploit-DB database. The paths in exploit titles (like /music/ajax.php) 
-  are examples from the VULNERABLE SOFTWARE, NOT paths that exist on the target domain!
-- If searchsploit found MySQL exploits, it means MySQL software has known vulnerabilities.
-  You must FIRST discover actual endpoints using gobuster/katana, THEN apply exploitation.
-- **nuclei/nmap** results ARE from the actual target and can be exploited directly.
-- **subdomain/port scans** show what's actually accessible on the target.
-
-RESPOND IN JSON FORMAT:
-{{
-    "findings": [
-        {{"issue": "Specific vulnerability", "attack": "How to exploit it", "severity": "Critical/High/Medium/Low"}}
-    ],
-    "best_attack_vector": "The most promising attack path",
-    "summary": "Brief summary of attack surface",
-    "next_tool": "tool_name",
-    "next_target": "specific URL or host FROM THE ACTUAL TARGET (use {context.get('last_domain', 'target.com')})",
-    "next_reason": "Why this tool will get us closer to exploitation"
-}}
-
-IMPORTANT:
-- Focus on ACTIONABLE findings that lead to exploitation
-- Suggest ONE specific next tool (not a list)
-- Use ACTUAL target URLs/hosts, not example paths from exploit database entries
-- If searchsploit was just run, suggest gobuster/katana to find real endpoints before sqlmap
-- Prioritize quick wins: default creds, known CVEs, misconfigurations
-'''
+    # Load prompt from external file
+    from app.agent.prompt_loader import format_prompt
     
-    response = llm.generate(prompt, timeout=60)
+    prompt = format_prompt("analyzer",
+        results_str=results_str,
+        cve_context=cve_context,
+        domain=context.get('last_domain', 'unknown'),
+        subdomain_count=context.get('subdomain_count', 0),
+        has_ports=context.get('has_ports', False),
+        detected_tech=context.get('detected_tech', []),
+        tools_run=context.get('tools_run', []),
+        security_tech_context=_get_security_tech_context(context)
+    )
+    
+    
+    # Stream the analysis - user wants to see this thinking process
+    response = llm.generate(prompt, timeout=90, stream=True, show_thinking=True, show_content=True)
     
     try:
         # Robust JSON extraction with multiple repair strategies
@@ -2021,6 +2181,27 @@ IMPORTANT:
             elif next_reason:
                 response_text += f"\n\n**💡 Recommended next step:** {next_reason}"
             
+            # ─────────────────────────────────────────────────────────
+            # PHASE COMPLETION CHECK - Does agent recommend advancing?
+            # ─────────────────────────────────────────────────────────
+            try:
+                from app.agent.coordinator import get_coordinator
+                coordinator = get_coordinator()
+                advance = coordinator.auto_advance(context)
+                
+                if advance:
+                    phase_msg = f"\n\n---\n🔄 **{advance['phase_name']} Phase Complete!**\n"
+                    phase_msg += f"✅ {advance['reason']}\n"
+                    if advance.get("next_phase_name"):
+                        phase_msg += f"\n**Ready for {advance['next_phase_name']} phase.**"
+                        if advance.get("next_action"):
+                            phase_msg += f"\n💡 Next: {advance['next_action']}"
+                    response_text += phase_msg
+                    context["phase_complete"] = True
+                    context["current_phase"] = advance.get("next_phase", advance["phase"])
+            except Exception as e:
+                print(f"  ⚠️ Phase check error: {e}")
+            
             return {
                 **state,
                 "response": response_text,
@@ -2028,30 +2209,39 @@ IMPORTANT:
                 "next_action": "respond"
             }
         else:
-            print(f"  ⚠️ No JSON in analyzer response, showing raw results")
+            # data is empty - this shouldn't happen often but handle it
+            print(f"  ⚠️ Analyzer extracted empty data, showing raw results")
+            raise ValueError("Empty data extracted")  # Trigger fallback
     except Exception as e:
         print(f"  ⚠️ Analyzer parse error: {e}")
     
-    # Fallback - show formatted results (LLM failed to parse)
-    formatted = ""
-    raw_results = _format_results(results)
-    if not raw_results or raw_results == "No results":
-        formatted = f"**Scan completed**\n\n"
-        for tool, data in results.items():
+    # Fallback - show formatted tool results (LLM failed to parse)
+    # Show each tool's output in a clean code block
+    print(f"  📋 Fallback: formatting {len(results)} tool results...")
+    formatted = "**Scan Results:**\n\n"
+    
+    for tool, data in results.items():
+        if isinstance(data, dict):
             if data.get("success"):
-                output = data.get("output", "")[:2000]
-                formatted += f"### {tool}\n```\n{output}\n```\n\n"
+                output = data.get("output", "")
+                # Clean and truncate output
+                if len(output) > 3000:
+                    output = output[:3000] + "\n... (truncated)"
+                formatted += f"### {tool.upper()}\n```\n{output}\n```\n\n"
             else:
-                formatted += f"### {tool}\n❌ {data.get('error', 'Unknown error')}\n\n"
-    else:
-        formatted = raw_results
+                formatted += f"### {tool.upper()}\n❌ {data.get('error', 'Unknown error')}\n\n"
     
-    # Clear message that LLM analysis failed - no hardcoded guidance
-    llm_failure_notice = "\n\n⚠️ **LLM analysis failed to parse.** Raw tool output shown above. Please interpret the results and decide next steps yourself."
+    # Add helpful message
+    formatted += "\n---\n**ℹ️ LLM analysis unavailable.** The tool outputs are shown above in raw format. Key findings should be extracted manually.\n"
     
+    # Ensure we have something to show
+    if formatted.strip() == "**Scan Results:**":
+        formatted = "**Note:** No tool results to display. The scan may not have produced output."
+    
+    print(f"  ✅ Fallback response: {len(formatted)} chars")
     return {
         **state,
-        "response": formatted + llm_failure_notice,
+        "response": formatted,
         "next_action": "respond"
     }
 
@@ -2105,23 +2295,10 @@ Technologies: {context.get('detected_tech', [])}"""
         except Exception:
             pass
     
-    prompt = f"""You are an expert cybersecurity professional with access to web search.
-
-QUESTION: {query}
-
-SESSION: {context_str}
-{web_context}
-
-INSTRUCTIONS:
-1. For general questions (cPanel, ASN, CVE, tools) - USE YOUR KNOWLEDGE!
-2. If WEB RESEARCH RESULTS are provided above, USE them to give accurate answers.
-3. For scan results, use the session context.
-4. Cite sources from web research when applicable.
-5. Be specific and actionable in your answers.
-
-Answer:"""
+    from app.agent.prompt_loader import format_prompt
+    prompt = format_prompt("general_chat", query=query, context_str=context_str, web_context=web_context)
     
-    response = llm.generate(prompt, timeout=60)
+    response = llm.generate(prompt, timeout=90, stream=True, show_thinking=True)
     
     return {
         **state,
@@ -2139,6 +2316,8 @@ def memory_query_node(state: AgentState) -> AgentState:
     - "list the findings"
     - "what did we find"
     - "show me emails"
+    
+    Uses RAG for cross-session persistence when session context is empty.
     """
     context = state.get("context", {})
     query = state.get("query", "").lower()
@@ -2149,6 +2328,20 @@ def memory_query_node(state: AgentState) -> AgentState:
     domain = context.get("last_domain", "Unknown target")
     response_parts.append(f"## 📊 Stored Data for {domain}\n")
     
+    # ─────────────────────────────────────────────────────────
+    # TRY RAG FOR CROSS-SESSION DATA
+    # ─────────────────────────────────────────────────────────
+    rag_findings = {"subdomains": [], "hosts": [], "vulnerabilities": []}
+    try:
+        from app.rag.unified_memory import get_unified_rag
+        rag = get_unified_rag()
+        if domain and domain != "Unknown target":
+            rag_findings = rag.get_findings_for_domain(domain)
+            if rag_findings.get("subdomains") or rag_findings.get("hosts"):
+                response_parts.append("*Cross-session data from RAG:*\n")
+    except Exception:
+        pass
+    
     # Emails
     emails = context.get("emails", [])
     if emails:
@@ -2157,14 +2350,19 @@ def memory_query_node(state: AgentState) -> AgentState:
             response_parts.append(f"  • {email}")
         response_parts.append("")
     
-    # Subdomains
+    # Subdomains - combine session + RAG
     subdomains = context.get("subdomains", [])
-    subdomain_count = context.get("subdomain_count", len(subdomains))
+    rag_subs = [s.get("subdomain", "") for s in rag_findings.get("subdomains", [])]
+    all_subdomains = list(set(subdomains + rag_subs))  # Dedupe
+    subdomain_count = len(all_subdomains) or context.get("subdomain_count", 0)
     
-    if subdomains:
-        response_parts.append(f"### 🌐 Subdomains ({subdomain_count} found)\n")
-        for sub in subdomains:
+    if all_subdomains:
+        rag_indicator = " 💾" if rag_subs else ""
+        response_parts.append(f"### 🌐 Subdomains ({subdomain_count} found){rag_indicator}\n")
+        for sub in all_subdomains[:50]:
             response_parts.append(f"  • {sub}")
+        if len(all_subdomains) > 50:
+            response_parts.append(f"  ... and {len(all_subdomains) - 50} more")
         response_parts.append("")
     elif subdomain_count > 0:
         response_parts.append(f"### 🌐 Subdomains\n  {subdomain_count} subdomains discovered (list not in memory)\n")
@@ -2190,7 +2388,13 @@ def memory_query_node(state: AgentState) -> AgentState:
     if asns:
         response_parts.append(f"### 🏢 ASNs ({len(asns)} found)\n")
         for asn in asns:
-            response_parts.append(f"  • {asn}")
+            if isinstance(asn, dict):
+                asn_str = f"AS{asn.get('asn', '?')} - {asn.get('name', 'Unknown')}"
+                if asn.get('org'):
+                    asn_str += f" ({asn.get('org')})"
+                response_parts.append(f"  • {asn_str}")
+            else:
+                response_parts.append(f"  • {asn}")
         response_parts.append("")
     
     # Interesting URLs
@@ -2402,7 +2606,7 @@ def route_after_intent(state: AgentState) -> str:
     intent = state.get("intent", "question")
     
     if intent == "security_task":
-        return "planner"
+        return "target_verification"  # New step: verify target first
     elif intent == "confirm":
         return "confirm"
     elif intent == "memory_query":
@@ -2444,6 +2648,7 @@ def build_graph():
     
     # Add nodes
     graph.add_node("intent", intent_node)
+    graph.add_node("target_verification", target_verification_node)
     graph.add_node("planner", planner_node)
     graph.add_node("confirm", confirm_node)
     graph.add_node("executor", executor_node)
@@ -2460,10 +2665,22 @@ def build_graph():
         "intent",
         route_after_intent,
         {
+            "target_verification": "target_verification",
             "planner": "planner",
             "confirm": "confirm",
             "memory_query": "memory_query",
             "question": "question"
+        }
+    )
+    
+    # Add routing for target verification
+    graph.add_conditional_edges(
+        "target_verification",
+        route_after_action,
+        {
+            "planner": "planner",
+            "respond": "respond",
+            END: END
         }
     )
     
@@ -2482,6 +2699,7 @@ def build_graph():
         route_after_action,
         {
             "executor": "executor",
+            "planner": "planner",  # Route to planner when tools not yet selected
             "respond": "respond",
             END: END
         }
@@ -2551,9 +2769,6 @@ class LangGraphAgent:
         except Exception as e:
             print(f"⚠️ Memory init failed: {e}")
             self.memory = None
-        
-        # Backward compatibility - keep messages list
-        self.messages = []
     
     def run(self, query: str, context: Dict[str, Any] = None) -> tuple[str, Dict[str, Any], bool]:
         """
@@ -2565,8 +2780,20 @@ class LangGraphAgent:
         if context:
             self.context.update(context)
         
-        # Add user message to history (both old and new memory)
-        self.messages.append({"role": "user", "content": query})
+        # Load conversation history from memory (New System)
+        messages = []
+        if self.memory and self.memory.chat_history:
+             try:
+                 # Convert LangChain messages to AgentState dict format
+                 for msg in self.memory.chat_history.messages[-20:]: # Keep last 20
+                     role = "user" if msg.type == "human" else "assistant"
+                     messages.append({"role": role, "content": msg.content})
+             except Exception as e:
+                 print(f"⚠️ Failed to load history: {e}")
+        
+        # If no memory or empty, ensure current query is added to history view (state only)
+        # Note: We don't save to memory yet, that happens after response
+        messages.append({"role": "user", "content": query})
         
         # If we have a pending confirmation and user says yes/no
         suggested_tools = []
@@ -2578,11 +2805,11 @@ class LangGraphAgent:
         # Initial state
         state = AgentState(
             query=query,
-            messages=self.messages.copy(),
+            messages=messages, # Loaded from memory
             intent="",
-            suggested_tools=suggested_tools,  # Pass from last suggestion
+            suggested_tools=suggested_tools,  
             suggestion_message="",
-            tool_params=tool_params,  # Pass from last suggestion
+            tool_params=tool_params,  
             confirmed=False,
             selected_tools=[],
             execution_results={},
@@ -2600,25 +2827,14 @@ class LangGraphAgent:
         # Update context
         self.context = result.get("context", self.context)
         
-        # Store execution results for report generation
         if result.get("execution_results"):
             self.last_results.update(result.get("execution_results", {}))
         
-        # Get response
-        response = result.get("response", "No response")
+        response = result.get("response") or result.get("suggestion_message") or "No response"
         
-        # Add assistant message to history (old system)
-        self.messages.append({"role": "assistant", "content": response})
-        
-        # Save to LangChain memory (new system)
         if self.memory:
             self.memory.save_conversation_turn(query, response)
         
-        # Keep last 20 messages to avoid memory bloat
-        if len(self.messages) > 20:
-            self.messages = self.messages[-20:]
-        
-        # Check if awaiting confirmation
         needs_confirmation = (
             len(result.get("suggested_tools", [])) > 0 and
             result.get("next_action") == "end" and

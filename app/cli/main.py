@@ -452,6 +452,93 @@ def run_snode():
                 continue
             
             # ============================================================
+            # AUTONOMOUS MODE - Self-driving pentest
+            # ============================================================
+            if user_input.lower().startswith("auto ") or user_input.lower().startswith("autonomous "):
+                # Extract target
+                parts = user_input.split(maxsplit=1)
+                task = parts[1] if len(parts) > 1 else ""
+                
+                if not task:
+                    console.print("[yellow]Usage: auto <target or task>[/]")
+                    console.print("[dim]Example: auto attack example.com[/]")
+                    console.print("[dim]         auto find vulns in 192.168.1.0/24[/]\n")
+                    continue
+                
+                console.print(f"\n[bold cyan]🤖 Starting Autonomous Mode[/]")
+                console.print(f"[dim]Task: {task}[/]")
+                console.print(f"[dim]Press Ctrl+C to stop at any time[/]\n")
+                
+                try:
+                    from app.agent.autonomous_orchestrator import get_orchestrator, OrchestrationStatus
+                    from app.cli.countdown import get_countdown_runner
+                    
+                    orchestrator = get_orchestrator()
+                    runner = get_countdown_runner()
+                    
+                    # Run autonomous loop
+                    for event in orchestrator.run_autonomous(task, context):
+                        
+                        if event.status == OrchestrationStatus.PLANNING:
+                            console.print(f"[cyan]{event.message}[/]")
+                        
+                        elif event.status == OrchestrationStatus.COUNTDOWN:
+                            # Show plan and countdown
+                            console.print(event.message)
+                            
+                            # Run countdown
+                            if not runner.countdown(event.countdown, "Auto-executing..."):
+                                orchestrator.cancel()
+                                console.print("[yellow]Autonomous mode cancelled[/]\n")
+                                break
+                        
+                        elif event.status == OrchestrationStatus.EXECUTING:
+                            console.print(f"[green]{event.message}[/]")
+                        
+                        elif event.status == OrchestrationStatus.ANALYZING:
+                            console.print(f"[dim]{event.message}[/]")
+                        
+                        elif event.status == OrchestrationStatus.PHASE_COMPLETE:
+                            console.print(f"\n[bold green]{event.message}[/]\n")
+                            # Update local context
+                            if event.data:
+                                context.update(event.data)
+                        
+                        elif event.status == OrchestrationStatus.TASK_COMPLETE:
+                            console.print(f"\n[bold cyan]{event.message}[/]")
+                            
+                            # Show summary
+                            summary = event.data
+                            if summary:
+                                console.print(f"\n[bold]📊 Summary:[/]")
+                                console.print(f"   Target: {summary.get('target', 'unknown')}")
+                                console.print(f"   Subdomains: {summary.get('subdomains_found', 0)}")
+                                console.print(f"   IPs: {summary.get('ips_found', 0)}")
+                                console.print(f"   Open Ports: {summary.get('open_ports', 0)}")
+                                console.print(f"   Vulns: {summary.get('vulnerabilities', 0)}")
+                                console.print(f"   Tools: {', '.join(summary.get('tools_used', []))}")
+                                console.print(f"   Runtime: {summary.get('runtime_seconds', 0):.1f}s")
+                            console.print()
+                            break
+                        
+                        elif event.status == OrchestrationStatus.CANCELLED:
+                            console.print(f"[yellow]{event.message}[/]\n")
+                            break
+                        
+                        elif event.status == OrchestrationStatus.ERROR:
+                            console.print(f"[red]{event.message}[/]\n")
+                            break
+                    
+                except KeyboardInterrupt:
+                    console.print("\n[yellow]Autonomous mode stopped[/]\n")
+                except Exception as e:
+                    console.print(f"[red]Autonomous mode error: {e}[/]\n")
+                    import traceback
+                    traceback.print_exc()
+                
+                continue
+            
+            # ============================================================
             # QUICK COMMAND SHORTCUTS - Fast access to common operations
             # ============================================================
             # These shortcuts expand to full commands for faster workflow
@@ -641,6 +728,20 @@ def run_snode():
 def _print_help(console: Console):
     """Print help information."""
     help_text = """
+## 🤖 Autonomous Mode (NEW!)
+
+Let SNODE run automatically with intelligent phase transitions:
+
+```
+auto attack example.com
+auto find vulns in 192.168.1.0/24
+autonomous pentest target.com
+```
+
+Shows plan → 5s countdown → Auto-executes → Chains phases
+
+---
+
 ## Quick Commands (Shortcuts)
 
 Fast commands for common operations:

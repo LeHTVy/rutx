@@ -77,15 +77,20 @@ def get_specs() -> List[ToolSpec]:
             executable_names=["bash"],  # Execute via bash since recon-ng is interactive
             install_hint="apt install recon-ng",
             commands={
-                # recon-ng is interactive, so we pipe commands via bash
+                # Auto-install module first, then load and run
                 "hosts": CommandTemplate(
                     args=["-c", "echo -e 'marketplace install recon/domains-hosts/hackertarget\\nmodules load recon/domains-hosts/hackertarget\\noptions set SOURCE {domain}\\nrun\\nexit' | recon-ng --no-analytics 2>/dev/null"],
-                    timeout=120,
+                    timeout=180,
                     success_codes=[0, 1]
                 ),
                 "whois": CommandTemplate(
-                    args=["-c", "echo -e 'modules load recon/domains-hosts/builtwith\\noptions set SOURCE {domain}\\nrun\\nexit' | recon-ng --no-analytics 2>/dev/null"],
-                    timeout=120,
+                    args=["-c", "echo -e 'marketplace install recon/domains-contacts/whois_pocs\\nmodules load recon/domains-contacts/whois_pocs\\noptions set SOURCE {domain}\\nrun\\nexit' | recon-ng --no-analytics 2>/dev/null"],
+                    timeout=180,
+                    success_codes=[0, 1]
+                ),
+                "subdomains": CommandTemplate(
+                    args=["-c", "echo -e 'marketplace install recon/domains-hosts/hackertarget\\nmodules load recon/domains-hosts/hackertarget\\noptions set SOURCE {domain}\\nrun\\nexit' | recon-ng --no-analytics 2>/dev/null"],
+                    timeout=180,
                     success_codes=[0, 1]
                 ),
             }
@@ -221,7 +226,9 @@ def get_specs() -> List[ToolSpec]:
 
 def execute_clatscope(command: str, params: dict) -> dict:
     """
-    Execute ClatScope OSINT command.
+    Execute Native OSINT command.
+    
+    Uses app.osint native modules (no external dependencies).
     
     Args:
         command: Command name (ip, dns, whois, etc.)
@@ -230,31 +237,47 @@ def execute_clatscope(command: str, params: dict) -> dict:
     Returns:
         dict with results
     """
-    from app.osint.clatscope import get_osint
+    # Import native OSINT modules
+    from app.osint import lookup_ip, dns_lookup, whois_lookup, reverse_dns, resolve_domain
+    from app.osint.subdomain import enumerate_subdomains
+    from app.osint.web import check_ssl_cert, check_robots_txt, wayback_lookup, scrape_contacts
+    from app.osint.phone import phone_info
+    from app.osint.email import email_lookup, haveibeenpwned_check
     
-    osint = get_osint()
+    # Get target from params
+    target = params.get("target") or params.get("domain") or params.get("ip") or ""
     
-    # Map commands to functions
+    # Map commands to native functions
     command_map = {
-        "ip": lambda: osint.ip_lookup(params.get("target") or params.get("ip")),
-        "dns": lambda: osint.dns_lookup(params.get("domain")),
-        "whois": lambda: osint.whois_lookup(params.get("domain")),
-        "subdomain": lambda: osint.subdomain_enum(params.get("domain")),
-        "ssl": lambda: osint.ssl_cert(params.get("domain")),
-        "metadata": lambda: osint.web_metadata(params.get("url") or params.get("domain")),
-        "robots": lambda: osint.robots_sitemap(params.get("domain")),
-        "phone": lambda: osint.phone_lookup(params.get("phone")),
-        "email": lambda: osint.email_validate(params.get("email")),
-        "breach": lambda: osint.email_breach(
-            params.get("email"),
-            params.get("api_key")
-        ),
-        "reverse_dns": lambda: osint.reverse_dns(params.get("ip")),
-        "find_origin": lambda: osint.find_origin(params.get("domain")),
+        "ip": lambda: lookup_ip(params.get("target") or params.get("ip") or resolve_domain(target)[0] if resolve_domain(target) else target),
+        "dns": lambda: dns_lookup(target),
+        "whois": lambda: whois_lookup(target),
+        "subdomain": lambda: {"domain": target, "subdomains": enumerate_subdomains(target), "count": len(enumerate_subdomains(target))},
+        "ssl": lambda: check_ssl_cert(target),
+        "robots": lambda: check_robots_txt(target),
+        "wayback": lambda: wayback_lookup(target),
+        "contacts": lambda: scrape_contacts(f"https://{target}"),
+        "phone": lambda: phone_info(params.get("phone", "")),
+        "email": lambda: email_lookup(params.get("email", "")),
+        "breach": lambda: haveibeenpwned_check(params.get("email", ""), params.get("api_key")),
+        "reverse_dns": lambda: reverse_dns(params.get("ip", target)),
+        "find_origin": lambda: {
+            "domain": target,
+            "resolved_ips": resolve_domain(target),
+            "ip_info": lookup_ip(resolve_domain(target)[0]) if resolve_domain(target) else {},
+            "wayback": wayback_lookup(target)
+        },
+        # Full recon combines multiple lookups
+        "full": lambda: {
+            "ip_info": lookup_ip(resolve_domain(target)[0]) if resolve_domain(target) else {},
+            "dns": dns_lookup(target),
+            "whois": whois_lookup(target),
+            "ssl": check_ssl_cert(target),
+        },
     }
     
     if command not in command_map:
-        return {"error": f"Unknown ClatScope command: {command}"}
+        return {"error": f"Unknown OSINT command: {command}. Available: {list(command_map.keys())}"}
     
     try:
         result = command_map[command]()

@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 from pathlib import Path
 
-from app.prompts import get_prompt_loader, RolePrompt
+from app.agent.prompt_loader import get_prompt_loader, RolePrompt
 
 
 @dataclass

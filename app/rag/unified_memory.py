@@ -53,6 +53,12 @@ class UnifiedRAG:
             metadata={"description": "Indexed conversation history"}
         )
         
+        # Session findings collection - persistent scan results
+        self.findings_collection = self.client.get_or_create_collection(
+            name="session_findings",
+            metadata={"description": "Persistent scan findings (subdomains, hosts, vulns)"}
+        )
+        
         # Lazy-loaded components
         self._tool_index_populated = False
         self._cve_db = None
@@ -388,6 +394,179 @@ class UnifiedRAG:
         
         return list(dict.fromkeys(recommendations))  # Remove duplicates
     
+    # ============================================================
+    # SESSION FINDINGS - Persistent scan results storage
+    # ============================================================
+    
+    def add_subdomain(self, subdomain: str, domain: str, ip: str = None,
+                      source: str = None, session_id: str = None):
+        """Store discovered subdomain in RAG for cross-session persistence."""
+        from datetime import datetime
+        
+        doc_id = f"sub_{subdomain.replace('.', '_')}_{domain.replace('.', '_')}"
+        
+        # Create searchable document
+        doc = f"Subdomain {subdomain} of {domain}. IP: {ip or 'unknown'}. Source: {source or 'unknown'}."
+        
+        metadata = {
+            "type": "subdomain",
+            "subdomain": subdomain,
+            "domain": domain,
+            "ip": ip or "",
+            "source": source or "",
+            "session_id": session_id or "",
+            "timestamp": datetime.now().isoformat(),
+        }
+        
+        # Upsert to avoid duplicates
+        try:
+            self.findings_collection.upsert(
+                ids=[doc_id],
+                documents=[doc],
+                metadatas=[metadata],
+            )
+        except Exception as e:
+            print(f"  ⚠️ Failed to store subdomain: {e}")
+    
+    def add_host(self, ip: str, hostname: str = None, ports: List[int] = None,
+                 services: Dict[int, str] = None, domain: str = None,
+                 session_id: str = None):
+        """Store discovered host with ports in RAG."""
+        from datetime import datetime
+        
+        doc_id = f"host_{ip.replace('.', '_')}"
+        
+        # Create searchable document
+        port_info = ", ".join([f"{p}/{services.get(p, 'unknown')}" for p in (ports or [])]) if ports else "no ports scanned"
+        doc = f"Host {ip} ({hostname or 'unknown'}). Open ports: {port_info}. Domain: {domain or 'unknown'}."
+        
+        metadata = {
+            "type": "host",
+            "ip": ip,
+            "hostname": hostname or "",
+            "ports": ",".join(map(str, ports or [])),
+            "domain": domain or "",
+            "session_id": session_id or "",
+            "timestamp": datetime.now().isoformat(),
+        }
+        
+        try:
+            self.findings_collection.upsert(
+                ids=[doc_id],
+                documents=[doc],
+                metadatas=[metadata],
+            )
+        except Exception as e:
+            print(f"  ⚠️ Failed to store host: {e}")
+    
+    def add_vulnerability(self, vuln_type: str, severity: str, target: str,
+                         details: str = None, cve_id: str = None,
+                         tool: str = None, domain: str = None,
+                         session_id: str = None):
+        """Store discovered vulnerability in RAG."""
+        from datetime import datetime
+        import hashlib
+        
+        # Create unique ID based on content
+        hash_input = f"{vuln_type}{target}{details or ''}"
+        doc_id = f"vuln_{hashlib.md5(hash_input.encode()).hexdigest()[:12]}"
+        
+        doc = f"{severity.upper()} vulnerability: {vuln_type} on {target}. {details or ''}. CVE: {cve_id or 'N/A'}."
+        
+        metadata = {
+            "type": "vulnerability",
+            "vuln_type": vuln_type,
+            "severity": severity,
+            "target": target,
+            "cve_id": cve_id or "",
+            "tool": tool or "",
+            "domain": domain or "",
+            "session_id": session_id or "",
+            "timestamp": datetime.now().isoformat(),
+        }
+        
+        try:
+            self.findings_collection.upsert(
+                ids=[doc_id],
+                documents=[doc],
+                metadatas=[metadata],
+            )
+        except Exception as e:
+            print(f"  ⚠️ Failed to store vulnerability: {e}")
+    
+    def get_findings_for_domain(self, domain: str, finding_type: str = None,
+                                n_results: int = 100) -> Dict[str, List[Dict]]:
+        """
+        Retrieve all findings for a specific domain.
+        
+        Returns dict with: subdomains, hosts, vulnerabilities
+        """
+        where_filter = {"domain": domain}
+        if finding_type:
+            where_filter = {"$and": [{"domain": domain}, {"type": finding_type}]}
+        
+        try:
+            results = self.findings_collection.query(
+                query_texts=[f"findings for {domain}"],
+                n_results=n_results,
+                where=where_filter,
+                include=["metadatas", "documents"]
+            )
+        except Exception:
+            # Fallback without filter
+            results = self.findings_collection.query(
+                query_texts=[domain],
+                n_results=n_results,
+                include=["metadatas", "documents"]
+            )
+        
+        findings = {"subdomains": [], "hosts": [], "vulnerabilities": []}
+        
+        if results and results.get("metadatas") and results["metadatas"][0]:
+            for meta in results["metadatas"][0]:
+                ftype = meta.get("type", "")
+                if ftype == "subdomain":
+                    findings["subdomains"].append({
+                        "subdomain": meta.get("subdomain", ""),
+                        "ip": meta.get("ip", ""),
+                        "source": meta.get("source", ""),
+                    })
+                elif ftype == "host":
+                    findings["hosts"].append({
+                        "ip": meta.get("ip", ""),
+                        "hostname": meta.get("hostname", ""),
+                        "ports": meta.get("ports", "").split(",") if meta.get("ports") else [],
+                    })
+                elif ftype == "vulnerability":
+                    findings["vulnerabilities"].append({
+                        "type": meta.get("vuln_type", ""),
+                        "severity": meta.get("severity", ""),
+                        "target": meta.get("target", ""),
+                        "cve_id": meta.get("cve_id", ""),
+                    })
+        
+        return findings
+    
+    def search_findings(self, query: str, n_results: int = 20) -> List[Dict]:
+        """Semantic search across all session findings."""
+        results = self.findings_collection.query(
+            query_texts=[query],
+            n_results=n_results,
+            include=["metadatas", "documents", "distances"]
+        )
+        
+        findings = []
+        if results and results.get("metadatas") and results["metadatas"][0]:
+            for i, meta in enumerate(results["metadatas"][0]):
+                distance = results["distances"][0][i] if results.get("distances") else 1
+                findings.append({
+                    **meta,
+                    "score": max(0, 1 - distance),
+                    "content": results["documents"][0][i] if results.get("documents") else "",
+                })
+        
+        return findings
+    
     def rebuild_tool_index(self):
         """Force rebuild of tool index (useful after metadata updates)."""
         # Delete existing
@@ -410,6 +589,7 @@ class UnifiedRAG:
         return {
             "tools_commands": self.tools_collection.count(),
             "conversations": self.conv_collection.count(),
+            "session_findings": self.findings_collection.count(),
         }
 
 

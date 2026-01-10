@@ -266,11 +266,11 @@ TOOL_DEFINITIONS = [
         "name": "recon-ng",
         "phase": "reconnaissance",
         "attack_type": "passive",
-        "requires": [],
+        "requires": ["advanced_user"],  # Requires manual module setup
         "category": "osint",
-        "description": "Full-featured OSINT reconnaissance framework with modules for hosts, contacts, and subdomains.",
-        "keywords": ["recon-ng", "osint", "reconnaissance", "framework", "contacts", "emails", "intelligence"],
-        "examples": ["use recon-ng", "osint framework", "gather intelligence", "recon framework"],
+        "description": "Advanced OSINT framework requiring module installation. Use clatscope for simpler OSINT.",
+        "keywords": ["recon-ng framework"],  # Narrowed - only match explicit requests
+        "examples": ["run recon-ng"],  # Very specific - only when user explicitly asks
     },
     
     # === DNS/WHOIS ===
