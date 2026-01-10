@@ -307,7 +307,7 @@ class BaseAgent(ABC):
             Agent name to hand off to, or None to continue with current
         """
         # Default handoff based on phase progression
-        from app.agent.phase_manager import get_phase_manager
+        from app.agent.core import get_phase_manager
         
         phase_mgr = get_phase_manager()
         current_phase = phase_mgr.get_current_phase(context)

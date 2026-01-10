@@ -20,8 +20,9 @@ from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from app.agent.context_manager import SessionContext
-    from app.agent.memory import Fact, FailedAction
+    from app.agent.core.context_manager import SessionContext
+    from app.memory import Fact
+    FailedAction = dict  # Simplified - failures stored as dicts now
 
 
 @dataclass
@@ -144,7 +145,7 @@ class ContextAggregator:
     def context_manager(self):
         """Lazy-load context manager."""
         if self._context_manager is None:
-            from app.agent.context_manager import get_context_manager
+            from app.agent.core.context_manager import get_context_manager
             self._context_manager = get_context_manager()
         return self._context_manager
     
@@ -153,7 +154,7 @@ class ContextAggregator:
         """Lazy-load attack memory."""
         if self._attack_memory is None:
             try:
-                from app.agent.memory import get_attack_memory
+                from app.memory import get_attack_memory
                 self._attack_memory = get_attack_memory()
             except:
                 pass

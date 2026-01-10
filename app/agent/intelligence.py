@@ -2,13 +2,16 @@
 SNODE Intelligence Layer
 ========================
 
+REDESIGNED: Pure LLM-based intelligence with no hardcoded keywords.
+
 Central intelligence module that provides:
-1. Semantic query understanding with embeddings
+1. Semantic query understanding via LLM
 2. RAG-based context retrieval
 3. Query expansion for better tool/concept matching
 4. Rich prompt construction with injected context
 """
 import re
+import json
 from typing import Dict, Any, List, Optional, Tuple
 
 
@@ -16,7 +19,8 @@ class SNODEIntelligence:
     """
     Central intelligence layer for SNODE.
     
-    Provides semantic understanding, context retrieval, and rich prompting.
+    REDESIGNED: Uses LLM for all semantic understanding.
+    No hardcoded keyword matching.
     """
     
     def __init__(self):
@@ -45,7 +49,7 @@ class SNODEIntelligence:
     
     def understand_query(self, query: str, context: dict = None) -> Dict[str, Any]:
         """
-        Understand user query with semantic analysis.
+        Understand user query with semantic analysis via LLM.
         
         Returns:
         {
@@ -65,7 +69,7 @@ class SNODEIntelligence:
             "expanded_terms": expand_query(query),
             "intent": None,
             "detected_target": self._extract_target(query),
-            "detected_phase": self._infer_phase(query, context),
+            "detected_phase": self._infer_phase_llm(query, context),
             "relevant_tools": [],
             "retrieved_context": {},
         }
@@ -74,7 +78,6 @@ class SNODEIntelligence:
         target = result["detected_target"] or (context.get("last_domain") if context else None)
         if target and self.rag:
             try:
-                # Search for relevant past findings
                 result["retrieved_context"] = {
                     "domain_findings": self.rag.get_findings_for_domain(target),
                     "similar_queries": self.rag.get_relevant_context(query, domain=target, n_results=3),
@@ -82,7 +85,7 @@ class SNODEIntelligence:
             except Exception:
                 pass
         
-        # Get relevant tools based on expanded query
+        # Get relevant tools based on LLM suggestion
         if self.rag:
             try:
                 for term in result["expanded_terms"][:3]:
@@ -111,41 +114,72 @@ class SNODEIntelligence:
         
         return None
     
-    def _infer_phase(self, query: str, context: dict = None) -> int:
-        """Infer current pentest phase from query and context."""
-        query_lower = query.lower()
+    def _infer_phase_llm(self, query: str, context: dict = None) -> int:
+        """
+        Infer current pentest phase using LLM.
         
-        # Phase indicators in query
-        phase_keywords = {
-            1: ["recon", "subdomain", "osint", "dns", "whois", "harvest", "enumerate", "gather", "find"],
-            2: ["scan", "port", "nmap", "masscan", "discover", "probe", "httpx"],
-            3: ["vuln", "nuclei", "nikto", "cve", "assess", "wpscan", "check"],
-            4: ["exploit", "attack", "sqlmap", "inject", "bypass", "crack", "shell"],
-            5: ["privesc", "lateral", "pivot", "persist", "escalat", "dump", "mimikatz"],
-            6: ["report", "document", "summarize", "finding", "executive"],
-        }
-        
-        for phase, keywords in phase_keywords.items():
-            if any(kw in query_lower for kw in keywords):
-                return phase
-        
-        # Infer from context state
+        REDESIGNED: No hardcoded keywords. Pure LLM inference.
+        """
+        # Quick context-based inference (no LLM needed for obvious cases)
         if context:
-            has_subs = context.get("has_subdomains", False)
-            has_ports = context.get("has_ports", False)
-            has_vulns = context.get("vulns_found", [])
-            has_shell = context.get("shell_obtained", False)
-            
-            if has_shell:
+            if context.get("shell_obtained"):
                 return 5
-            if has_vulns:
-                return 4
-            if has_ports:
+            if context.get("vulns_found"):
+                return 4 if len(context.get("vulns_found", [])) > 0 else 3
+            if context.get("has_ports") or context.get("open_ports"):
                 return 3
-            if has_subs:
+            if context.get("has_subdomains") or context.get("subdomains"):
                 return 2
         
+        # Use LLM for query-based inference
+        try:
+            context_summary = self._build_context_summary(context) if context else "No context"
+            
+            prompt = f"""Determine the pentest phase for this task.
+
+TASK: {query}
+CONTEXT: {context_summary}
+
+PHASES:
+1 = Reconnaissance (OSINT, subdomains, DNS, info gathering)
+2 = Scanning (port scans, service detection, web discovery)
+3 = Vulnerability Assessment (vuln scans, CVE detection)
+4 = Exploitation (SQLi, RCE, gaining access)
+5 = Post-Exploitation (privesc, lateral movement)
+6 = Reporting (documentation, summaries)
+
+Return ONLY the phase number (1-6):"""
+
+            response = self.llm.generate(prompt, timeout=15, stream=False)
+            
+            # Extract number from response
+            match = re.search(r'[1-6]', response)
+            if match:
+                return int(match.group())
+                
+        except Exception:
+            pass
+        
         return 1  # Default to recon
+    
+    def _build_context_summary(self, context: dict) -> str:
+        """Build a concise context summary."""
+        parts = []
+        
+        if context.get("last_domain"):
+            parts.append(f"Target: {context['last_domain']}")
+        if context.get("subdomain_count") or context.get("subdomains"):
+            count = context.get("subdomain_count") or len(context.get("subdomains", []))
+            parts.append(f"Subdomains: {count}")
+        if context.get("port_count") or context.get("open_ports"):
+            count = context.get("port_count") or len(context.get("open_ports", []))
+            parts.append(f"Ports: {count}")
+        if context.get("vulns_found"):
+            parts.append(f"Vulns: {len(context['vulns_found'])}")
+        if context.get("tools_run"):
+            parts.append(f"Tools: {', '.join(context['tools_run'][-3:])}")
+        
+        return "; ".join(parts) if parts else "No data"
     
     def build_rich_prompt(self, query: str, context: dict = None, 
                           understanding: dict = None) -> str:
@@ -191,26 +225,13 @@ class SNODEIntelligence:
     
     def classify_intent(self, query: str, context: dict = None) -> str:
         """
-        Classify user intent using LLM with rich context.
+        Classify user intent using LLM.
         
         Returns: SECURITY_TASK, MEMORY_QUERY, or QUESTION
         """
         from app.agent.prompts import INTENT_CLASSIFICATION_PROMPT
         
-        # Build context summary
-        context_summary = "No previous context"
-        if context:
-            parts = []
-            if context.get("last_domain"):
-                parts.append(f"Target: {context['last_domain']}")
-            if context.get("subdomain_count"):
-                parts.append(f"Subdomains: {context['subdomain_count']}")
-            if context.get("port_count"):
-                parts.append(f"Ports: {context['port_count']}")
-            if context.get("tools_run"):
-                parts.append(f"Tools run: {', '.join(context['tools_run'][-3:])}")
-            if parts:
-                context_summary = "; ".join(parts)
+        context_summary = self._build_context_summary(context) if context else "No context"
         
         prompt = INTENT_CLASSIFICATION_PROMPT.format(
             query=query,
@@ -218,30 +239,21 @@ class SNODEIntelligence:
         )
         
         try:
-            response = self.llm.generate(prompt, timeout=60, stream=False)  # No stream for quick classification
+            response = self.llm.generate(prompt, timeout=60, stream=False)
             response_clean = response.strip().upper()
             
-            # Look for exact intent words at start or alone
-            # SECURITY_TASK indicators
-            if response_clean.startswith("SECURITY") or response_clean == "SECURITY_TASK":
+            # Extract intent from response
+            if "SECURITY" in response_clean or "TASK" in response_clean:
                 return "SECURITY_TASK"
-            # MEMORY_QUERY indicators - must be exact or explicit
-            if response_clean == "MEMORY_QUERY" or response_clean.startswith("MEMORY_QUERY"):
+            if "MEMORY" in response_clean:
                 return "MEMORY_QUERY"
-            # QUESTION indicators
-            if response_clean.startswith("QUESTION") or response_clean == "QUESTION":
+            if "QUESTION" in response_clean:
                 return "QUESTION"
             
-            # Fallback - check for task-related keywords
-            if any(kw in response_clean for kw in ["TASK", "SCAN", "ATTACK", "RUN", "EXECUTE"]):
-                return "SECURITY_TASK"
-            elif "MEMORY" in response_clean and "QUERY" in response_clean:
-                return "MEMORY_QUERY"
-            else:
-                # Default to QUESTION for unclear cases (safer - will use LLM to answer)
-                return "QUESTION"
+            # Default based on response content
+            return "SECURITY_TASK"
+            
         except Exception:
-            # Default to security task for pentest assistant
             return "SECURITY_TASK"
     
     def get_relevant_cves(self, technologies: List[str]) -> List[Dict]:
@@ -254,20 +266,60 @@ class SNODEIntelligence:
         except Exception:
             return []
     
+    def suggest_tools_llm(self, query: str, context: dict = None, 
+                          max_tools: int = 3) -> List[str]:
+        """
+        Suggest tools using LLM intelligence.
+        
+        REDESIGNED: Pure LLM-based tool suggestion.
+        """
+        context_summary = self._build_context_summary(context) if context else "No data"
+        
+        prompt = f"""Suggest the best security tools for this task.
+
+TASK: {query}
+CURRENT STATE: {context_summary}
+
+AVAILABLE TOOLS (by category):
+- Recon: subfinder, amass, bbot, clatscope, whois
+- Scanning: nmap, masscan, httpx, gobuster, ffuf
+- Vuln: nuclei, nikto, wpscan, testssl
+- Exploit: sqlmap, hydra, searchsploit, metasploit
+- PostExploit: linpeas, mimikatz, bloodhound
+
+Return ONLY a comma-separated list of {max_tools} tools (no explanation):"""
+
+        try:
+            response = self.llm.generate(prompt, timeout=15, stream=False)
+            
+            # Parse comma-separated tools
+            tools = [t.strip().lower() for t in response.split(',')]
+            tools = [t for t in tools if t and len(t) < 30]  # Filter invalid
+            
+            return tools[:max_tools]
+            
+        except Exception:
+            return []
+    
     def suggest_tools(self, query: str, context: dict = None, 
                       max_tools: int = 3) -> List[str]:
         """
         Suggest appropriate tools for the query.
         
-        Uses semantic search + context awareness.
+        Uses LLM + RAG for intelligent suggestion.
         """
+        # Try LLM first
+        llm_tools = self.suggest_tools_llm(query, context, max_tools)
+        if llm_tools:
+            return llm_tools
+        
+        # Fallback to RAG-based
         understanding = self.understand_query(query, context)
         suggested = understanding.get("relevant_tools", [])[:max_tools]
         
-        # Filter out already-run tools if repeating
+        # Filter out recently-run tools
         if context:
             tools_run = context.get("tools_run", [])
-            # Don't repeat same tool unless explicitly asked
             if "again" not in query.lower() and "retry" not in query.lower():
                 suggested = [t for t in suggested if t not in tools_run[-2:]]
         
@@ -290,67 +342,55 @@ def infer_phase(context: dict, llm=None) -> dict:
     """
     Infer the current pentest phase based on context.
     
-    Returns: {"phase": 1-6, "reason": "..."}
+    REDESIGNED: Uses LLM for ambiguous cases.
     
-    Phases:
-    1 = Reconnaissance (gathering info, OSINT, subdomains)
-    2 = Scanning (ports, services, web discovery)
-    3 = Vulnerability Assessment (vuln scanning, CVEs)
-    4 = Exploitation (exploiting vulns, gaining access)
-    5 = Post-Exploitation (privesc, lateral movement)
-    6 = Reporting (documenting findings)
+    Returns: {"phase": 1-6, "reason": "..."}
     """
-    import re
-    import json
+    # Quick heuristic for clear cases
+    if context.get("shell_obtained"):
+        return {"phase": 5, "reason": "Shell obtained, in post-exploitation"}
+    
+    exploits_run = context.get("exploits_run", [])
+    tools_run = context.get("tools_run", [])
+    
+    if exploits_run:
+        return {"phase": 4, "reason": "Exploitation in progress"}
+    
+    vulns_found = context.get("vulns_found", [])
+    if vulns_found:
+        return {"phase": 3, "reason": "Vulnerabilities found, assessment in progress"}
+    
+    open_ports = context.get("open_ports", [])
+    has_ports = context.get("has_ports", False)
+    if has_ports or open_ports:
+        return {"phase": 2, "reason": "Ports discovered, scanning phase"}
     
     has_subdomains = context.get("has_subdomains", False)
     subdomain_count = context.get("subdomain_count", 0)
-    has_ports = context.get("has_ports", False)
-    open_ports = context.get("open_ports", [])
-    vulns_found = context.get("vulns_found", [])
-    services = context.get("services", [])
-    tools_run = context.get("tools_run", [])
-    exploits_run = context.get("exploits_run", [])
-    shell_obtained = context.get("shell_obtained", False)
-    
-    # Quick heuristic (no LLM call needed for obvious cases)
-    if shell_obtained:
-        return {"phase": 5, "reason": "Shell obtained, in post-exploitation"}
-    
-    if exploits_run or "sqlmap" in tools_run or "hydra" in tools_run or "msfconsole" in tools_run:
-        return {"phase": 4, "reason": "Exploitation tools have been run"}
-    
-    if vulns_found or "nuclei" in tools_run or "nikto" in tools_run:
-        return {"phase": 3, "reason": "Vulnerability scanning in progress"}
-    
-    if has_ports or open_ports or "nmap" in tools_run or "masscan" in tools_run:
-        return {"phase": 2, "reason": "Port scanning completed, in scanning phase"}
-    
-    if has_subdomains or subdomain_count > 0:
+    subdomains = context.get("subdomains", [])
+    if has_subdomains or subdomain_count > 0 or subdomains:
         return {"phase": 2, "reason": "Subdomains found, ready for scanning"}
     
     if not tools_run:
-        return {"phase": 1, "reason": "No tools run yet, starting reconnaissance"}
+        return {"phase": 1, "reason": "Starting reconnaissance"}
     
-    # For ambiguous cases, ask LLM if available
+    # For ambiguous cases, use LLM
     if llm:
-        prompt = f'''Analyze this pentest context and determine the current phase.
+        try:
+            prompt = f"""Analyze this pentest context and determine the phase.
 
 CONTEXT:
-- Subdomains: {subdomain_count}
-- Ports scanned: {has_ports}
-- Open ports: {open_ports[:5] if open_ports else "none"}
+- Subdomains: {len(subdomains)}
+- Ports: {len(open_ports)}
 - Vulnerabilities: {len(vulns_found)}
 - Tools run: {tools_run[-5:] if tools_run else "none"}
 
 PHASES: 1=Recon, 2=Scanning, 3=VulnAssess, 4=Exploit, 5=PostExploit, 6=Report
 
-Return ONLY: {{"phase": N, "reason": "brief explanation"}}'''
+Return JSON: {{"phase": N, "reason": "explanation"}}"""
 
-        try:
-            response = llm.generate(prompt, timeout=20)
-            clean = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
-            match = re.search(r'\{[^}]+\}', clean)
+            response = llm.generate(prompt, timeout=20, stream=False)
+            match = re.search(r'\{[^}]+\}', response)
             if match:
                 result = json.loads(match.group())
                 return {
@@ -360,4 +400,4 @@ Return ONLY: {{"phase": N, "reason": "brief explanation"}}'''
         except Exception:
             pass
     
-    return {"phase": 1, "reason": "Default - starting reconnaissance"}
+    return {"phase": 1, "reason": "Default reconnaissance phase"}

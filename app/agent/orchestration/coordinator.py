@@ -1,9 +1,10 @@
 """
-Agent Coordinator - Routes Queries to Specialized Agents (6-Phase PTES)
-========================================================================
+Agent Coordinator - LLM-Driven Agent Router (6-Phase PTES)
+==========================================================
 
-The brain that decides which agent handles each query.
-Uses phase detection and query analysis to route appropriately.
+REDESIGNED: Pure LLM-based routing with no keyword matching.
+The brain that decides which agent handles each query using
+semantic understanding.
 
 PTES Phases:
 1. Reconnaissance - OSINT, subdomain, DNS
@@ -14,13 +15,20 @@ PTES Phases:
 6. Reporting - Generate reports
 """
 from typing import Dict, Any, Optional, List
-from .base_agent import BaseAgent
-from .recon_agent import ReconAgent
-from .scan_agent import ScanAgent
-from .vuln_agent import VulnAgent
-from .exploit_agent import ExploitAgent
-from .postexploit_agent import PostExploitAgent
-from .report_agent import ReportAgent
+import json
+import re
+
+# Import agents from agents folder
+from app.agent.agents import (
+    BaseAgent,
+    ReconAgent,
+    ScanAgent,
+    VulnAgent,
+    ExploitAgent,
+    PostExploitAgent,
+    ReportAgent,
+    SystemAgent,
+)
 
 
 # Phase names
@@ -36,19 +44,17 @@ PHASE_NAMES = {
 
 class AgentCoordinator:
     """
-    Coordinates between specialized agents for 6-phase pentest.
+    LLM-driven coordinator for specialized agents.
     
-    Routes queries to the most appropriate agent based on:
-    1. Current pentest phase (from context)
-    2. Query keywords and intent
-    3. Available data (subdomains, ports, vulns)
+    REDESIGNED: No keyword matching. Pure LLM semantic routing.
+    Routes queries based on:
+    1. LLM understanding of intent and context
+    2. Current accumulated findings
+    3. Task progression logic
     """
     
     def __init__(self, llm=None):
         """Initialize coordinator with all specialized agents."""
-        # Import system agent
-        from .system_agent import SystemAgent
-        
         self.agents: Dict[str, BaseAgent] = {
             "recon": ReconAgent(llm),        # Phase 1
             "scan": ScanAgent(llm),          # Phase 2
@@ -64,14 +70,14 @@ class AgentCoordinator:
     def llm(self):
         """Lazy-load LLM."""
         if self._llm is None:
-            from app.agent.graph import OllamaClient
+            from app.llm.client import OllamaClient
             self._llm = OllamaClient()
         return self._llm
     
     @property
     def shared_memory(self):
         """Get shared memory for agent communication."""
-        from app.agent.shared_memory import get_shared_memory
+        from app.memory import get_shared_memory
         return get_shared_memory()
     
     def get_context_for_agent(self, agent_name: str) -> Dict[str, Any]:
@@ -81,111 +87,126 @@ class AgentCoordinator:
     def update_shared_memory(self, context: Dict[str, Any]):
         """Update shared memory from context dict."""
         self.shared_memory.update_from_dict(context)
-
+    
+    def _summarize_context(self, context: Dict[str, Any]) -> str:
+        """Create a concise context summary for LLM."""
+        parts = []
+        
+        target = context.get("target_domain") or context.get("last_domain")
+        if target:
+            parts.append(f"Target: {target}")
+        
+        subdomain_count = len(context.get("subdomains", []))
+        if subdomain_count > 0:
+            parts.append(f"Subdomains: {subdomain_count}")
+        
+        ip_count = len(context.get("ips", []))
+        if ip_count > 0:
+            parts.append(f"IPs: {ip_count}")
+        
+        port_count = len(context.get("open_ports", []))
+        if port_count > 0:
+            parts.append(f"Open ports: {port_count}")
+        
+        vuln_count = len(context.get("vulns_found", []))
+        if vuln_count > 0:
+            parts.append(f"Vulnerabilities: {vuln_count}")
+        
+        if context.get("shell_obtained"):
+            parts.append("Shell: obtained")
+        
+        tools_run = context.get("tools_run", [])
+        if tools_run:
+            parts.append(f"Tools run: {', '.join(tools_run[-5:])}")
+        
+        return "; ".join(parts) if parts else "No data gathered yet"
     
     def route(self, query: str, context: Dict[str, Any]) -> BaseAgent:
         """
-        Determine which agent should handle this query using LLM intelligence.
+        Route query to best agent using PURE LLM intelligence.
         
         NO HARDCODED KEYWORDS - LLM decides based on semantic understanding.
+        
+        Args:
+            query: User's query/task
+            context: Current session context
+            
+        Returns:
+            The most appropriate agent for this query
         """
-        from app.agent.prompts import format_prompt
         from app.llm.client import OllamaClient
         
-        # Infer current phase
-        phase = self._infer_phase(context)
+        context_summary = self._summarize_context(context)
         
-        # Build context for LLM
-        has_subdomains = context.get("has_subdomains", False) or bool(context.get("subdomains"))
-        has_ports = context.get("has_ports", False) or bool(context.get("open_ports"))
-        has_vulns = bool(context.get("vulns_found"))
-        target = context.get("target_domain") or context.get("last_domain") or "not set"
-        
-        # Use LLM to route
+        prompt = f"""You are routing a pentest task to the best agent.
+
+TASK: {query}
+CONTEXT: {context_summary}
+
+AVAILABLE AGENTS:
+- recon: Subdomain enumeration, OSINT, DNS lookup, WHOIS (tools: amass, subfinder, whois, clatscope, bbot)
+- scan: Port scanning, service detection, web discovery (tools: nmap, masscan, httpx, gobuster, ffuf)
+- vuln: Vulnerability scanning, CVE detection (tools: nuclei, nikto, wpscan, testssl)
+- exploit: Exploitation, SQL injection, brute force (tools: sqlmap, hydra, metasploit, searchsploit)
+- postexploit: Post-exploitation, privilege escalation (tools: linpeas, mimikatz, bloodhound)
+- report: Generate reports and summaries
+
+ROUTING LOGIC:
+- If no data gathered yet → recon
+- If subdomains/IPs found but no ports → scan
+- If ports found but no vulnerabilities → vuln
+- If vulnerabilities found → exploit
+- If shell obtained → postexploit
+- If asked for summary/report → report
+
+Which agent should handle this task? Return ONLY the agent name (one word)."""
+
         try:
-            prompt = format_prompt(
-                "agent_router",
-                query=query,
-                current_phase=phase,
-                target=target,
-                has_subdomains=has_subdomains,
-                has_ports=has_ports,
-                has_vulns=has_vulns
-            )
-            
             llm = OllamaClient()
             response = llm.generate(prompt, timeout=15, stream=False).strip().lower()
             
-            # Extract agent name from response (handle multi-word responses)
+            # Extract agent name - find first valid agent in response
             valid_agents = ["recon", "scan", "vuln", "exploit", "postexploit", "report", "system"]
-            agent_name = None
             
             for agent in valid_agents:
                 if agent in response:
-                    agent_name = agent
-                    break
-            
-            if agent_name and agent_name in self.agents:
-                return self.agents[agent_name]
+                    print(f"  🤖 Agent '{agent}' selected tools: {self.agents[agent].SPECIALIZED_TOOLS[:3]}")
+                    return self.agents[agent]
             
         except Exception as e:
-            # Fallback to phase-based routing on LLM error
-            print(f"  ⚠️ LLM routing failed: {e}, using phase-based fallback")
+            print(f"  ⚠️ LLM routing error: {e}")
         
-        # Fall back to phase-based routing
-        phase_agent_map = {
-            1: "recon",
-            2: "scan",
-            3: "vuln",
-            4: "exploit",
-            5: "postexploit",
-            6: "report"
-        }
+        # Fallback: use context-based inference
+        return self._fallback_route(context)
+    
+    def _fallback_route(self, context: Dict[str, Any]) -> BaseAgent:
+        """Fallback routing when LLM fails - based on context state."""
+        # Check what data we have
+        has_subdomains = bool(context.get("subdomains")) or context.get("has_subdomains")
+        has_ports = bool(context.get("open_ports")) or context.get("has_ports")
+        has_vulns = bool(context.get("vulns_found"))
+        has_shell = context.get("shell_obtained", False)
         
-        return self.agents.get(phase_agent_map.get(phase, "recon"), self.agents["recon"])
+        if has_shell:
+            return self.agents["postexploit"]
+        if has_vulns:
+            return self.agents["exploit"]
+        if has_ports:
+            return self.agents["vuln"]
+        if has_subdomains:
+            return self.agents["scan"]
+        
+        return self.agents["recon"]
     
     def _infer_phase(self, context: Dict[str, Any]) -> int:
         """
-        Determine current pentest phase from context.
+        Infer current phase from context using LLM.
         
-        Returns CURRENT phase based on what tools have been run:
-        Phase 1: Reconnaissance - Running/completed recon tools
-        Phase 2: Scanning - Running scanning tools (nmap, etc)
-        Phase 3: Vulnerability - Running vuln scanners
-        Phase 4: Exploitation - Running exploit tools
-        Phase 5: Post-Exploitation - Shell obtained, running post-exploit
-        Phase 6: Reporting - Documenting findings
+        Returns phase number (1-6) based on accumulated findings.
         """
-        # Check context state
-        tools_run = context.get("tools_run", [])
-        vulns_found = context.get("vulns_found", [])
-        exploits_run = context.get("exploits_run", [])
-        shell_obtained = context.get("shell_obtained", False)
-        
-        # Phase 6: Reporting - explicit request
-        if context.get("generate_report"):
-            return 6
-        
-        # Phase 5: Post-exploitation - shell obtained
-        if shell_obtained or any(t in tools_run for t in ["mimikatz", "linpeas", "winpeas", "bloodhound"]):
-            return 5
-        
-        # Phase 4: Exploitation
-        if exploits_run or any(t in tools_run for t in ["sqlmap", "hydra", "msfconsole", "searchsploit"]):
-            return 4
-        
-        # Phase 3: Vulnerability assessment
-        if vulns_found or any(t in tools_run for t in ["nuclei", "nikto", "wpscan"]):
-            return 3
-        
-        # Phase 2: Scanning - when scanning tools are run
-        has_ports = context.get("has_ports", False) or context.get("open_ports")
-        if has_ports or any(t in tools_run for t in ["nmap", "masscan", "rustscan", "httpx", "gobuster", "ffuf"]):
-            return 2
-        
-        # Phase 1: Reconnaissance - default, or when recon tools are run
-        # Having subdomains means recon is in progress, NOT that we're in phase 2
-        return 1
+        from app.agent.core import get_phase_manager
+        pm = get_phase_manager()
+        return pm.get_current_phase(context)
     
     def plan_with_agent(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -196,14 +217,14 @@ class AgentCoordinator:
         Returns:
             Dict with agent name, tools, commands, and reasoning.
         """
-        # Select agent
+        # Select agent using LLM
         agent = self.route(query, context)
         
         # Get agent's plan - with user tool priority
         plan = agent.plan_with_user_priority(query, context)
         
         # Add routing info
-        plan["routed_by"] = "coordinator"
+        plan["routed_by"] = "llm_coordinator"
         plan["phase"] = self._infer_phase(context)
         
         return plan
@@ -221,17 +242,30 @@ class AgentCoordinator:
         tools = plan.get("tools", [])
         commands = plan.get("commands", {})
         
+        # Get all available targets
+        targets = self._get_all_targets(context)
+        
         # Execute each tool
         results = {}
         for tool in tools:
-            command = commands.get(tool, list(agent.registry.tools.get(tool, {}).commands.keys())[0] if agent.registry.is_available(tool) else None)
+            command = commands.get(tool)
+            if not command:
+                # Get first available command for tool
+                spec = agent.registry.tools.get(tool)
+                if spec and spec.commands:
+                    command = list(spec.commands.keys())[0]
+            
             if command:
-                # Get params from context
+                # Get params from context - use all discovered targets
+                primary_target = targets[0] if targets else context.get("last_domain", "")
                 params = {
-                    "domain": context.get("last_domain", ""),
-                    "target": context.get("last_domain", ""),
-                    "url": f"https://{context.get('last_domain', '')}"
+                    "domain": primary_target,
+                    "target": primary_target,
+                    "url": f"https://{primary_target}" if primary_target else "",
+                    "targets": targets[:20]  # For batch operations
                 }
+                
+                print(f"  🤖 Agent '{agent.AGENT_NAME}' executing {tool}...")
                 results[tool] = agent.execute_tool(tool, command, params)
         
         return {
@@ -240,6 +274,26 @@ class AgentCoordinator:
             "results": results,
             "reasoning": plan.get("reasoning", "")
         }
+    
+    def _get_all_targets(self, context: Dict[str, Any]) -> List[str]:
+        """Get all targets for execution from context."""
+        targets = []
+        
+        # Main domain
+        if context.get("target_domain"):
+            targets.append(context["target_domain"])
+        elif context.get("last_domain"):
+            targets.append(context["last_domain"])
+        
+        # Discovered subdomains
+        if context.get("subdomains"):
+            targets.extend(context["subdomains"][:50])
+        
+        # Discovered IPs
+        if context.get("ips"):
+            targets.extend(context["ips"][:20])
+        
+        return list(set(targets))
     
     def get_all_agents(self) -> List[Dict[str, Any]]:
         """Get info about all available agents."""
@@ -265,27 +319,16 @@ class AgentCoordinator:
         """
         Use LLM-driven PhaseAnalyzer to evaluate if phase is complete.
         
-        ENHANCED: Now uses dedicated phase_analyzer.md prompt for
-        intelligent phase completion detection and transition suggestions.
-        
         Returns:
-            Dict with:
-                - phase: current phase number
-                - phase_name: current phase name
-                - is_complete: bool
-                - reason: LLM's explanation
-                - next_action: recommended next step
-                - next_phase: next phase number (if complete)
-                - next_agent: next agent name (if complete)
-                - suggested_tools: tools for next step
+            Dict with phase info, completion status, and suggestions
         """
-        from app.agent.phase_analyzer import analyze_phase_completion
+        from app.agent.core import analyze_phase_completion
         
         phase = self._infer_phase(context)
         
         print(f"  🔍 Evaluating {PHASE_NAMES.get(phase, 'Unknown')} phase completion...")
         
-        # Use our new LLM-driven PhaseAnalyzer
+        # Use LLM-driven PhaseAnalyzer
         analysis = analyze_phase_completion(context)
         
         if analysis:
@@ -305,12 +348,10 @@ class AgentCoordinator:
                 result["next_phase_name"] = analysis.next_phase_name
                 result["next_agent"] = self._get_agent_for_phase(analysis.next_phase).AGENT_NAME
             
-            # Print the suggestion message
             print(analysis.to_suggestion_message())
-            
             return result
         
-        # Fallback to agent's is_complete method if PhaseAnalyzer fails
+        # Fallback to agent's is_complete method
         current_agent = self._get_agent_for_phase(phase)
         is_complete, reason, next_action = current_agent.is_complete(context)
         
@@ -331,24 +372,25 @@ class AgentCoordinator:
     
     def auto_advance(self, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        Check if current phase is complete and suggest advancing.
+        Check if current phase is complete and automatically advance.
         
-        Returns None if phase is not complete, otherwise returns
-        suggestion for next phase.
+        AUTONOMOUS MODE: No user confirmation needed.
+        
+        Returns:
+            Evaluation result with next phase info
         """
         evaluation = self.evaluate_phase_completion(context)
         
         if evaluation["is_complete"]:
             print(f"  ✅ {evaluation['phase_name']} phase COMPLETE: {evaluation['reason']}")
             if evaluation.get("next_phase"):
-                print(f"  🔄 Ready to advance to {evaluation['next_phase_name']} phase")
+                print(f"  🔄 Auto-advancing to {evaluation['next_phase_name']} phase")
             return evaluation
         else:
             print(f"  ⏳ {evaluation['phase_name']} phase INCOMPLETE: {evaluation['reason']}")
             if evaluation.get("next_action"):
                 print(f"  💡 Suggested: {evaluation['next_action']}")
             return None
-
 
 
 # Singleton instance

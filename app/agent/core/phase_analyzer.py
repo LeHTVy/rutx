@@ -95,7 +95,7 @@ class PhaseAnalyzer:
             PhaseAnalysisResult with completion status and suggestions
         """
         from app.agent.prompts import format_prompt
-        from app.agent.phase_manager import get_phase_manager
+        from app.agent.core.phase_manager import get_phase_manager
         
         # Get current phase
         phase_mgr = get_phase_manager()

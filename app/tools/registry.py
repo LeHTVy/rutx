@@ -174,6 +174,86 @@ class ToolRegistry:
             return self.tools[tool].install_hint
         return f"Unknown tool: {tool}"
     
+    def get_tools_for_llm(self, category: ToolCategory = None, available_only: bool = True) -> str:
+        """
+        Format tool metadata for LLM consumption.
+        
+        Returns a structured string that LLM can use to select tools and commands.
+        This allows LLM to make intelligent tool choices based on metadata.
+        """
+        lines = []
+        
+        for name, spec in sorted(self.tools.items()):
+            if available_only and not spec.is_available:
+                continue
+            if category and spec.category != category:
+                continue
+            
+            # Tool header
+            status = "✓" if spec.is_available else "✗"
+            lines.append(f"[{status}] {name} ({spec.category.value})")
+            lines.append(f"    Description: {spec.description}")
+            
+            # Commands
+            if spec.commands:
+                lines.append(f"    Commands:")
+                for cmd_name, cmd_template in spec.commands.items():
+                    # Extract required params from args
+                    params = [p.strip("{}") for p in cmd_template.args if p.startswith("{")]
+                    param_str = f"({', '.join(params)})" if params else ""
+                    sudo_str = " [sudo]" if cmd_template.requires_sudo else ""
+                    lines.append(f"      - {cmd_name}{param_str}{sudo_str}")
+            
+            lines.append("")
+        
+        return "\n".join(lines)
+    
+    def get_tool_spec_dict(self, tool: str) -> Optional[Dict[str, Any]]:
+        """
+        Get tool spec as dictionary for LLM.
+        
+        Returns complete metadata for a single tool.
+        """
+        if tool not in self.tools:
+            return None
+        
+        spec = self.tools[tool]
+        return {
+            "name": spec.name,
+            "category": spec.category.value,
+            "description": spec.description,
+            "available": spec.is_available,
+            "commands": {
+                cmd_name: {
+                    "args": cmd.args,
+                    "timeout": cmd.timeout,
+                    "requires_sudo": cmd.requires_sudo,
+                    "params": [p.strip("{}") for p in cmd.args if p.startswith("{")]
+                }
+                for cmd_name, cmd in spec.commands.items()
+            }
+        }
+    
+    def get_all_tools_summary(self) -> Dict[str, List[str]]:
+        """
+        Get summary of tools grouped by category.
+        
+        Useful for LLM to understand available capabilities.
+        """
+        by_category = {}
+        for name, spec in self.tools.items():
+            if not spec.is_available:
+                continue
+            cat = spec.category.value
+            if cat not in by_category:
+                by_category[cat] = []
+            by_category[cat].append({
+                "name": name,
+                "description": spec.description[:50],
+                "commands": list(spec.commands.keys())
+            })
+        return by_category
+    
     def execute(
         self,
         tool: str,

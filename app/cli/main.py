@@ -470,7 +470,7 @@ def run_snode():
                 console.print(f"[dim]Press Ctrl+C to stop at any time[/]\n")
                 
                 try:
-                    from app.agent.autonomous_orchestrator import get_orchestrator, OrchestrationStatus
+                    from app.agent.orchestration import get_orchestrator, OrchestrationStatus
                     from app.cli.countdown import get_countdown_runner
                     
                     orchestrator = get_orchestrator()

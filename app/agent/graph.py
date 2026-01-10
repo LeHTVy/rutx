@@ -22,14 +22,18 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from app.llm import get_llm_config
 from app.tools.registry import get_registry
-from app.agent.coordinator import get_coordinator
 
-# New infrastructure imports
-from app.agent.context_manager import get_context_manager, SessionContext
-from app.agent.context_aggregator import get_context_aggregator, AggregatedContext
-from app.agent.validators import get_plan_validator, get_tool_validator, ValidationResult
-from app.agent.fallback_manager import get_fallback_manager
-from app.agent.phase_manager import get_phase_manager, PhaseGateAction, PHASE_NAMES
+# Reorganized imports - using new folder structure
+from app.agent.orchestration import get_coordinator
+from app.agent.core import (
+    get_context_manager, SessionContext,
+    get_context_aggregator, AggregatedContext,
+    get_phase_manager, PHASE_NAMES,
+)
+from app.agent.utils import (
+    get_plan_validator, get_tool_validator, ValidationResult,
+    get_fallback_manager,
+)
 
 
 # ============================================================
@@ -115,6 +119,17 @@ def intent_node(state: AgentState) -> AgentState:
     
     suggested_tools = state.get("suggested_tools", [])
     context = state.get("context", {})
+    
+    # ─────────────────────────────────────────────────────────
+    # AUTONOMOUS MODE DETECTION
+    # "attack" command enables auto_mode for full autonomous chain
+    # ─────────────────────────────────────────────────────────
+    auto_mode_triggers = ["attack ", "autonomous ", "auto ", "pentest ", "pwn ", "hack "]
+    if any(query.startswith(trigger) for trigger in auto_mode_triggers):
+        context["auto_mode"] = True
+        context["auto_chain_count"] = 0
+        print(f"  🤖 AUTONOMOUS MODE enabled - will auto-chain tools")
+        # Don't modify the query, just set the flag
     
     # Quick confirmations (exact matches - no LLM needed)
     if query in ["yes", "y", "ok", "go", "run", "execute", "proceed"]:
@@ -1174,7 +1189,8 @@ def executor_node(state: AgentState) -> AgentState:
             else:
                 print(f"{output[:300]}...\n... (truncated) ...\n{output[-300:]}")
             try:
-                from app.agent.output_parser import get_output_parser
+                from app.agent.utils.output_parser import OutputParser
+                get_output_parser = OutputParser
                 parser = get_output_parser()
                 domain = params.get("domain", context.get("last_domain", ""))
                 
@@ -1811,7 +1827,7 @@ def executor_node(state: AgentState) -> AgentState:
     # SYNC TO SHARED MEMORY - Other agents can now access findings
     # ============================================================
     try:
-        from app.agent.shared_memory import get_shared_memory
+        from app.memory import get_shared_memory
         shared = get_shared_memory()
         shared.update_from_dict(context)
         
@@ -1981,7 +1997,7 @@ Check tool installation with `/tools`
     # NEW: Append specialized agent analysis
     try:
         # Check imports locally to avoid global scope issues
-        from app.agent.coordinator import get_coordinator
+        from app.agent.orchestration import get_coordinator
         
         agent_name = context.get("current_agent", "base")
         agent = get_coordinator().get_agent(agent_name)
@@ -2184,8 +2200,12 @@ Check tool installation with `/tools`
             # ─────────────────────────────────────────────────────────
             # PHASE COMPLETION CHECK - Does agent recommend advancing?
             # ─────────────────────────────────────────────────────────
+            auto_chain = False
+            chain_tools = []
+            chain_target = None
+            
             try:
-                from app.agent.coordinator import get_coordinator
+                from app.agent.orchestration import get_coordinator
                 coordinator = get_coordinator()
                 advance = coordinator.auto_advance(context)
                 
@@ -2199,8 +2219,36 @@ Check tool installation with `/tools`
                     response_text += phase_msg
                     context["phase_complete"] = True
                     context["current_phase"] = advance.get("next_phase", advance["phase"])
+                    
+                    # AUTO-CHAIN: If in autonomous mode, prepare next tools
+                    if context.get("auto_mode") and advance.get("suggested_tools"):
+                        auto_chain = True
+                        chain_tools = advance.get("suggested_tools", [])[:2]
+                        chain_target = next_target or context.get("last_domain")
+                        print(f"  🔗 Auto-chain enabled: will run {chain_tools}")
             except Exception as e:
                 print(f"  ⚠️ Phase check error: {e}")
+            
+            # Also check if we have next_tool suggestion and auto_mode
+            if not auto_chain and context.get("auto_mode") and next_tool:
+                auto_chain = True
+                chain_tools = [next_tool]
+                chain_target = next_target or context.get("last_domain")
+                print(f"  🔗 Auto-chain from analyzer: {chain_tools}")
+            
+            # If auto-chaining, set up next execution instead of responding
+            if auto_chain and chain_tools:
+                # Prepare for auto-execution
+                context["pending_auto_tools"] = chain_tools
+                context["pending_auto_target"] = chain_target
+                
+                return {
+                    **state,
+                    "response": response_text,
+                    "context": context,
+                    "suggested_tools": chain_tools,
+                    "next_action": "auto_chain"
+                }
             
             return {
                 **state,
@@ -2243,6 +2291,146 @@ Check tool installation with `/tools`
         **state,
         "response": formatted,
         "next_action": "respond"
+    }
+
+
+def auto_chain_node(state: AgentState) -> AgentState:
+    """
+    Auto-chain node for autonomous mode.
+    
+    When auto_mode is enabled and we have pending tools to run,
+    this node shows a brief countdown then triggers execution.
+    
+    FIXED: 
+    - Cleans URL prefixes from target (no double https://)
+    - Uses ALL subdomains for scanning tools
+    """
+    import re
+    
+    context = state.get("context", {})
+    pending_tools = context.get("pending_auto_tools", [])
+    pending_target = context.get("pending_auto_target")
+    
+    if not pending_tools:
+        # No tools to chain, just respond
+        return {**state, "next_action": "respond"}
+    
+    # Show what we're about to do
+    print(f"\n  🔗 AUTO-CHAIN: Preparing {pending_tools}")
+    
+    # Check iteration limit
+    chain_count = context.get("auto_chain_count", 0)
+    max_chains = 5  # Prevent infinite loops
+    
+    if chain_count >= max_chains:
+        print(f"  ⚠️ Chain limit reached ({max_chains}), stopping")
+        context["auto_mode"] = False
+        return {
+            **state,
+            "context": context,
+            "response": state.get("response", "") + f"\n\n⚠️ Auto-chain limit reached ({max_chains} iterations)",
+            "next_action": "respond"
+        }
+    
+    # Increment chain counter
+    context["auto_chain_count"] = chain_count + 1
+    
+    # ─────────────────────────────────────────────────────────
+    # CLEAN TARGET - Remove URL prefixes to get pure domain
+    # ─────────────────────────────────────────────────────────
+    def clean_domain(target: str) -> str:
+        """Extract clean domain from URL or target string."""
+        if not target:
+            return ""
+        # Remove protocol prefix
+        target = re.sub(r'^https?://', '', target)
+        # Remove trailing slashes and paths
+        target = target.split('/')[0]
+        # Remove port if present
+        target = target.split(':')[0]
+        return target
+    
+    # Get clean domain
+    raw_target = pending_target or context.get("last_domain", "")
+    domain = clean_domain(raw_target)
+    
+    # ─────────────────────────────────────────────────────────
+    # GET ALL TARGETS (subdomains + main domain)
+    # ─────────────────────────────────────────────────────────
+    all_targets = [domain] if domain else []
+    subdomains = []
+    
+    try:
+        from app.memory import get_shared_memory
+        memory = get_shared_memory()
+        
+        # Get all targets including subdomains
+        discovered_targets = memory.get_targets_for_scanning()
+        if discovered_targets:
+            # Clean all targets
+            all_targets = list(set([clean_domain(t) for t in discovered_targets if t]))
+            # Get just subdomains (exclude main domain)
+            subdomains = [t for t in all_targets if t != domain]
+            print(f"  📋 Found {len(all_targets)} targets ({len(subdomains)} subdomains + main)")
+        
+        # Also check context for subdomains
+        if not subdomains and context.get("subdomains"):
+            subdomains = [clean_domain(s) for s in context.get("subdomains", []) if s]
+            all_targets = list(set([domain] + subdomains)) if domain else subdomains
+            print(f"  📋 Using context subdomains: {len(subdomains)}")
+            
+    except Exception as e:
+        print(f"  ⚠️ Could not get subdomains: {e}")
+    
+    # IMPORTANT: Update context with subdomains for executor to use
+    if subdomains:
+        context["subdomains"] = subdomains
+        context["subdomain_count"] = len(subdomains)
+        context["has_subdomains"] = True
+    
+    # Set up tools for execution
+    suggested_commands = {}
+    registry = get_registry()
+    
+    # Check which tools are scanning tools (need multiple targets)
+    scanning_tools = ["nmap", "masscan", "rustscan", "naabu", "httpx", "nuclei"]
+    
+    for tool in pending_tools:
+        if registry.is_available(tool):
+            spec = registry.tools.get(tool)
+            if spec and spec.commands:
+                # Get appropriate command
+                suggested_commands[tool] = list(spec.commands.keys())[0]
+    
+    # Prepare params with CLEAN domain (no https://)
+    tool_params = {
+        "domain": domain,
+        "target": domain,
+        "url": f"https://{domain}" if domain else "",
+        "targets": all_targets[:50],  # All subdomains for batch scanning
+        "host": domain,
+    }
+    
+    # For scanning tools, if we have many targets, use first 20
+    if any(t in scanning_tools for t in pending_tools) and len(all_targets) > 1:
+        print(f"  🎯 Will scan {min(len(all_targets), 20)} targets: {all_targets[:3]}...")
+        tool_params["targets"] = all_targets[:20]
+    
+    print(f"  🚀 Auto-executing: {list(suggested_commands.keys())} on {domain}")
+    
+    # Clear pending to avoid loops
+    context.pop("pending_auto_tools", None)
+    context.pop("pending_auto_target", None)
+    
+    return {
+        **state,
+        "context": context,
+        "suggested_tools": pending_tools,
+        "selected_tools": pending_tools,
+        "suggested_commands": suggested_commands,
+        "tool_params": tool_params,
+        "confirmed": True,
+        "next_action": "execute"
     }
 
 
@@ -2630,7 +2818,8 @@ def route_after_action(state: AgentState) -> str:
         "execute": "executor",
         "analyzer": "analyzer",
         "analyze": "analyzer",
-        "respond": "respond"
+        "respond": "respond",
+        "auto_chain": "auto_chain"  # NEW: Auto-chain for autonomous mode
     }
     
     return routes.get(action, END)
@@ -2653,6 +2842,7 @@ def build_graph():
     graph.add_node("confirm", confirm_node)
     graph.add_node("executor", executor_node)
     graph.add_node("analyzer", analyzer_node)
+    graph.add_node("auto_chain", auto_chain_node)  # NEW: Auto-chain for autonomous mode
     graph.add_node("respond", respond_node)
     graph.add_node("question", question_node)
     graph.add_node("memory_query", memory_query_node)
@@ -2723,6 +2913,19 @@ def build_graph():
             "confirm": "respond",
             "respond": "respond",
             "planner": "planner",
+            "auto_chain": "auto_chain",  # NEW: Auto-chain for autonomous mode
+            END: END
+        }
+    )
+    
+    # NEW: Auto-chain routing - can go to executor or respond
+    graph.add_conditional_edges(
+        "auto_chain",
+        route_after_action,
+        {
+            "execute": "executor",
+            "executor": "executor",
+            "respond": "respond",
             END: END
         }
     )
@@ -2762,10 +2965,10 @@ class LangGraphAgent:
         self.last_suggestion = None
         self.last_results = {}  # Store for report generation
         
-        # Initialize AttackMemory with LangChain conversation memory
+        # Initialize session memory 
         try:
-            from app.agent.memory import AttackMemory
-            self.memory = AttackMemory(persist=True, model=get_current_model())
+            from app.memory import get_session_memory
+            self.memory = get_session_memory()
         except Exception as e:
             print(f"⚠️ Memory init failed: {e}")
             self.memory = None
@@ -2782,12 +2985,10 @@ class LangGraphAgent:
         
         # Load conversation history from memory (New System)
         messages = []
-        if self.memory and self.memory.chat_history:
+        if self.memory:
              try:
-                 # Convert LangChain messages to AgentState dict format
-                 for msg in self.memory.chat_history.messages[-20:]: # Keep last 20
-                     role = "user" if msg.type == "human" else "assistant"
-                     messages.append({"role": role, "content": msg.content})
+                 # Get messages from SessionMemory
+                 messages = self.memory.get_llm_context(max_messages=20)
              except Exception as e:
                  print(f"⚠️ Failed to load history: {e}")
         
@@ -2832,8 +3033,10 @@ class LangGraphAgent:
         
         response = result.get("response") or result.get("suggestion_message") or "No response"
         
+        # Save conversation to session memory
         if self.memory:
-            self.memory.save_conversation_turn(query, response)
+            self.memory.add_message("user", query)
+            self.memory.add_message("assistant", response)
         
         needs_confirmation = (
             len(result.get("suggested_tools", [])) > 0 and

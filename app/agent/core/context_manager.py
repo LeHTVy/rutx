@@ -202,7 +202,7 @@ class ContextManager:
     def shared_memory(self):
         """Lazy-load shared memory."""
         if self._shared_memory is None:
-            from app.agent.shared_memory import get_shared_memory
+            from app.memory import get_shared_memory
             self._shared_memory = get_shared_memory()
         return self._shared_memory
     
@@ -210,7 +210,7 @@ class ContextManager:
     def attack_memory(self):
         """Lazy-load attack memory."""
         if self._attack_memory is None:
-            from app.agent.memory import get_attack_memory
+            from app.memory import get_attack_memory
             self._attack_memory = get_attack_memory()
         return self._attack_memory
     

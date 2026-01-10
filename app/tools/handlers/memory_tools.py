@@ -3,6 +3,10 @@ Memory Tool Handlers
 ====================
 
 Handles: read_memory, write_memory, forget_memory, summarize_target, clear_memory, show_results
+
+Uses unified memory system from app.memory:
+- SessionMemory for in-session facts
+- MemoryManager for persistent conversation history
 """
 from typing import Dict, Any
 from app.tools.handlers import register_handler
@@ -10,23 +14,50 @@ from app.tools.handlers import register_handler
 
 @register_handler("read_memory")
 def handle_read_memory(action_input: Dict[str, Any], state: Any) -> str:
-    """Search archival memory for past findings."""
+    """Search memory for past findings."""
     query = action_input.get("query", "")
     if not query:
         return 'Error: No query specified. Example: read_memory with {"query": "snode.com ports"}'
     
     print(f"  🧠 Searching memory for: {query}...")
     
-    from app.agent.memory import MemoryManager, AttackMemory
-    memory = AttackMemory(persist=True)
-    manager = MemoryManager(memory)
+    from app.memory import get_session_memory, get_memory_manager
     
-    return manager.read_memory(query)
+    results = []
+    
+    # 1. Search session memory (in-session facts)
+    session = get_session_memory()
+    facts = session.get_facts()
+    matching_facts = [f for f in facts if query.lower() in str(f.data).lower() or query.lower() in f.target.lower()]
+    
+    if matching_facts:
+        results.append("## Session Facts")
+        for fact in matching_facts[:10]:
+            results.append(f"- [{fact.fact_type}] {fact.target}: {fact.data}")
+    
+    # 2. Search conversation history (semantic search)
+    try:
+        history = get_memory_manager()
+        context = history.get_context_for_query(query, include_history=False, include_semantic=True)
+        
+        if context.get("semantic"):
+            results.append("\n## Related Conversations")
+            for mem in context["semantic"][:5]:
+                results.append(f"- {mem['content'][:150]}...")
+        
+        if context.get("findings"):
+            results.append("\n## Historical Findings")
+            for finding in context["findings"][:5]:
+                results.append(f"- [{finding['type']}] {finding['data']}")
+    except Exception as e:
+        results.append(f"\n⚠️ History search unavailable: {e}")
+    
+    return "\n".join(results) if results else f"No memories found for: {query}"
 
 
 @register_handler("write_memory")
 def handle_write_memory(action_input: Dict[str, Any], state: Any) -> str:
-    """Store facts to long-term memory."""
+    """Store facts to memory."""
     fact_type = action_input.get("fact_type", "note")
     target = action_input.get("target", "")
     data = action_input.get("data", {})
@@ -36,11 +67,12 @@ def handle_write_memory(action_input: Dict[str, Any], state: Any) -> str:
     
     print(f"  🧠 Writing to memory: [{fact_type}] {target}...")
     
-    from app.agent.memory import MemoryManager, AttackMemory
-    memory = AttackMemory(persist=True)
-    manager = MemoryManager(memory)
+    from app.memory import get_session_memory
     
-    return manager.write_memory(fact_type, target, data, source="agent")
+    session = get_session_memory()
+    fact = session.add_fact(fact_type, target, data, source_tool="agent")
+    
+    return f"✅ Stored fact [{fact_type}] for {target} (ID: {fact.id})"
 
 
 @register_handler("forget_memory")
@@ -52,11 +84,15 @@ def handle_forget_memory(action_input: Dict[str, Any], state: Any) -> str:
     
     print(f"  🧠 Forgetting memory: {fact_id}...")
     
-    from app.agent.memory import MemoryManager, AttackMemory
-    memory = AttackMemory(persist=True)
-    manager = MemoryManager(memory)
+    from app.memory import get_session_memory
     
-    return manager.forget_memory(fact_id)
+    session = get_session_memory()
+    
+    if fact_id in session.facts:
+        del session.facts[fact_id]
+        return f"✅ Forgot fact: {fact_id}"
+    else:
+        return f"⚠️ Fact not found: {fact_id}"
 
 
 @register_handler("summarize_target")
@@ -68,11 +104,42 @@ def handle_summarize_target(action_input: Dict[str, Any], state: Any) -> str:
     
     print(f"  🧠 Summarizing target: {domain}...")
     
-    from app.agent.memory import MemoryManager, AttackMemory
-    memory = AttackMemory(persist=True)
-    manager = MemoryManager(memory)
+    from app.memory import get_session_memory
     
-    return manager.summarize_target(domain)
+    session = get_session_memory()
+    ctx = session.get_context()
+    
+    parts = [f"## Target Summary: {domain}"]
+    
+    if ctx.subdomains:
+        parts.append(f"\n### Subdomains ({len(ctx.subdomains)})")
+        for sub in ctx.subdomains[:20]:
+            parts.append(f"- {sub}")
+    
+    if ctx.ips:
+        parts.append(f"\n### IP Addresses ({len(ctx.ips)})")
+        for ip in ctx.ips[:10]:
+            parts.append(f"- {ip}")
+    
+    if ctx.open_ports:
+        parts.append(f"\n### Open Ports ({len(ctx.open_ports)})")
+        for port in ctx.open_ports[:20]:
+            parts.append(f"- {port['host']}:{port['port']} ({port.get('service', 'unknown')})")
+    
+    if ctx.vulnerabilities:
+        parts.append(f"\n### Vulnerabilities ({len(ctx.vulnerabilities)})")
+        for vuln in ctx.vulnerabilities[:10]:
+            parts.append(f"- [{vuln.get('severity', 'medium')}] {vuln.get('type', 'unknown')} on {vuln.get('target', 'N/A')}")
+    
+    if ctx.technologies:
+        parts.append(f"\n### Technologies ({len(ctx.technologies)})")
+        parts.append(f"- {', '.join(ctx.technologies)}")
+    
+    if ctx.tools_run:
+        parts.append(f"\n### Tools Run")
+        parts.append(f"- {', '.join(ctx.tools_run)}")
+    
+    return "\n".join(parts)
 
 
 @register_handler("clear_memory")
@@ -80,59 +147,45 @@ def handle_clear_memory(action_input: Dict[str, Any], state: Any) -> str:
     """Clear stored facts."""
     domain = action_input.get("domain", "")
     
-    from app.agent.memory import AttackMemory
-    memory = AttackMemory(persist=True)
+    from app.memory import get_session_memory
+    
+    session = get_session_memory()
     
     if domain:
-        original_count = len(memory.facts)
-        memory.facts = [f for f in memory.facts if domain not in f.target]
-        removed = original_count - len(memory.facts)
-        memory._save_facts()
+        # Filter facts by domain
+        original_count = len(session.facts)
+        session.facts = {k: v for k, v in session.facts.items() if domain not in v.target}
+        removed = original_count - len(session.facts)
         print(f"  🧹 Cleared {removed} facts for {domain}")
-        return f"✅ Cleared {removed} facts related to {domain}. {len(memory.facts)} facts remaining."
+        return f"✅ Cleared {removed} facts related to {domain}. {len(session.facts)} facts remaining."
     else:
-        count = len(memory.facts)
-        memory.clear_all()
+        count = len(session.facts)
+        session.clear()
         print(f"  🧹 Cleared all {count} facts")
-        return f"✅ Cleared all {count} facts. Memory is now empty."
+        return f"✅ Cleared all session memory. Starting fresh."
 
 
 @register_handler("show_results")
 def handle_show_results(action_input: Dict[str, Any], state: Any) -> str:
-    """Show stored scan results."""
-    from app.core.state import get_subdomain_file
+    """Show recent scan results."""
+    limit = action_input.get("limit", 10)
+    result_type = action_input.get("type", "all")
     
-    result_type = action_input.get("type", "all").lower()
-    output = ""
+    from app.memory import get_session_memory
     
-    show_full = result_type in ["full", "all_subdomains", "full_list"]
+    session = get_session_memory()
+    facts = session.get_facts()
     
-    if result_type in ["subdomains", "all", "full", "all_subdomains", "full_list"]:
-        subdomain_file = get_subdomain_file()
-        if subdomain_file:
-            with open(subdomain_file, 'r') as f:
-                subs = [l.strip() for l in f if l.strip()]
-            
-            output += f"SUBDOMAINS ({len(subs)} total):\n"
-            display_count = len(subs) if show_full else min(20, len(subs))
-            for s in subs[:display_count]:
-                output += f"  {s}\n"
-            if len(subs) > display_count:
-                output += f"  ... and {len(subs) - display_count} more\n"
+    if result_type != "all":
+        facts = [f for f in facts if f.fact_type == result_type]
     
-    if result_type in ["ports", "all"]:
-        port_results = state.context.get("port_scan_results", {})
-        if port_results:
-            output += f"\nPORTS ({len(port_results)} hosts):\n"
-            for host, ports in list(port_results.items())[:10]:
-                output += f"  {host}: {', '.join(map(str, ports))}\n"
+    facts = facts[-limit:]
     
-    if result_type in ["httpx", "all"]:
-        ok_hosts = state.context.get("httpx_200_hosts", [])
-        forbidden = state.context.get("httpx_403_hosts", [])
-        if ok_hosts or forbidden:
-            output += f"\nHTTPX RESULTS:\n"
-            output += f"  200 OK: {len(ok_hosts)} hosts\n"
-            output += f"  403 Forbidden: {len(forbidden)} hosts\n"
+    if not facts:
+        return f"No {result_type} results found in current session."
     
-    return output if output else "No results stored yet. Run some scans first."
+    parts = [f"## Recent Results ({len(facts)})"]
+    for fact in facts:
+        parts.append(f"- [{fact.fact_type}] {fact.target}: {fact.data}")
+    
+    return "\n".join(parts)
