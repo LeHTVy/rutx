@@ -238,31 +238,25 @@ class ContextManager:
         except Exception as e:
             print(f"  ⚠️ SharedMemory merge failed: {e}")
         
-        # Add AttackMemory data (subdomains, ports, vulns from persistent storage)
+        # Add SessionMemory data (subdomains, ports, vulns from session)
         try:
             if self.attack_memory:
-                # Get subdomains from facts
-                memory_subs = self.attack_memory.get_subdomains()
-                if memory_subs:
-                    context = context.merge_with({"subdomains": memory_subs})
+                # attack_memory is now SessionMemory - access agent_context
+                agent_ctx = self.attack_memory.agent_context
+                
+                # Get subdomains
+                if agent_ctx.subdomains:
+                    context = context.merge_with({"subdomains": agent_ctx.subdomains})
                 
                 # Get ports
-                memory_ports = self.attack_memory.get_open_ports()
-                if memory_ports:
-                    # Convert to list format
-                    ports_list = []
-                    for host, port_numbers in memory_ports.items():
-                        for port in port_numbers:
-                            ports_list.append({"host": host, "port": port})
-                    context = context.merge_with({"open_ports": ports_list})
+                if agent_ctx.open_ports:
+                    context = context.merge_with({"open_ports": agent_ctx.open_ports})
                 
                 # Get vulns
-                memory_vulns = self.attack_memory.get_vulnerabilities()
-                if memory_vulns:
-                    vulns_list = [v.to_dict() for v in memory_vulns]
-                    context = context.merge_with({"vulns_found": vulns_list})
+                if agent_ctx.vulnerabilities:
+                    context = context.merge_with({"vulns_found": agent_ctx.vulnerabilities})
         except Exception as e:
-            print(f"  ⚠️ AttackMemory merge failed: {e}")
+            print(f"  ⚠️ SessionMemory merge failed: {e}")
         
         return context
     
@@ -371,13 +365,28 @@ class ContextManager:
     
     def _sync_to_shared_memory(self, updates: Dict[str, Any]) -> None:
         """Sync relevant updates to SharedMemory for inter-agent access."""
-        # Only sync key fields that agents care about
-        sync_fields = ["target_domain", "last_domain", "subdomains", "open_ports", 
-                       "detected_tech", "vulns_found", "tools_run", "current_phase"]
+        # shared_memory is now AgentContext from app.memory.session
+        ctx = self.shared_memory
         
-        sync_data = {k: v for k, v in updates.items() if k in sync_fields}
-        if sync_data:
-            self.shared_memory.update_from_dict(sync_data)
+        # Sync domain
+        if updates.get("target_domain"):
+            ctx.domain = updates["target_domain"]
+        if updates.get("last_domain"):
+            ctx.domain = updates["last_domain"]
+        
+        # Sync subdomains
+        if updates.get("subdomains"):
+            ctx.add_subdomains(updates["subdomains"])
+        
+        # Sync technologies  
+        if updates.get("detected_tech"):
+            for tech in updates["detected_tech"]:
+                ctx.add_technology(tech)
+        
+        # Sync tools run
+        if updates.get("tools_run"):
+            for tool in updates["tools_run"]:
+                ctx.add_tool_run(tool)
 
 
 # Singleton instance

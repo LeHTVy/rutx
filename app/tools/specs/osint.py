@@ -40,6 +40,49 @@ def get_specs() -> List[ToolSpec]:
         ),
         
         # ─────────────────────────────────────────────────────────
+        # SECURITYTRAILS - Threat Intelligence & Historical DNS
+        # ─────────────────────────────────────────────────────────
+        ToolSpec(
+            name="securitytrails",
+            category=ToolCategory.OSINT,
+            description="SecurityTrails API: Historical DNS records, origin IP discovery, associated domains. Useful for bypassing CDN/WAF like Cloudflare.",
+            executable_names=["securitytrails", "st"],  # CLI tool if available
+            install_hint="pip install securitytrails && export SECURITYTRAILS_API_KEY=your_key (Get API key from https://securitytrails.com/)",
+            commands={
+                # history: Get historical DNS records - find origin IP before CDN
+                "history": CommandTemplate(
+                    args=["domain", "{domain}", "--history"],
+                    timeout=30,
+                    success_codes=[0]
+                ),
+                # domain: Get current DNS data for domain
+                "domain": CommandTemplate(
+                    args=["domain", "{domain}"],
+                    timeout=30,
+                    success_codes=[0]
+                ),
+                # subdomains: Enumerate subdomains
+                "subdomains": CommandTemplate(
+                    args=["domain", "{domain}", "--subdomains"],
+                    timeout=60,
+                    success_codes=[0]
+                ),
+                # associated: Find associated/related domains
+                "associated": CommandTemplate(
+                    args=["domain", "{domain}", "--associated"],
+                    timeout=30,
+                    success_codes=[0]
+                ),
+                # whois: WHOIS history
+                "whois": CommandTemplate(
+                    args=["domain", "{domain}", "--whois"],
+                    timeout=30,
+                    success_codes=[0]
+                ),
+            }
+        ),
+        
+        # ─────────────────────────────────────────────────────────
         # DNSRECON - DNS Enumeration
         # ─────────────────────────────────────────────────────────
         ToolSpec(
@@ -156,7 +199,7 @@ def get_specs() -> List[ToolSpec]:
         ToolSpec(
             name="clatscope",
             category=ToolCategory.OSINT,
-            description="ClatScope OSINT: IP lookup, WHOIS, DNS, subdomains, SSL certs, email breach check, phone lookup, web metadata",
+            description="ClatScope OSINT: IP lookup, WHOIS, DNS, subdomains, SSL certs, email breach, phone lookup, origin IP discovery (CDN bypass via historical DNS + wayback)",
             executable_names=["python"],  # Python-based, not CLI
             install_hint="Already integrated via app.osint.clatscope",
             commands={
@@ -213,6 +256,18 @@ def get_specs() -> List[ToolSpec]:
                 "reverse_dns": CommandTemplate(
                     args=["osint", "reverse_dns", "{ip}"],
                     timeout=15,
+                    success_codes=[0]
+                ),
+                # find_origin: Combined lookup to find origin IP (bypass CDN)
+                "find_origin": CommandTemplate(
+                    args=["osint", "find_origin", "{domain}"],
+                    timeout=60,
+                    success_codes=[0]
+                ),
+                # full: Combined OSINT (IP + DNS + WHOIS + SSL)
+                "full": CommandTemplate(
+                    args=["osint", "full", "{domain}"],
+                    timeout=90,
                     success_codes=[0]
                 ),
             }

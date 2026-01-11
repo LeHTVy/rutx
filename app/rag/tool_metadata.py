@@ -702,6 +702,38 @@ TOOL_METADATA: Dict[str, Dict[str, Any]] = {
             },
         },
     },
+    "securitytrails": {
+        "category": "osint",
+        "description": "SecurityTrails API: Historical DNS records, origin IP discovery, associated domains. Best tool for bypassing CDN/WAF like Cloudflare by finding pre-CDN IP addresses.",
+        "tags": ["osint", "dns", "history", "origin", "cloudflare", "bypass", "cdn", "waf", "historical", "associated"],
+        "commands": {
+            "history": {
+                "description": "Historical DNS records - find origin IP before CDN was added",
+                "use_cases": ["bypass cloudflare", "find origin ip", "historical dns", "pre-cdn ip", "origin server"],
+                "params": ["domain"],
+            },
+            "domain": {
+                "description": "Current DNS data for domain",
+                "use_cases": ["dns info", "domain intelligence"],
+                "params": ["domain"],
+            },
+            "subdomains": {
+                "description": "Enumerate subdomains",
+                "use_cases": ["subdomain enumeration", "find subdomains"],
+                "params": ["domain"],
+            },
+            "associated": {
+                "description": "Find associated/related domains",
+                "use_cases": ["related domains", "associated domains", "domain correlation"],
+                "params": ["domain"],
+            },
+            "whois": {
+                "description": "WHOIS history",
+                "use_cases": ["whois history", "ownership history"],
+                "params": ["domain"],
+            },
+        },
+    },
     "dnsrecon": {
         "category": "recon",
         "description": "DNS enumeration and reconnaissance",
@@ -726,8 +758,8 @@ TOOL_METADATA: Dict[str, Dict[str, Any]] = {
     },
     "clatscope": {
         "category": "osint",
-        "description": "Intelligent OSINT: IP, WHOIS, DNS, subdomains, SSL, email breach, phone",
-        "tags": ["osint", "ip", "whois", "dns", "subdomain", "ssl", "email", "breach", "phone"],
+        "description": "Intelligent OSINT: IP, WHOIS, DNS, subdomains, SSL, email breach, phone, origin IP discovery (CDN bypass). Use find_origin to bypass Cloudflare/CDN.",
+        "tags": ["osint", "ip", "whois", "dns", "subdomain", "ssl", "email", "breach", "phone", "origin", "bypass", "cloudflare", "cdn"],
         "commands": {
             "ip": {
                 "description": "IP geolocation and info",
@@ -783,6 +815,16 @@ TOOL_METADATA: Dict[str, Dict[str, Any]] = {
                 "description": "Reverse DNS lookup",
                 "use_cases": ["ip to hostname", "ptr record"],
                 "params": ["ip"],
+            },
+            "find_origin": {
+                "description": "Find origin IP behind CDN/WAF using historical DNS and wayback",
+                "use_cases": ["bypass cloudflare", "find origin ip", "cdn bypass", "waf bypass", "real ip", "origin server"],
+                "params": ["domain"],
+            },
+            "full": {
+                "description": "Full OSINT scan: IP + DNS + WHOIS + SSL combined",
+                "use_cases": ["full osint", "comprehensive scan", "all info"],
+                "params": ["domain"],
             },
         },
     },

@@ -692,7 +692,7 @@ def run_snode():
             console.print()
             
             if needs_confirmation:
-                # Show suggestion with prompt for confirmation
+                # Show suggestion with minimal formatting
                 console.print(Panel(
                     Markdown(response),
                     title="💡 SNODE Suggestion",
@@ -700,12 +700,9 @@ def run_snode():
                 ))
                 console.print("[dim]Type 'yes' to proceed, 'no' to cancel[/]\n")
             else:
-                # Show final result
-                console.print(Panel(
-                    Markdown(response),
-                    title="🔒 SNODE Analysis",
-                    border_style="green",
-                ))
+                # Show raw LLM response without box wrapper
+                console.print(Markdown(response))
+                console.print()  # Add spacing
             
             # Save to persistent memory
             if memory:

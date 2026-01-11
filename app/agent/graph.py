@@ -29,6 +29,7 @@ from app.agent.core import (
     get_context_manager, SessionContext,
     get_context_aggregator, AggregatedContext,
     get_phase_manager, PHASE_NAMES,
+    PhaseGateAction,
 )
 from app.agent.utils import (
     get_plan_validator, get_tool_validator, ValidationResult,
@@ -137,7 +138,74 @@ def intent_node(state: AgentState) -> AgentState:
 
     if suggested_tools and ("yes" in query or query.endswith(" y")):
         print(f"  📋 Confirming pending suggestion: {suggested_tools}")
-        return {**state, "intent": "confirm", "confirmed": True}
+        
+        # ============================================================
+        # HYBRID APPROACH: Fast path + LLM fallback
+        # ============================================================
+        modifications = {}
+        query_lower = query.lower()
+        
+        # Remove "yes" prefix to get the modification part
+        mod_text = re.sub(r'^(yes|ok|go|y)\s*(but|and|with|,)?\s*', '', query_lower).strip()
+        
+        # FAST PATH: Common patterns (no LLM needed - ~80% of cases)
+        fast_patterns = {
+            # Subdomain patterns
+            r'\b(all\s*)?(sub)?domains?\b': ("scan_subdomains", True),
+            r'\ball\s*(targets?|hosts?)\b': ("scan_subdomains", True),
+            # Port patterns
+            r'\btop\s*100\b': ("ports", "100"),
+            r'\btop\s*1000\b': ("ports", "1000"),
+            r'\b(all\s*ports?|full\s*scan|-p-)\b': ("ports", "1-65535"),
+            r'\bquick\s*(scan)?\b': ("ports", "100"),
+            # Speed patterns
+            r'\b(fast|quick|rapid)\b': ("speed", "fast"),
+            r'\b(slow|thorough|deep)\b': ("speed", "thorough"),
+        }
+        
+        for pattern, (key, value) in fast_patterns.items():
+            if re.search(pattern, mod_text):
+                modifications[key] = value
+                print(f"  📋 Fast path: {key}={value}")
+        
+        # LLM PATH: Complex modifications (if fast path didn't catch everything)
+        # Only use LLM if: mod_text exists AND fast path found nothing
+        if mod_text and len(mod_text) > 5 and not modifications:
+            try:
+                llm = OllamaClient()
+                parse_prompt = f"""User confirmed a security scan with modifications: "{mod_text}"
+
+Extract any modifications. Return JSON only:
+{{
+  "scan_subdomains": true/false,
+  "ports": "100" or "1000" or "1-65535" or null,
+  "speed": "fast" or "thorough" or null,
+  "specific_target": "subdomain or IP if mentioned" or null
+}}
+
+If no clear modifications, return: {{"no_changes": true}}
+JSON only, no explanation:"""
+                
+                response = llm.generate(parse_prompt, timeout=10, stream=False)
+                
+                # Parse LLM response
+                json_match = re.search(r'\{[^{}]+\}', response)
+                if json_match:
+                    parsed = json.loads(json_match.group())
+                    if not parsed.get("no_changes"):
+                        for k, v in parsed.items():
+                            if v and k != "no_changes":
+                                modifications[k] = v
+                                print(f"  🧠 LLM parsed: {k}={v}")
+            except Exception as e:
+                print(f"  ⚠️ LLM parse skipped: {e}")
+        
+        # Store modifications in context for executor
+        updated_context = context.copy()
+        if modifications:
+            updated_context["user_modifications"] = modifications
+        
+        return {**state, "intent": "confirm", "confirmed": True, "context": updated_context}
     
     if query in ["no", "n", "cancel", "stop", "abort"]:
         return {**state, "intent": "confirm", "confirmed": False}
@@ -650,29 +718,60 @@ def planner_node(state: AgentState) -> AgentState:
             print(f"  ⚠️ Warnings: {', '.join(validation.warnings)}")
         
         # ============================================================
-        # STEP 4: FALLBACK FOR UNAVAILABLE TOOLS
+        # STEP 4: CHECK TOOL AVAILABILITY & NOTIFY USER
         # ============================================================
         fallback_mgr = get_fallback_manager()
+        registry = get_registry()
         adjusted_tools = []
         fallback_tools = []
+        unavailable_tools = []  # Track unavailable tools to notify user
         
         for tool in tools:
             if not fallback_mgr.registry.is_available(tool):
+                # Get tool spec for install hint
+                spec = registry.tools.get(tool)
+                install_hint = spec.install_hint if spec else f"Install {tool} manually"
+                
                 fallback = fallback_mgr.get_fallback(tool)
-                if fallback:
+                if fallback and fallback_mgr.registry.is_available(fallback):
                     print(f"  🔄 Fallback: {tool} → {fallback}")
                     adjusted_tools.append(fallback)
                     fallback_tools.append(fallback)
                     # Update commands for fallback tool
                     if tool in commands:
                         commands[fallback] = commands.pop(tool)
+                    # Still notify about the original tool
+                    unavailable_tools.append({
+                        "tool": tool,
+                        "hint": install_hint,
+                        "fallback": fallback
+                    })
                 else:
-                    print(f"  ❌ Tool unavailable, no fallback: {tool}")
+                    print(f"  ⚠️ Tool unavailable: {tool}")
+                    unavailable_tools.append({
+                        "tool": tool,
+                        "hint": install_hint,
+                        "fallback": None
+                    })
             else:
                 adjusted_tools.append(tool)
         
         # Update tools with fallbacks applied
         tools = adjusted_tools
+        
+        # Build notification message for unavailable tools
+        unavailable_msg = ""
+        if unavailable_tools:
+            unavailable_msg = "\n\n⚠️ **Some suggested tools are not installed:**\n"
+            for ut in unavailable_tools:
+                if ut["fallback"]:
+                    unavailable_msg += f"• `{ut['tool']}` → using `{ut['fallback']}` instead\n"
+                else:
+                    unavailable_msg += f"• `{ut['tool']}` - {ut['hint']}\n"
+        
+        # Append to reasoning
+        if unavailable_msg:
+            reasoning += unavailable_msg
         
         # Store current agent in context for executor
         context["current_agent"] = agent_name
@@ -722,9 +821,24 @@ def confirm_node(state: AgentState) -> AgentState:
         
         print(f"  ✓ User confirmed. Running: {selected}")
         
+        # Infer correct agent from tool type if not already set
+        if not context.get("current_agent") or context.get("current_agent") == "base":
+            # Map tools to agents
+            tool_agent_map = {
+                "nmap": "scan", "masscan": "scan", "rustscan": "scan",
+                "subfinder": "recon", "amass": "recon", "bbot": "recon", "httpx": "recon",
+                "nuclei": "vuln", "nikto": "vuln", "wpscan": "vuln",
+                "sqlmap": "exploit", "hydra": "exploit", "metasploit": "exploit",
+            }
+            for tool in selected:
+                if tool.lower() in tool_agent_map:
+                    context["current_agent"] = tool_agent_map[tool.lower()]
+                    break
+        
         return {
             **state,
             "selected_tools": selected,
+            "context": context,
             "next_action": "executor"
         }
     else:
@@ -988,6 +1102,35 @@ def executor_node(state: AgentState) -> AgentState:
         tool_params = params.copy()
         domain = params.get("domain", params.get("target", ""))
         subdomains = context.get("subdomains", [])
+        
+        # ============================================================
+        # CHECK USER MODIFICATIONS (from "yes but X" parsing)
+        # ============================================================
+        user_mods = context.get("user_modifications", {})
+        
+        # If user requested subdomain scan, load from RAG
+        if user_mods.get("scan_subdomains") and not subdomains:
+            try:
+                from app.rag import get_unified_rag
+                rag = get_unified_rag()
+                rag_subdomains = rag.get_subdomains(domain, limit=200)
+                if rag_subdomains:
+                    subdomains = list(set(rag_subdomains))  # Dedupe
+                    print(f"  📋 Loaded {len(subdomains)} unique subdomains from RAG for scanning")
+                    context["subdomains"] = subdomains
+            except Exception as e:
+                print(f"  ⚠️ Could not load subdomains from RAG: {e}")
+        
+        # Apply port modifications
+        if user_mods.get("ports"):
+            port_setting = user_mods["ports"]
+            if port_setting == "100":
+                tool_params["ports"] = "--top-ports 100"
+            elif port_setting == "1000":
+                tool_params["ports"] = "--top-ports 1000"
+            elif port_setting == "1-65535":
+                tool_params["ports"] = "-p-"
+            print(f"  📋 Applied port setting: {port_setting}")
         
         # PRIORITY 1: Use command from semantic search (via suggested_commands)
         suggested_commands = state.get("suggested_commands", {})
@@ -1827,13 +1970,21 @@ def executor_node(state: AgentState) -> AgentState:
     # SYNC TO SHARED MEMORY - Other agents can now access findings
     # ============================================================
     try:
-        from app.memory import get_shared_memory
-        shared = get_shared_memory()
-        shared.update_from_dict(context)
+        from app.memory import get_session_memory
+        session = get_session_memory()
         
-        # Log which agent contributed
-        if tools:
-            shared.add_finding("executor", "tools_run", tools)
+        # Update session memory from context
+        if context.get("last_domain"):
+            session.agent_context.domain = context["last_domain"]
+        if context.get("subdomains"):
+            session.agent_context.add_subdomains(context["subdomains"])
+        if context.get("detected_tech"):
+            for tech in context["detected_tech"]:
+                session.agent_context.add_technology(tech)
+        
+        # Log which tools ran
+        for tool in tools:
+            session.agent_context.add_tool_run(tool)
     except Exception:
         pass  # Shared memory is optional enhancement
     

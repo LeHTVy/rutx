@@ -487,17 +487,8 @@ def main():
             
             response = agent.run(user_input)
             
-            # Display response with clean formatting (dynamic width)
-            width = get_terminal_width() - 4  # Leave some margin
-            print(f"\n{Colors.CYAN}╔{'═'*width}╗{Colors.RESET}")
-            print(f"{Colors.CYAN}║{Colors.RESET} {Colors.BOLD}🔒 SNODE Analysis{Colors.RESET}")
-            print(f"{Colors.CYAN}╠{'═'*width}╣{Colors.RESET}")
-            print(f"{Colors.CYAN}║{Colors.RESET}")
-            # Print full response without truncation
-            for line in response.split('\n'):
-                print(f"{Colors.CYAN}║{Colors.RESET}  {line}")
-            print(f"{Colors.CYAN}║{Colors.RESET}")
-            print(f"{Colors.CYAN}╚{'═'*width}╝{Colors.RESET}\n")
+            # Display raw LLM response without box wrapper
+            print(f"\n{response}\n")
             
         except KeyboardInterrupt:
             print(f"\n\n{Colors.YELLOW}Interrupted. Type 'quit' to exit.{Colors.RESET}\n")

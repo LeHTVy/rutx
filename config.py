@@ -57,9 +57,14 @@ ENABLE_OUTPUT_MANAGER = True  # Save large outputs to files to reduce token usag
 # Native Tools Mode (RECOMMENDED - Runs tools like terminal with native JSON export)
 USE_NATIVE_TOOLS = True  # Tools run with native output formats, LLM chooses best tools
 
-# API Keys
-SHODAN_API_KEY = "GOcpJ7gEk2IKfLr8N9500eyXjJ7vva2G"
-#NVD_API_KEY = "bb6c9838-ede9-4ed8-903e-66ffd4715fe5"
+# API Keys (loaded from .env file - NEVER hardcode secrets here)
+import os
+from dotenv import load_dotenv
+load_dotenv()  # Load .env file
+
+SHODAN_API_KEY = os.getenv("SHODAN_API_KEY", "")
+SECURITYTRAILS_API_KEY = os.getenv("SECURITYTRAILS_API_KEY", "")  # https://securitytrails.com/app/signup
+NVD_API_KEY = os.getenv("NVD_API_KEY", "")
 
 # Security Settings
 REQUIRE_AUTHORIZATION_PROMPT = True  
@@ -69,7 +74,7 @@ ENABLE_TRACING = False  # Set to True to enable Phoenix tracing
 PHOENIX_HOST = "localhost"
 PHOENIX_PORT = 6006
 
-ENABLE_GUARDRAILS = True  # Enable input/output validation
+ENABLE_GUARDRAILS = True    
 STRICT_INPUT_VALIDATION = True  # Strict prompt injection detection
 ALLOW_DESTRUCTIVE_COMMANDS = False  # Block dangerous commands (rm -rf, etc.)
 

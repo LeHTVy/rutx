@@ -18,14 +18,9 @@ class VulnAgent(BaseAgent):
     - Web server misconfigurations (nikto)
     - CMS vulnerabilities (wpscan, joomscan)
     - Automated vulnerability detection
-    """
     
-    # Keywords that trigger this agent
-    VULN_KEYWORDS = [
-        "vuln", "vulnerability", "cve", "nuclei", "nikto", "nessus",
-        "scan for vuln", "find vuln", "security scan", "openvas",
-        "wpscan", "wordpress", "joomla", "cms", "burp"
-    ]
+    NOTE: Routing is handled by LLM in coordinator.py - no keyword matching needed.
+    """
     
     def __init__(self, llm=None):
         super().__init__(llm)
@@ -51,14 +46,6 @@ class VulnAgent(BaseAgent):
         ]
         
         self.pentest_phases = [3]  # Vulnerability phase
-        
-        self.keywords = self.VULN_KEYWORDS
-    
-    def can_handle(self, phase: int, query: str) -> bool:
-        """Check if this agent should handle the query."""
-        if phase == 3:
-            return True
-        return any(kw in query.lower() for kw in self.VULN_KEYWORDS)
     
     def plan(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Plan vulnerability scanning tools and actions."""
@@ -181,45 +168,47 @@ class VulnAgent(BaseAgent):
         return commands
     
     def analyze_results(self, results: Dict[str, Any], context: Dict[str, Any]) -> str:
-        """Analyze vulnerability scan results and suggest exploitation."""
+        """
+        Analyze vulnerability scan results using semantic analysis.
+        
+        HYBRID APPROACH: Uses _analyze_output_semantic() for intelligent parsing.
+        """
         analysis = []
-        vulns_found = []
+        max_severity = "none"
+        severity_order = ["none", "info", "low", "medium", "high", "critical"]
         
         for tool, result in results.items():
             if not result.get("success"):
+                analysis.append(f"❌ {tool}: {result.get('error', 'Failed')[:50]}")
                 continue
             
             output = result.get("output", "")
             
-            if tool == "nuclei":
-                # Check for findings by severity
-                if "[critical]" in output.lower():
-                    analysis.append("🔴 CRITICAL vulnerabilities found by nuclei!")
-                    vulns_found.append("critical")
-                if "[high]" in output.lower():
-                    analysis.append("🟠 HIGH severity issues found")
-                    vulns_found.append("high")
-                if "[medium]" in output.lower():
-                    analysis.append("🟡 Medium severity issues found")
-                    
-            elif tool == "nikto":
-                if "OSVDB" in output or "CVE" in output:
-                    analysis.append("⚠️ Nikto found potential vulnerabilities")
-                    vulns_found.append("nikto_findings")
-                    
-            elif tool == "wpscan":
-                if "Vulnerability" in output or "[!]" in output:
-                    analysis.append("🔴 WordPress vulnerabilities detected!")
-                    vulns_found.append("wordpress")
+            # Use semantic analysis
+            parsed = self._analyze_output_semantic(tool, output)
+            
+            if parsed.get("has_findings"):
+                severity = parsed.get("severity", "info")
+                severity_icon = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🟢"}.get(severity, "⚠️")
+                analysis.append(f"{severity_icon} {tool}: {parsed.get('summary', 'Vulnerabilities detected')}")
+                
+                if parsed.get("key_items"):
+                    for item in parsed["key_items"][:5]:
+                        analysis.append(f"   • {item}")
+                
+                # Track max severity
+                if severity_order.index(severity) > severity_order.index(max_severity):
+                    max_severity = severity
+            else:
+                analysis.append(f"✅ {tool}: No vulnerabilities found")
         
-        # Suggest next steps based on findings
-        if "critical" in vulns_found or "high" in vulns_found:
-            analysis.append("\n→ Next: Move to Phase 4 - Exploitation")
-            analysis.append("  Use sqlmap for SQL injection or metasploit for CVE exploits")
-        elif vulns_found:
-            analysis.append("\n→ Next: Investigate findings manually or try exploitation")
+        # Suggest next step based on severity
+        if max_severity in ["critical", "high"]:
+            analysis.append("\n→ 🎯 Move to Phase 4 - Exploitation")
+            analysis.append("  High severity vulnerabilities found - ready for exploitation")
+        elif max_severity in ["medium", "low"]:
+            analysis.append("\n→ Investigate findings manually or try different templates")
         else:
-            analysis.append("ℹ️ No critical vulnerabilities found")
-            analysis.append("→ Try different scan templates or manual testing")
+            analysis.append("\n→ No significant vulnerabilities - try different scan options")
         
         return "\n".join(analysis)

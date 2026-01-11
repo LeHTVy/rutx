@@ -345,6 +345,33 @@ class SessionMemory:
             summary[fact.fact_type] = summary.get(fact.fact_type, 0) + 1
         return summary
     
+    def get_facts_for_target(self, target: str) -> List[Fact]:
+        """Get all facts related to a target (for backward compat with AttackMemory)."""
+        return [f for f in self.facts.values() if f.target == target or target in f.target]
+    
+    def get_learning_hint(self, tool: str, params: Dict = None) -> Optional[Dict]:
+        """Get learning hint from past failures (for backward compat)."""
+        # Check if tool failed recently on same target
+        target = params.get("domain", "") if params else ""
+        for failure in self.failed_actions:
+            if failure.get("tool") == tool and target in failure.get("target", ""):
+                return {
+                    "should_retry": False,
+                    "suggestion": failure.get("reason", "Tool failed previously"),
+                    "last_error": failure.get("error", "")
+                }
+        return None
+    
+    def record_failure(self, tool: str, target: str, error: str, reason: str = ""):
+        """Record a failed action for learning."""
+        self.failed_actions.append({
+            "tool": tool,
+            "target": target,
+            "error": str(error),
+            "reason": reason,
+            "timestamp": datetime.now().isoformat()
+        })
+    
     # ─────────────────────────────────────────────────────────
     # Hypothesis Management
     # ─────────────────────────────────────────────────────────

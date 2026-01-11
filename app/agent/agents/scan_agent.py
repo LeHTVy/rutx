@@ -18,14 +18,9 @@ class ScanAgent(BaseAgent):
     - Detect services and versions
     - Discover directories/files (gobuster, dirsearch)
     - HTTP probing (httpx)
-    """
     
-    # Keywords that trigger this agent
-    SCAN_KEYWORDS = [
-        "scan", "port", "nmap", "masscan", "service", "open port",
-        "gobuster", "dirsearch", "directory", "enum", "probe",
-        "httpx", "http", "discover", "enumerate"
-    ]
+    NOTE: Routing is handled by LLM in coordinator.py - no keyword matching needed.
+    """
     
     def __init__(self, llm=None):
         super().__init__(llm)
@@ -51,15 +46,6 @@ class ScanAgent(BaseAgent):
         ]
         
         self.pentest_phases = [2]  # Scanning phase
-        
-        self.keywords = self.SCAN_KEYWORDS
-    
-    def can_handle(self, phase: int, query: str) -> bool:
-        """Check if this agent should handle the query."""
-        # Handle if in scanning phase or explicit scan request
-        if phase == 2:
-            return True
-        return any(kw in query.lower() for kw in self.SCAN_KEYWORDS)
     
     def plan(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Plan scanning tools and actions."""
@@ -183,36 +169,45 @@ class ScanAgent(BaseAgent):
         return commands
     
     def analyze_results(self, results: Dict[str, Any], context: Dict[str, Any]) -> str:
-        """Analyze scanning results and suggest next steps."""
+        """
+        Analyze scanning results using semantic analysis.
+        
+        HYBRID APPROACH: Uses _analyze_output_semantic() for intelligent parsing.
+        """
         analysis = []
+        has_critical = False
         
         for tool, result in results.items():
             if not result.get("success"):
+                analysis.append(f"❌ {tool}: {result.get('error', 'Failed')[:50]}")
                 continue
             
             output = result.get("output", "")
             
-            if tool == "nmap":
-                # Check for open ports
-                open_ports = []
-                if "open" in output:
-                    analysis.append(f"✅ nmap found open ports")
-                    # Suggest vuln scan next
-                    analysis.append("  → Next: Run nuclei or nikto for vulnerability scanning")
-                    
-            elif tool == "httpx":
-                # Count live hosts
-                if "200" in output or "301" in output:
-                    analysis.append("✅ httpx found live HTTP endpoints")
-                    analysis.append("  → Next: Run gobuster for directory enumeration")
-                    
-            elif tool in ["gobuster", "dirsearch"]:
-                if "Status: 200" in output or "200 -" in output:
-                    analysis.append("✅ Directory bruteforce found endpoints")
-                    analysis.append("  → Next: Run nuclei to scan discovered endpoints")
+            # Use semantic analysis instead of hardcoded checks
+            parsed = self._analyze_output_semantic(tool, output)
+            
+            if parsed.get("has_findings"):
+                severity = parsed.get("severity", "info")
+                severity_icon = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🟢"}.get(severity, "✅")
+                analysis.append(f"{severity_icon} {tool}: {parsed.get('summary', 'Findings detected')}")
+                
+                if parsed.get("key_items"):
+                    for item in parsed["key_items"][:3]:
+                        analysis.append(f"   • {item}")
+                
+                if severity in ["critical", "high"]:
+                    has_critical = True
+            else:
+                analysis.append(f"ℹ️ {tool}: {parsed.get('summary', 'No significant findings')}")
         
-        if not analysis:
-            analysis.append("⚠️ No significant findings from scan")
-            analysis.append("  → Try different scan options or tools")
+        # Suggest next step based on overall findings
+        if has_critical:
+            analysis.append("\n→ Next: Move to Phase 3 - Vulnerability scanning (nuclei/nikto)")
+        elif any(p.get("has_findings") for p in [self._analyze_output_semantic(t, r.get("output", "")) 
+                                                   for t, r in results.items() if r.get("success")]):
+            analysis.append("\n→ Next: Continue enumeration or run vulnerability scanners")
+        else:
+            analysis.append("\n→ Try different scan options or check target accessibility")
         
         return "\n".join(analysis)

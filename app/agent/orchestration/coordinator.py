@@ -170,7 +170,6 @@ Which agent should handle this task? Return ONLY the agent name (one word)."""
             
             for agent in valid_agents:
                 if agent in response:
-                    print(f"  🤖 Agent '{agent}' selected tools: {self.agents[agent].SPECIALIZED_TOOLS[:3]}")
                     return self.agents[agent]
             
         except Exception as e:
@@ -348,7 +347,7 @@ Which agent should handle this task? Return ONLY the agent name (one word)."""
                 result["next_phase_name"] = analysis.next_phase_name
                 result["next_agent"] = self._get_agent_for_phase(analysis.next_phase).AGENT_NAME
             
-            print(analysis.to_suggestion_message())
+            # Don't print to_suggestion_message() here - auto_advance() handles output
             return result
         
         # Fallback to agent's is_complete method

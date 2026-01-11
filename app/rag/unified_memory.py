@@ -459,6 +459,26 @@ class UnifiedRAG:
         except Exception as e:
             print(f"  ⚠️ Failed to store host: {e}")
     
+    def get_subdomains(self, domain: str, limit: int = 200) -> List[str]:
+        """Get all stored subdomains for a domain."""
+        try:
+            results = self.findings_collection.get(
+                where={"domain": domain, "type": "subdomain"},
+                limit=limit
+            )
+            
+            subdomains = []
+            if results and results.get("metadatas"):
+                for meta in results["metadatas"]:
+                    subdomain = meta.get("subdomain")
+                    if subdomain and subdomain not in subdomains:
+                        subdomains.append(subdomain)
+            
+            return subdomains
+        except Exception as e:
+            print(f"  ⚠️ Failed to get subdomains: {e}")
+            return []
+    
     def add_vulnerability(self, vuln_type: str, severity: str, target: str,
                          details: str = None, cve_id: str = None,
                          tool: str = None, domain: str = None,

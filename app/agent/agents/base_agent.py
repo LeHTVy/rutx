@@ -288,6 +288,88 @@ class BaseAgent(ABC):
             "phases": self.PENTEST_PHASES
         }
     
+    def _analyze_output_semantic(self, tool_name: str, output: str) -> Dict[str, Any]:
+        """
+        Semantic analysis of tool output using LLM.
+        
+        HYBRID APPROACH:
+        - Fast path: Quick pattern checks for obvious cases
+        - LLM path: Semantic understanding for complex output
+        
+        Returns:
+            Dict with has_findings, severity, summary, key_items, next_step
+        """
+        import re
+        import json
+        
+        # FAST PATH: Quick checks for common patterns (no LLM needed)
+        output_lower = output.lower()
+        
+        # Obvious failures
+        if not output or len(output) < 10:
+            return {"has_findings": False, "severity": "none", "summary": "No output", "next_step": "Try different options"}
+        
+        if any(err in output_lower for err in ["error:", "failed", "timeout", "connection refused"]):
+            return {"has_findings": False, "severity": "none", "summary": "Tool execution failed", "next_step": "Check target accessibility"}
+        
+        # Quick severity detection (common patterns)
+        quick_severity = "info"
+        if re.search(r'\[critical\]|\bcritical\b', output_lower):
+            quick_severity = "critical"
+        elif re.search(r'\[high\]|\bhigh\b.*severity', output_lower):
+            quick_severity = "high"
+        elif re.search(r'\[medium\]|\bmedium\b.*severity', output_lower):
+            quick_severity = "medium"
+        
+        # If output is short and simple, use fast path result
+        if len(output) < 500 and quick_severity in ["info", "none"]:
+            has_findings = "open" in output_lower or "found" in output_lower or "200" in output
+            return {
+                "has_findings": has_findings,
+                "severity": quick_severity if has_findings else "none",
+                "summary": f"{tool_name} completed" + (" with findings" if has_findings else ""),
+                "next_step": "Continue with next phase" if has_findings else "Try different approach"
+            }
+        
+        # LLM PATH: Complex output needs semantic understanding
+        try:
+            from app.llm.client import OllamaClient
+            from app.agent.prompt_loader import format_prompt
+            
+            # Get tool metadata
+            spec = self.registry.tools.get(tool_name)
+            tool_category = spec.category.value if spec and spec.category else "unknown"
+            tool_description = spec.description if spec else f"Security tool: {tool_name}"
+            
+            # Truncate output if too long
+            truncated_output = output[:3000] + "..." if len(output) > 3000 else output
+            
+            prompt = format_prompt("tool_output_analyzer",
+                tool_name=tool_name,
+                tool_category=tool_category,
+                tool_description=tool_description,
+                output=truncated_output
+            )
+            
+            llm = OllamaClient()
+            response = llm.generate(prompt, timeout=15, stream=False)
+            
+            # Parse JSON response
+            json_match = re.search(r'\{[^{}]+\}', response, re.DOTALL)
+            if json_match:
+                return json.loads(json_match.group())
+                
+        except Exception as e:
+            print(f"  ⚠️ LLM analysis skipped: {e}")
+        
+        # Fallback
+        return {
+            "has_findings": quick_severity != "none",
+            "severity": quick_severity,
+            "summary": f"{tool_name} output analyzed",
+            "next_step": "Review output manually"
+        }
+    
     def can_handle(self, phase: int, query: str) -> bool:
         """
         Check if this agent can handle the given phase/query.

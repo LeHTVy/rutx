@@ -16,6 +16,8 @@ from .phase_manager import (
     get_phase_manager,
     get_tool_phase,
     PHASE_NAMES,
+    PhaseGateAction,
+    PhaseGateResult,
 )
 from .phase_analyzer import (
     PhaseAnalyzer,
@@ -45,6 +47,8 @@ __all__ = [
     "get_phase_manager",
     "get_tool_phase",
     "PHASE_NAMES",
+    "PhaseGateAction",
+    "PhaseGateResult",
     
     # Phase Analysis
     "PhaseAnalyzer",

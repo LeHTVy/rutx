@@ -44,14 +44,14 @@ SECURITY_TECH_DB: Dict[str, SecurityTech] = {
         ],
         bypass_methods=[
             {
-                "method": "Historical DNS",
-                "description": "Check DNS history for pre-Cloudflare IP records",
+                "method": "SecurityTrails Historical DNS (BEST)",
+                "description": "Find pre-Cloudflare IP from DNS history - most reliable method",
                 "tool": "securitytrails",
-                "command": "Use SecurityTrails or DNSlytics to find historical A records"
+                "command": "securitytrails domain example.com --history"
             },
             {
                 "method": "Shodan SSL Search",
-                "description": "Search Shodan for SSL certificate matching the domain",
+                "description": "Search Shodan for SSL certificate matching the domain (free tier limited)",
                 "tool": "shodan",
                 "command": "shodan search ssl.cert.subject.cn:example.com"
             },
@@ -78,12 +78,19 @@ SECURITY_TECH_DB: Dict[str, SecurityTech] = {
                 "description": "Search Censys for certificates containing the domain",
                 "tool": "censys",
                 "command": "Search parsed.extensions.subject_alt_name.dns_names:example.com"
+            },
+            {
+                "method": "ClatScope Origin Discovery",
+                "description": "Combined OSINT: DNS history + IP resolution + wayback",
+                "tool": "clatscope",
+                "command": "clatscope find_origin example.com"
             }
         ],
         origin_discovery=[
-            "SecurityTrails historical DNS",
-            "Shodan ssl:example.com",
-            "Check MX records",
+            "SecurityTrails historical DNS (RECOMMENDED - securitytrails domain X --history)",
+            "Shodan ssl:example.com (limited on free tier)",
+            "ClatScope find_origin (free, uses wayback + DNS)",
+            "Check MX records (dig MX domain)",
             "Scan subdomains for non-CF hosts",
             "Censys certificate search"
         ]
