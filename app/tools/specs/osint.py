@@ -40,42 +40,42 @@ def get_specs() -> List[ToolSpec]:
         ),
         
         # ─────────────────────────────────────────────────────────
-        # SECURITYTRAILS - Threat Intelligence & Historical DNS
+        # SECURITYTRAILS - Threat Intelligence & Historical DNS (Python API)
         # ─────────────────────────────────────────────────────────
         ToolSpec(
             name="securitytrails",
             category=ToolCategory.OSINT,
-            description="SecurityTrails API: Historical DNS records, origin IP discovery, associated domains. Useful for bypassing CDN/WAF like Cloudflare.",
-            executable_names=["securitytrails", "st"],  # CLI tool if available
-            install_hint="pip install securitytrails && export SECURITYTRAILS_API_KEY=your_key (Get API key from https://securitytrails.com/)",
+            description="SecurityTrails API: Historical DNS records, origin IP discovery (BEST for CDN/WAF bypass). Find pre-Cloudflare IPs.",
+            executable_names=["python"],  # Python-based via handler, not CLI
+            install_hint="Set SECURITYTRAILS_API_KEY in .env (Get free key: https://securitytrails.com/app/signup - 50 queries/month)",
             commands={
                 # history: Get historical DNS records - find origin IP before CDN
                 "history": CommandTemplate(
-                    args=["domain", "{domain}", "--history"],
+                    args=["securitytrails", "history", "{domain}"],
                     timeout=30,
                     success_codes=[0]
                 ),
                 # domain: Get current DNS data for domain
                 "domain": CommandTemplate(
-                    args=["domain", "{domain}"],
+                    args=["securitytrails", "domain", "{domain}"],
                     timeout=30,
                     success_codes=[0]
                 ),
                 # subdomains: Enumerate subdomains
                 "subdomains": CommandTemplate(
-                    args=["domain", "{domain}", "--subdomains"],
+                    args=["securitytrails", "subdomains", "{domain}"],
                     timeout=60,
                     success_codes=[0]
                 ),
                 # associated: Find associated/related domains
                 "associated": CommandTemplate(
-                    args=["domain", "{domain}", "--associated"],
+                    args=["securitytrails", "associated", "{domain}"],
                     timeout=30,
                     success_codes=[0]
                 ),
                 # whois: WHOIS history
                 "whois": CommandTemplate(
-                    args=["domain", "{domain}", "--whois"],
+                    args=["securitytrails", "whois", "{domain}"],
                     timeout=30,
                     success_codes=[0]
                 ),

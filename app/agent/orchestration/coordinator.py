@@ -65,6 +65,76 @@ class AgentCoordinator:
             "system": SystemAgent(llm)       # System utilities
         }
         self._llm = llm
+        # Build reverse mapping: tool_name -> agent_name for fast lookup
+        self._tool_to_agent: Dict[str, str] = {}
+        self._build_tool_agent_map()
+    
+    def _build_tool_agent_map(self):
+        """
+        Build mapping from tool names to agent names using SPECIALIZED_TOOLS.
+        
+        For tools in multiple agents, prioritize:
+        1. Agent with lower phase number (more specialized)
+        2. Agent with fewer phases (more focused)
+        """
+        # First pass: collect all tool->agent mappings
+        tool_agents: Dict[str, List[tuple]] = {}  # tool -> [(agent_name, min_phase, phase_count), ...]
+        
+        for agent_name, agent in self.agents.items():
+            # Get SPECIALIZED_TOOLS (class variable) or fallback to instance variable
+            specialized_tools = getattr(agent, 'SPECIALIZED_TOOLS', None)
+            if not specialized_tools:
+                # Fallback for agents that use instance variable
+                specialized_tools = getattr(agent, 'specialized_tools', [])
+            
+            # Get PENTEST_PHASES (class variable) or fallback to instance variable
+            pentest_phases = getattr(agent, 'PENTEST_PHASES', None)
+            if not pentest_phases:
+                pentest_phases = getattr(agent, 'pentest_phases', [])
+            
+            min_phase = min(pentest_phases) if pentest_phases else 99
+            phase_count = len(pentest_phases)
+            
+            for tool in specialized_tools:
+                tool_lower = tool.lower()
+                if tool_lower not in tool_agents:
+                    tool_agents[tool_lower] = []
+                tool_agents[tool_lower].append((agent_name, min_phase, phase_count))
+        
+        # Second pass: select best agent for each tool
+        for tool_lower, candidates in tool_agents.items():
+            # Sort by: 1) fewer phases (more specialized), 2) lower min_phase
+            # This prioritizes agents that are more focused (e.g., vuln agent for nuclei)
+            candidates.sort(key=lambda x: (x[2], x[1]))
+            # Use the first (best) agent
+            self._tool_to_agent[tool_lower] = candidates[0][0]
+    
+    def get_agent_by_tool(self, tool_name: str) -> Optional[BaseAgent]:
+        """
+        Get agent that handles a specific tool.
+        
+        Uses SPECIALIZED_TOOLS from agents instead of hardcoded mapping.
+        
+        Args:
+            tool_name: Name of the tool
+            
+        Returns:
+            Agent instance or None if not found
+        """
+        agent_name = self._tool_to_agent.get(tool_name.lower())
+        if agent_name:
+            return self.agents.get(agent_name)
+        
+        # Fallback: search through agents (check both class and instance variables)
+        for agent in self.agents.values():
+            specialized_tools = getattr(agent, 'SPECIALIZED_TOOLS', None)
+            if not specialized_tools:
+                specialized_tools = getattr(agent, 'specialized_tools', [])
+            
+            if tool_name.lower() in [t.lower() for t in specialized_tools]:
+                return agent
+        
+        return None
     
     @property
     def llm(self):
@@ -136,12 +206,18 @@ class AgentCoordinator:
         """
         from app.llm.client import OllamaClient
         
+        analyzer_next_tool = context.get("analyzer_next_tool")
         context_summary = self._summarize_context(context)
+        
+        # Add analyzer recommendation to prompt if exists
+        analyzer_note = ""
+        if analyzer_next_tool:
+            analyzer_note = f"\n\nIMPORTANT: Analyzer recommended next tool: {analyzer_next_tool}. User said '{query}' which likely means 'do the next step' - consider using this recommendation."
         
         prompt = f"""You are routing a pentest task to the best agent.
 
 TASK: {query}
-CONTEXT: {context_summary}
+CONTEXT: {context_summary}{analyzer_note}
 
 AVAILABLE AGENTS:
 - recon: Subdomain enumeration, OSINT, DNS lookup, WHOIS (tools: amass, subfinder, whois, clatscope, bbot)
@@ -216,8 +292,16 @@ Which agent should handle this task? Return ONLY the agent name (one word)."""
         Returns:
             Dict with agent name, tools, commands, and reasoning.
         """
+        analyzer_next_tool = context.get("analyzer_next_tool")
+        
         # Select agent using LLM
         agent = self.route(query, context)
+        
+        # If "do the next step" and analyzer has recommendation, pass it to agent
+        query_lower = query.lower()
+        if analyzer_next_tool and ("next step" in query_lower or "do the" in query_lower or ("suggest" in query_lower and "step" in query_lower)):
+            context["user_requested_tool"] = analyzer_next_tool
+            context["user_requested_target"] = context.get("analyzer_next_target")
         
         # Get agent's plan - with user tool priority
         plan = agent.plan_with_user_priority(query, context)
@@ -275,7 +359,8 @@ Which agent should handle this task? Return ONLY the agent name (one word)."""
         }
     
     def _get_all_targets(self, context: Dict[str, Any]) -> List[str]:
-        """Get all targets for execution from context."""
+        """Get all targets for execution from context (domain, subdomains, IPs, interesting URLs)."""
+        import re
         targets = []
         
         # Main domain
@@ -292,7 +377,38 @@ Which agent should handle this task? Return ONLY the agent name (one word)."""
         if context.get("ips"):
             targets.extend(context["ips"][:20])
         
-        return list(set(targets))
+        # Extract domains from interesting URLs
+        interesting_urls = context.get("interesting_urls", [])
+        if interesting_urls:
+            for url in interesting_urls[:30]:  # Limit to 30 URLs
+                # Extract domain from URL
+                url = url.strip()
+                if url.startswith(("http://", "https://")):
+                    # Remove protocol
+                    domain = re.sub(r'^https?://', '', url)
+                    # Remove path and port
+                    domain = domain.split('/')[0].split(':')[0]
+                    if domain and domain not in targets:
+                        targets.append(domain)
+        
+        # Also try to get from RAG if available
+        domain = context.get("target_domain") or context.get("last_domain")
+        if domain:
+            try:
+                from app.rag import get_unified_rag
+                rag = get_unified_rag()
+                # Get IPs
+                rag_ips = rag.get_ips(domain, limit=50)
+                if rag_ips:
+                    targets.extend(rag_ips)
+                # Get subdomains
+                rag_subs = rag.get_subdomains(domain, limit=50)
+                if rag_subs:
+                    targets.extend(rag_subs)
+            except Exception:
+                pass
+        
+        return list(set(targets))  # Deduplicate
     
     def get_all_agents(self) -> List[Dict[str, Any]]:
         """Get info about all available agents."""

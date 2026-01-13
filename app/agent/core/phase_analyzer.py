@@ -137,6 +137,7 @@ class PhaseAnalyzer:
             
             # Parse JSON from response
             result = self._parse_response(response, current_phase)
+            
             return result
             
         except Exception as e:

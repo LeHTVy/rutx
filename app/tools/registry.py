@@ -307,6 +307,33 @@ class ToolRegistry:
         
         template = spec.commands[command]
         
+        # Check for Python-based handlers first (securitytrails, clatscope, etc.)
+        # These tools use handlers instead of CLI
+        from app.tools.handlers import execute_tool as handler_execute
+        
+        # Inject command into params for handler
+        handler_params = params.copy()
+        handler_params["command"] = command
+        
+        handler_result = handler_execute(tool, handler_params, None)
+        if handler_result is not None:
+            # Handler found and executed
+            start_time = time.time()
+            elapsed = time.time() - start_time
+            
+            # Determine success based on output
+            success = not handler_result.startswith("⚠️") and not handler_result.startswith("Error")
+            
+            return ToolResult(
+                success=success,
+                tool=tool,
+                action=command,
+                output=handler_result,
+                error="" if success else handler_result,
+                elapsed_time=elapsed
+            )
+        
+        # No handler - use CLI execution
         # Build command args
         try:
             args = self._build_args(spec, template, params)

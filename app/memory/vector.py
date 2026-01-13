@@ -6,6 +6,7 @@ Uses ChromaDB for semantic search over conversation history.
 import chromadb
 from chromadb.config import Settings
 import uuid
+import json
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from pathlib import Path
@@ -33,6 +34,14 @@ class VectorMemory:
     
     def _get_embedding(self, text: str) -> List[float]:
         """Generate embedding using Ollama."""
+        # Ensure text is a string
+        if not isinstance(text, str):
+            if isinstance(text, dict):
+                import json
+                text = json.dumps(text)
+            else:
+                text = str(text)
+        
         try:
             import requests
             
@@ -57,6 +66,14 @@ class VectorMemory:
     
     def _simple_embedding(self, text: str) -> List[float]:
         """Simple fallback embedding (word frequency based)."""
+        # Ensure text is a string
+        if not isinstance(text, str):
+            if isinstance(text, dict):
+                import json
+                text = json.dumps(text)
+            else:
+                text = str(text)
+        
         # Very simple - just for fallback
         import hashlib
         
@@ -74,6 +91,32 @@ class VectorMemory:
         embedding = [x / total for x in embedding]
         
         return embedding
+    
+    def _sanitize_metadata(self, metadata: Dict) -> Dict:
+        """
+        Sanitize metadata for ChromaDB compatibility.
+        ChromaDB only accepts str, int, float, bool, SparseVector, or None.
+        Converts lists and dicts to JSON strings.
+        Removes None values to avoid ChromaDB errors.
+        """
+        sanitized = {}
+        for key, value in metadata.items():
+            # Skip None values - ChromaDB doesn't handle them well
+            if value is None:
+                continue
+            
+            if isinstance(value, (str, int, float, bool)):
+                sanitized[key] = value
+            elif isinstance(value, list):
+                # Convert list to JSON string
+                sanitized[key] = json.dumps(value)
+            elif isinstance(value, dict):
+                # Convert dict to JSON string
+                sanitized[key] = json.dumps(value)
+            else:
+                # Convert other types to string
+                sanitized[key] = str(value)
+        return sanitized
     
     def add_message(
         self,
@@ -99,7 +142,11 @@ class VectorMemory:
         if tools:
             meta["tools"] = ",".join(tools)
         if metadata:
-            meta.update(metadata)
+            # Only add non-None values from metadata
+            meta.update({k: v for k, v in metadata.items() if v is not None})
+        
+        # Sanitize metadata for ChromaDB compatibility
+        meta = self._sanitize_metadata(meta)
         
         # Generate embedding
         embedding = self._get_embedding(content)
@@ -160,6 +207,9 @@ class VectorMemory:
             meta["domain"] = domain
         if metadata:
             meta.update(metadata)
+        
+        # Sanitize metadata for ChromaDB compatibility
+        meta = self._sanitize_metadata(meta)
         
         embedding = self._get_embedding(doc)
         

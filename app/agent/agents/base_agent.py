@@ -8,6 +8,15 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
 import re
 
+# Import hierarchy support
+try:
+    from app.agent.orchestration.hierarchy import HierarchicalAgentMixin, SubordinateAgent
+    _HIERARCHY_AVAILABLE = True
+except ImportError:
+    _HIERARCHY_AVAILABLE = False
+    HierarchicalAgentMixin = object
+    SubordinateAgent = None
+
 
 class BaseAgent(ABC):
     """Base class for all specialized agents."""
@@ -23,6 +32,10 @@ class BaseAgent(ABC):
         self._llm = llm
         self._tool_index = None
         self._registry = None
+        
+        # Initialize hierarchy support if available
+        if _HIERARCHY_AVAILABLE:
+            self._subordinates: List[SubordinateAgent] = []
     
     @property
     def llm(self):
@@ -99,6 +112,80 @@ class BaseAgent(ABC):
         
         return user_tools
     
+    def _discover_tools_via_rag(
+        self, 
+        query: str, 
+        context: Dict[str, Any],
+        n_results: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Discover tools using ChromaDB vector search.
+        
+        Uses UnifiedRAG to semantically search for tools based on user query.
+        Filters results based on agent's specialized_tools and context.
+        
+        Returns:
+            List of tool:command pairs with metadata (tool, command, score, description)
+        """
+        try:
+            from app.rag.unified_memory import get_unified_rag
+            rag = get_unified_rag()
+            
+            # Build enhanced query with context
+            enhanced_query = query
+            
+            # Add context hints to query for better matching
+            if context.get("has_subdomains"):
+                enhanced_query += " subdomain enumeration"
+            if context.get("has_ports"):
+                enhanced_query += " port scanning"
+            if context.get("detected_tech"):
+                tech = context.get("detected_tech", [])[:2]
+                enhanced_query += f" technology: {', '.join(tech)}"
+            
+            # Build filters
+            filters = {
+                "min_score": 0.3,  # Minimum relevance score
+            }
+            
+            # Filter by category if agent has specialized tools
+            if self.SPECIALIZED_TOOLS:
+                # Get categories for specialized tools
+                categories = set()
+                for tool_name in self.SPECIALIZED_TOOLS:
+                    spec = self.registry.tools.get(tool_name)
+                    if spec:
+                        categories.add(spec.category.value)
+                
+                # If all specialized tools are in one category, filter by it
+                if len(categories) == 1:
+                    filters["category"] = list(categories)[0]
+            
+            # Exclude tools already run
+            tools_run = context.get("tools_run", [])
+            if tools_run:
+                filters["exclude_tools"] = tools_run
+            
+            # Query ChromaDB
+            matches = rag.query_tools(enhanced_query, n_results=n_results, filters=filters)
+            
+            # Further filter by specialized_tools if available
+            if self.SPECIALIZED_TOOLS:
+                filtered_matches = [
+                    m for m in matches 
+                    if m["tool"] in self.SPECIALIZED_TOOLS
+                ]
+                # If we have matches in specialized tools, use those
+                # Otherwise, use all matches (agent might discover new tools)
+                if filtered_matches:
+                    return filtered_matches[:n_results]
+            
+            return matches[:n_results]
+            
+        except Exception as e:
+            print(f"  ⚠️ RAG tool discovery failed: {e}")
+            return []
+    
     def plan_with_user_priority(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Plan tools, prioritizing user-specified tools over agent selection.
@@ -106,8 +193,14 @@ class BaseAgent(ABC):
         If user explicitly mentions tools, use those.
         Otherwise, fall back to agent's intelligent selection.
         """
+        user_requested_tool = context.get("user_requested_tool")
+        
         # First, check if user mentioned specific tools
         user_tools = self.extract_user_tools(query)
+        
+        # Also check if user requested tool from analyzer (for "do the next step")
+        if user_requested_tool and not user_tools:
+            user_tools = [user_requested_tool]
         
         if user_tools:
             # User specified tools - validate and use them
@@ -117,6 +210,25 @@ class BaseAgent(ABC):
             # Warn about unavailable tools
             if unavailable:
                 print(f"  ⚠️ Requested tools not available: {', '.join(unavailable)}")
+                # If this is from analyzer recommendation, try to suggest alternatives
+                if user_requested_tool and user_requested_tool in unavailable:
+                    print(f"  💡 Analyzer recommended '{user_requested_tool}' but it's not available. Suggesting alternatives...")
+                    # Try to find similar tools
+                    from app.tools.registry import ToolCategory
+                    try:
+                        recommended_spec = self.registry.tools.get(user_requested_tool)
+                        if recommended_spec:
+                            # Find tools in same category
+                            category = recommended_spec.category
+                            alternatives = [t for t in self.registry.list_tools(category) 
+                                          if t != user_requested_tool and self.registry.is_available(t)]
+                            if alternatives:
+                                print(f"  💡 Alternative tools in same category: {', '.join(alternatives[:3])}")
+                                # Use first available alternative
+                                valid_tools = [alternatives[0]]
+                                unavailable = []  # Clear unavailable since we have alternative
+                    except Exception:
+                        pass
             
             if valid_tools:
                 # Get commands for user's tools
@@ -134,6 +246,13 @@ class BaseAgent(ABC):
                     "user_specified": True,
                     "unavailable_tools": unavailable
                 }
+            elif user_requested_tool and user_requested_tool in unavailable:
+                # Analyzer recommended tool is unavailable, but still try to use agent's plan
+                # but pass the recommendation info so agent can consider it
+                print(f"  ⚠️ Analyzer recommended '{user_requested_tool}' but it's not available. Using agent's selection instead.")
+                # Still call plan() but with recommendation in context for agent to consider
+                context["_analyzer_recommended_unavailable"] = user_requested_tool
+                return self.plan(query, context)
         
         # No user-specified tools, use normal planning
         return self.plan(query, context)
@@ -229,6 +348,178 @@ class BaseAgent(ABC):
             return tools  # No filter if not specified
         return [t for t in tools if t in self.SPECIALIZED_TOOLS]
     
+    def prepare_tool_params(
+        self,
+        tool_name: str,
+        command: str,
+        context: Dict[str, Any],
+        targets: List[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Prepare tool-specific parameters including target handling.
+        
+        Handles:
+        - Batch file creation for tools that accept file input (nmap, masscan, nuclei)
+        - Target list formatting
+        - Tool-specific parameter defaults
+        
+        Args:
+            tool_name: Name of the tool
+            command: Command to execute
+            context: Current context
+            targets: Optional list of targets (if None, will be collected from context)
+        
+        Returns:
+            Dict of tool parameters ready for execution
+        """
+        from app.agent.core import get_target_collector
+        
+        tool_params = {}
+        domain = context.get("last_domain") or context.get("target_domain") or ""
+        user_mods = context.get("user_modifications", {})
+        
+        # Get targets if not provided
+        if targets is None:
+            target_collector = get_target_collector()
+            query = context.get("query", "")
+            target_params = target_collector.prepare_targets_for_tool(
+                tool_name, domain, context, user_mods, query
+            )
+            tool_params.update(target_params)
+            targets = target_params.get("targets", [target_params.get("target", domain)])
+        
+        # Tool-specific parameter preparation
+        if tool_name in ["nmap", "masscan", "nuclei"] and len(targets) > 1:
+            # Batch processing: create temp file for target list
+            import tempfile
+            import os
+            
+            try:
+                temp_dir = tempfile.gettempdir()
+                safe_domain = domain.replace('.', '_').replace('/', '_') if domain else "unknown"
+                target_file = os.path.join(temp_dir, f"snode_targets_{safe_domain}_batch.txt")
+                
+                # Ensure directory is writable
+                if not os.access(temp_dir, os.W_OK):
+                    target_file = f"./snode_targets_{safe_domain}_batch.txt"
+                
+                with open(target_file, 'w') as f:
+                    f.write('\n'.join(targets))
+                
+                # Set file parameter based on tool
+                if tool_name == "nmap":
+                    tool_params["file"] = target_file
+                    tool_params["_command_override"] = "from_file"
+                elif tool_name == "nuclei":
+                    tool_params["file"] = target_file
+                    tool_params["_command_override"] = "scan_list"
+                elif tool_name == "masscan":
+                    tool_params["target"] = target_file
+                    tool_params["_command_override"] = "scan"
+                
+                tool_params["_batch_file"] = target_file  # Store for cleanup if needed
+                
+            except Exception as e:
+                print(f"  ⚠️ Failed to create batch file: {e}")
+                # Fallback: use targets directly
+                tool_params["target"] = " ".join(targets[:20])
+                tool_params["targets"] = targets[:50]
+        
+        # Default parameters for common tools
+        if tool_name in ["nuclei", "nmap", "masscan"]:
+            tool_params["target"] = tool_params.get("target") or domain
+        if tool_name in ["wpscan", "nikto", "httpx", "katana", "wafw00f", "whatweb", "arjun", "dirsearch", "feroxbuster"]:
+            tool_params["url"] = tool_params.get("url") or (f"https://{domain}" if domain and not domain.startswith("http") else domain)
+        if tool_name in ["subfinder", "amass", "bbot", "dig"]:
+            tool_params["domain"] = tool_params.get("domain") or domain
+        
+        # Default wordlist paths (common Kali/SecLists locations)
+        if not tool_params.get("wordlist"):
+            import os
+            wordlist_paths = [
+                "wordlists/common.txt", 
+                "/usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt",
+                "/usr/share/wordlists/dirb/common.txt",
+                "/usr/share/seclists/Discovery/Web-Content/common.txt",
+                "/usr/share/wordlists/seclists/Discovery/Web-Content/common.txt",
+                "/usr/share/dirb/wordlists/common.txt",
+            ]
+            for wl in wordlist_paths:
+                if os.path.exists(wl):
+                    tool_params["wordlist"] = wl
+                    break
+            if not tool_params.get("wordlist"):
+                # Fallback - use local wordlist
+                tool_params["wordlist"] = "wordlists/common.txt"
+        
+        # For brute-force tools, use password wordlist instead of directory wordlist
+        if tool_name in ["hydra", "medusa", "john", "hashcat"]:
+            import os
+            password_lists = [
+                "wordlists/passwords.txt",
+                "/usr/share/wordlists/rockyou.txt",
+                "/usr/share/seclists/Passwords/Common-Credentials/10-million-password-list-top-1000.txt",
+            ]
+            for pwl in password_lists:
+                if os.path.exists(pwl):
+                    tool_params["wordlist"] = pwl
+                    break
+        
+        # Default user for brute-force tools (hydra, medusa)
+        if tool_name in ["hydra", "medusa"] and not tool_params.get("user"):
+            tool_params["user"] = "admin"  # Most common default username
+        
+        # Default port for nikto if not specified
+        if tool_name == "nikto" and not tool_params.get("port"):
+            tool_params["port"] = "443"
+        
+        # Default ports for port scanners (masscan, nmap)
+        if tool_name in ["nmap", "masscan", "rustscan"] and not tool_params.get("ports"):
+            from app.rag.port_metadata import PORT_PROFILES
+            tool_params["ports"] = PORT_PROFILES["critical"]
+        
+        # Apply port modifications from user
+        if user_mods.get("ports"):
+            port_setting = user_mods["ports"]
+            if port_setting == "100":
+                tool_params["ports"] = "--top-ports 100"
+            elif port_setting == "1000":
+                tool_params["ports"] = "--top-ports 1000"
+            elif port_setting == "1-65535":
+                tool_params["ports"] = "-p-"
+        
+        # Update command if it was changed (for batch processing)
+        if "_command_override" in tool_params:
+            command = tool_params.pop("_command_override")
+        
+        return tool_params
+    
+    def create_subordinate(
+        self,
+        task: str,
+        specialized_agent: str = None,
+        context: Dict[str, Any] = None
+    ) -> Optional[Any]:
+        """
+        Create a subordinate agent to handle a subtask.
+        
+        Requires hierarchy support to be available.
+        
+        Args:
+            task: The task to delegate
+            specialized_agent: Optional agent name (recon, scan, vuln, etc.)
+            context: Optional context to pass to subordinate
+            
+        Returns:
+            SubordinateAgent instance or None if hierarchy not available
+        """
+        if not _HIERARCHY_AVAILABLE:
+            return None
+        
+        from app.agent.orchestration.hierarchy import HierarchicalAgentMixin
+        mixin = HierarchicalAgentMixin()
+        return mixin.create_subordinate(task, specialized_agent, context)
+    
     def execute_tool(self, tool_name: str, command: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a single tool and return results."""
         if not self.registry.is_available(tool_name):
@@ -238,6 +529,7 @@ class BaseAgent(ABC):
             }
         
         result = self.registry.execute(tool_name, command, params)
+        
         return {
             "success": result.success,
             "output": result.output if result.success else result.error,

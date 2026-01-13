@@ -79,6 +79,7 @@ config_local.py
 *_secrets.py
 data/llm_config.json
 data/*.key
+con
 
 # API Keys (in case accidentally added to config.py)
 # Ensure config.py is reviewed before committing

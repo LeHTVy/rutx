@@ -53,6 +53,7 @@ class PostgresMemory:
                     id SERIAL PRIMARY KEY,
                     session_id UUID UNIQUE NOT NULL,
                     user_id VARCHAR(255) DEFAULT 'default',
+                    customer_id VARCHAR(255),
                     started_at TIMESTAMP DEFAULT NOW(),
                     last_active TIMESTAMP DEFAULT NOW(),
                     target_domain VARCHAR(255),
@@ -60,6 +61,12 @@ class PostgresMemory:
                     context JSONB DEFAULT '{}'
                 )
             """)
+            
+            # Add customer_id column if it doesn't exist (migration)
+            try:
+                cur.execute("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS customer_id VARCHAR(255)")
+            except Exception:
+                pass  # Column might already exist
             
             # Messages table
             cur.execute("""
@@ -86,6 +93,17 @@ class PostgresMemory:
                 )
             """)
             
+            # History table (for topic-based history - Phase 1)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS history (
+                    id SERIAL PRIMARY KEY,
+                    session_id UUID REFERENCES sessions(session_id) ON DELETE CASCADE,
+                    history_data JSONB NOT NULL,
+                    updated_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(session_id)
+                )
+            """)
+            
             # Create indexes
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_messages_session 
@@ -98,6 +116,10 @@ class PostgresMemory:
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_sessions_domain 
                 ON sessions(target_domain)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_history_session 
+                ON history(session_id)
             """)
     
     # ==================== Session Management ====================
@@ -321,6 +343,34 @@ class PostgresMemory:
             deleted = cur.rowcount
         
         return deleted
+    
+    def save_history(self, session_id: str, history_data: Dict):
+        """Save topic-based history to PostgreSQL."""
+        if not self.conn:
+            return
+        
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO history (session_id, history_data, updated_at)
+                VALUES (%s, %s, NOW())
+                ON CONFLICT (session_id) 
+                DO UPDATE SET history_data = %s, updated_at = NOW()
+            """, (session_id, Json(history_data), Json(history_data)))
+    
+    def get_history(self, session_id: str) -> Optional[Dict]:
+        """Get topic-based history from PostgreSQL."""
+        if not self.conn:
+            return None
+        
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT history_data FROM history
+                WHERE session_id = %s
+            """, (session_id,))
+            row = cur.fetchone()
+            if row:
+                return row["history_data"]
+        return None
     
     def close(self):
         """Close database connection."""

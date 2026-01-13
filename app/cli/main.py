@@ -22,6 +22,7 @@ from rich.panel import Panel
 from rich.markdown import Markdown
 from rich.spinner import Spinner
 from rich.live import Live
+from rich.table import Table
 
 # prompt_toolkit for enhanced input
 from prompt_toolkit import PromptSession
@@ -53,8 +54,9 @@ class SnodeCompleter(Completer):
         
         # Slash commands
         self.slash_commands = [
-            "/model", "/resume", "/sessions", "/memory", "/tools", 
-            "/cve", "/report", "/shortcuts", "/clear", "/help"
+            "/model", "/resume", "/sessions", "/memory", "/tasks", "/tools", 
+            "/cve", "/report", "/shortcuts", "/clear", "/help", "/autochain",
+            "/manual", "/mode"
         ]
         
         # Quick commands
@@ -214,6 +216,33 @@ def run_snode():
                 print_banner(console)
                 continue
             
+            # /autochain command
+            if user_input.lower() == "/autochain":
+                agent.set_mode("autochain")
+                console.print("[bold cyan]🚀 AutoChain Mode Enabled[/]")
+                console.print("[dim]  • 5 iterations will run automatically[/]")
+                console.print("[dim]  • Small analysis after each iteration[/]")
+                console.print("[dim]  • Comprehensive analysis after all 5 iterations[/]")
+                console.print("[dim]  • Use 'attack <target>' to start immediately[/]\n")
+                continue
+            
+            # /manual command
+            if user_input.lower() == "/manual":
+                agent.set_mode("manual")
+                console.print("[green]✅ Manual mode enabled. You will confirm each step.[/]\n")
+                continue
+            
+            # /mode command
+            if user_input.lower() == "/mode":
+                current_mode = agent.mode if hasattr(agent, 'mode') else "manual"
+                iteration = agent.autochain_iteration_count if hasattr(agent, 'autochain_iteration_count') else 0
+                if current_mode == "autochain":
+                    console.print(f"[cyan]Current mode: {current_mode.upper()}[/]")
+                    console.print(f"[dim]Iteration: {iteration}/5[/]\n")
+                else:
+                    console.print(f"[cyan]Current mode: {current_mode.upper()}[/]\n")
+                continue
+            
             if user_input.lower() in ["exit", "quit", "q"]:
                 # End session on exit
                 if memory:
@@ -330,6 +359,69 @@ def run_snode():
                         console.print(f"  {role} {content}...")
                 console.print()
                 continue  # Don't process /memory through LLM
+            
+            # Task scheduler commands
+            if user_input.lower().startswith("/tasks") or user_input.lower().startswith("/task"):
+                try:
+                    from app.scheduler import get_task_scheduler, ScheduledTask, PlannedTask, AdHocTask, TaskSchedule
+                    scheduler = get_task_scheduler()
+                    
+                    parts = user_input.split(maxsplit=1)
+                    subcommand = parts[1].strip() if len(parts) > 1 else "list"
+                    
+                    if subcommand == "list":
+                        console.print("\n[bold cyan]📅 Scheduled Tasks[/]\n")
+                        tasks = scheduler.get_tasks()
+                        if not tasks:
+                            console.print("[dim]No tasks scheduled[/]\n")
+                        else:
+                            for task in tasks:
+                                state_color = {
+                                    "idle": "green",
+                                    "running": "yellow",
+                                    "disabled": "dim",
+                                    "error": "red"
+                                }.get(task.state.value, "white")
+                                console.print(f"  [{state_color}]{task.name}[/] ({task.type.value}) - {task.state.value}")
+                                if task.last_run:
+                                    console.print(f"    Last run: {task.last_run}")
+                                if task.last_result:
+                                    console.print(f"    Result: {task.last_result[:50]}...")
+                                console.print()
+                    
+                    elif subcommand.startswith("create"):
+                        console.print("[yellow]Usage: /tasks create <type> <name> <prompt>[/]")
+                        console.print("[dim]Types: scheduled, planned, adhoc[/]\n")
+                    
+                    elif subcommand.startswith("run"):
+                        parts2 = subcommand.split(maxsplit=1)
+                        task_id = parts2[1] if len(parts2) > 1 else None
+                        if not task_id:
+                            console.print("[yellow]Usage: /tasks run <task_uuid>[/]\n")
+                        else:
+                            try:
+                                import asyncio
+                                asyncio.run(scheduler.run_task(task_id))
+                                console.print(f"[green]✅ Task {task_id} started[/]\n")
+                            except Exception as e:
+                                console.print(f"[red]❌ Failed to run task: {e}[/]\n")
+                    
+                    elif subcommand.startswith("delete"):
+                        parts2 = subcommand.split(maxsplit=1)
+                        task_id = parts2[1] if len(parts2) > 1 else None
+                        if not task_id:
+                            console.print("[yellow]Usage: /tasks delete <task_uuid>[/]\n")
+                        else:
+                            scheduler.remove_task(task_id)
+                            console.print(f"[green]✅ Task {task_id} deleted[/]\n")
+                    
+                    else:
+                        console.print("[yellow]Usage: /tasks [list|create|run|delete][/]\n")
+                
+                except Exception as e:
+                    console.print(f"[red]❌ Task scheduler error: {e}[/]\n")
+                
+                continue
             
             # Tools list command
             if user_input.lower() in ["/tools", "/tool", "tools"]:
@@ -658,6 +750,70 @@ def run_snode():
                     user_input = f"{quick_commands[cmd]} {target}"
                     console.print(f"[dim]→ Expanding to: {user_input}[/]\n")
             
+            # Context switching commands (Phase 3)
+            if user_input.lower().startswith("/switch"):
+                parts = user_input.split(maxsplit=1)
+                if len(parts) == 1:
+                    # List contexts
+                    from app.agent.context_switcher import get_context_manager
+                    ctx_manager = get_context_manager()
+                    contexts = ctx_manager.list_contexts()
+                    
+                    if contexts:
+                        console.print("\n[bold cyan]📋 Available Contexts:[/]\n")
+                        for ctx in contexts:
+                            marker = "[green]●[/]" if ctx["is_current"] else "[dim]○[/]"
+                            console.print(
+                                f"  {marker} [bold]{ctx['id']}[/] - {ctx['target_domain']} "
+                                f"({ctx['message_count']} messages, {ctx['topic_count']} topics)"
+                            )
+                        console.print("\n[dim]Usage: /switch <context_id>[/]\n")
+                    else:
+                        console.print("\n[dim]No contexts available. Create one by starting a conversation.[/]\n")
+                else:
+                    # Switch to context
+                    ctx_id = parts[1].strip()
+                    from app.agent.context_switcher import get_context_manager
+                    ctx_manager = get_context_manager()
+                    
+                    if ctx_manager.switch_to(ctx_id):
+                        ctx = ctx_manager.get_current()
+                        console.print(f"[green]✅ Switched to context: {ctx.target_domain}[/]\n")
+                    else:
+                        console.print(f"[red]❌ Context '{ctx_id}' not found[/]\n")
+                continue
+            
+            if user_input.lower() in ["/contexts", "/ctx", "contexts"]:
+                from app.agent.context_switcher import get_context_manager
+                ctx_manager = get_context_manager()
+                contexts = ctx_manager.list_contexts()
+                
+                if contexts:
+                    console.print("\n[bold cyan]📋 Conversation Contexts:[/]\n")
+                    table = Table(show_header=True, header_style="bold cyan")
+                    table.add_column("ID", style="cyan")
+                    table.add_column("Target", style="green")
+                    table.add_column("Messages", justify="right")
+                    table.add_column("Topics", justify="right")
+                    table.add_column("Status")
+                    table.add_column("Updated")
+                    
+                    for ctx in contexts:
+                        status = "[green]● Current[/]" if ctx["is_current"] else "[dim]○[/]"
+                        table.add_row(
+                            ctx["id"],
+                            ctx["target_domain"],
+                            str(ctx["message_count"]),
+                            str(ctx["topic_count"]),
+                            status,
+                            ctx["updated_at"][:19]  # Truncate to date+time
+                        )
+                    console.print(table)
+                    console.print("\n[dim]Use /switch <id> to switch contexts[/]\n")
+                else:
+                    console.print("\n[dim]No contexts available. Create one by starting a conversation.[/]\n")
+                continue
+            
             # Show shortcuts command
             if user_input.lower() in ["/shortcuts", "/short", "/sc", "shortcuts"]:
                 console.print("\n[bold cyan]⚡ Quick Command Shortcuts[/]\n")
@@ -684,25 +840,50 @@ def run_snode():
                 continue
             
             # Run through LangGraph agent
-            console.print(f"\n[dim]Processing: {user_input}...[/]\n")
+            # Use Gemini-style UI for cleaner output
+            try:
+                from app.ui import get_gemini_ui
+                gemini_ui = get_gemini_ui()
+                gemini_ui.render_thinking("Processing...")
+            except ImportError:
+                console.print(f"\n[dim]Processing: {user_input}...[/]\n")
             
-            response, context, needs_confirmation = agent.run(user_input, context)
-            
-            # Display result
-            console.print()
-            
-            if needs_confirmation:
-                # Show suggestion with minimal formatting
-                console.print(Panel(
-                    Markdown(response),
-                    title="💡 SNODE Suggestion",
-                    border_style="yellow",
-                ))
-                console.print("[dim]Type 'yes' to proceed, 'no' to cancel[/]\n")
+            result = agent.run(user_input, context)
+            if len(result) == 4:
+                response, context, needs_confirmation, response_streamed = result
             else:
-                # Show raw LLM response without box wrapper
-                console.print(Markdown(response))
-                console.print()  # Add spacing
+                # Backward compatibility
+                response, context, needs_confirmation = result
+                response_streamed = False
+            
+            # Display result with Gemini-style UI
+            try:
+                from app.ui import get_gemini_ui
+                gemini_ui = get_gemini_ui()
+                
+                if needs_confirmation:
+                    # Show suggestion with Gemini style
+                    gemini_ui.render_info_card("💡 Suggestion", response, border_style="yellow")
+                    console.print("[dim]Type 'yes' to proceed, 'no' to cancel[/]\n")
+                elif not response_streamed:
+                    # Render response in Gemini style
+                    gemini_ui.render_response(response)
+                # else: response was already streamed, no need to print again
+            except ImportError:
+                # Fallback to old style
+                console.print()
+                if needs_confirmation:
+                    console.print(Panel(
+                        Markdown(response),
+                        title="💡 SNODE Suggestion",
+                        border_style="yellow",
+                    ))
+                    console.print("[dim]Type 'yes' to proceed, 'no' to cancel[/]\n")
+                elif not response_streamed:
+                    console.print(Markdown(response))
+                    console.print()
+                else:
+                    console.print()  # Add spacing
             
             # Save to persistent memory
             if memory:

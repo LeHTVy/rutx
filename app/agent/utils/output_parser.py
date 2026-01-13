@@ -80,11 +80,13 @@ TOOL OUTPUT:
 Extract and return a JSON object with ONLY the fields that have actual findings:
 - "subdomains": array of discovered subdomain strings
 - "hosts": array of {{"hostname": "...", "ip": "..."}} objects
-- "ports": array of {{"port": number, "service": "...", "host": "..."}} objects
+- "ports": array of {{"port": number, "service": "...", "host": "...", "protocol": "tcp/udp", "version": "..."}} objects
 - "vulnerabilities": array of {{"type": "...", "severity": "high/medium/low", "target": "...", "details": "..."}}
 - "emails": array of email addresses
 - "technologies": array of detected technology names (e.g., "nginx", "wordpress", "apache")
 - "urls": array of interesting URLs found
+- "asns": array of {{"asn": number, "name": "...", "org": "..."}} objects (if ASN information found)
+- "os_detected": string with OS information (if detected, e.g., from nmap)
 
 RULES:
 1. Return ONLY valid JSON, no explanation text
@@ -300,9 +302,13 @@ JSON:'''
         
         # Update vulnerabilities
         if "vulnerabilities" in findings:
-            existing_vulns = context.get("vulns_found", [])
+            existing_vulns = context.get("vulnerabilities", [])
             existing_vulns.extend(findings["vulnerabilities"])
-            context["vulns_found"] = existing_vulns[:50]
+            context["vulnerabilities"] = existing_vulns[:50]
+            context["vuln_count"] = len(existing_vulns)
+            # Count by severity
+            context["critical_vulns"] = len([v for v in existing_vulns if v.get("severity") == "critical"])
+            context["high_vulns"] = len([v for v in existing_vulns if v.get("severity") == "high"])
         
         # Update emails
         if "emails" in findings:
@@ -323,6 +329,22 @@ JSON:'''
                 if u not in existing_urls:
                     existing_urls.append(u)
             context["interesting_urls"] = existing_urls[:100]
+        
+        # Update ASNs
+        if "asns" in findings:
+            existing_asns = context.get("asns", [])
+            for asn_entry in findings["asns"]:
+                # Avoid duplicates by ASN number
+                if isinstance(asn_entry, dict):
+                    asn_num = asn_entry.get("asn")
+                    if asn_num and not any(a.get("asn") == asn_num for a in existing_asns if isinstance(a, dict)):
+                        existing_asns.append(asn_entry)
+            context["asns"] = existing_asns
+            context["asn_count"] = len(existing_asns)
+        
+        # Update OS detection
+        if "os_detected" in findings:
+            context["os_detected"] = findings["os_detected"]
         
         return context
 

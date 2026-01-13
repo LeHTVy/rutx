@@ -27,9 +27,8 @@ try:
     MODEL_NAME = _llm_config.get("model", "deepseek-r1:latest")
     LLM_PROVIDER = _llm_config.get("provider", "ollama")
     TIMEOUT_OLLAMA = _llm_config.get("timeout", 1800)
-except Exception as e:
-    # Fallback to defaults if config not found
-    print(f"⚠️  LLM config not loaded: {e}. Using defaults.")
+except Exception:
+    # Fallback to defaults if config not found (silent - this is normal)
     OLLAMA_ENDPOINT = "http://localhost:11434/api/chat"
     MODEL_NAME = "deepseek-r1:latest"
     LLM_PROVIDER = "ollama"

@@ -96,6 +96,11 @@ class SNODEIntelligence:
             except Exception:
                 pass
         
+        # Check if analyzer recommendation should override
+        if context and "next step" in query.lower() and context.get("analyzer_next_tool"):
+            analyzer_tool = context.get("analyzer_next_tool")
+            result["relevant_tools"] = [analyzer_tool] + result["relevant_tools"]
+        
         return result
     
     def _extract_target(self, query: str) -> Optional[str]:

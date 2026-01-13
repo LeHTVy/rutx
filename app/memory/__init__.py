@@ -41,9 +41,55 @@ from .session import (
 )
 
 # Conversation History (persistent)
-from .postgres import PostgresMemory, get_postgres
-from .vector import VectorMemory, get_vector
-from .manager import MemoryManager, get_memory_manager
+try:
+    from .postgres import PostgresMemory, get_postgres
+except ImportError:
+    # Postgres not available - create dummy classes
+    class PostgresMemory:
+        def __init__(self, *args, **kwargs):
+            raise ImportError("psycopg2 not installed. Install with: pip install psycopg2-binary")
+    
+    def get_postgres():
+        raise ImportError("psycopg2 not installed")
+
+try:
+    from .vector import VectorMemory, get_vector
+except ImportError:
+    class VectorMemory:
+        def __init__(self, *args, **kwargs):
+            raise ImportError("Vector memory dependencies not installed")
+    
+    def get_vector():
+        raise ImportError("Vector memory not available")
+
+try:
+    from .manager import MemoryManager, get_memory_manager
+except ImportError:
+    class MemoryManager:
+        def __init__(self, *args, **kwargs):
+            raise ImportError("Memory manager dependencies not installed")
+    
+    def get_memory_manager():
+        raise ImportError("Memory manager not available")
+
+# Memory Areas
+from .areas import MemoryArea, classify_memory_area
+
+# Memory Consolidation
+try:
+    from .consolidation import (
+        MemoryConsolidator,
+        ConsolidationConfig,
+        ConsolidationAction,
+        get_memory_consolidator,
+    )
+except ImportError:
+    # Consolidation optional
+    MemoryConsolidator = None
+    ConsolidationConfig = None
+    ConsolidationAction = None
+    def get_memory_consolidator(*args, **kwargs):
+        raise ImportError("Memory consolidation not available")
 
 __all__ = [
     # Session Memory
@@ -59,7 +105,7 @@ __all__ = [
     # Conversation History
     "PostgresMemory",
     "get_postgres",
-    "VectorMemory",
+    "VectorMemory", 
     "get_vector",
     "MemoryManager",
     "get_memory_manager",

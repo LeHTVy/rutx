@@ -75,7 +75,7 @@ class OllamaClient:
         if stream:
             return self._generate_stream_with_spinner(prompt, system, timeout, show_thinking, verbose, show_content)
         else:
-            return self._generate_blocking(prompt, system, timeout, verbose)
+            return self._generate_blocking(prompt, system, timeout, verbose, show_content)
     
     def _generate_stream_with_spinner(self, prompt: str, system: str, 
                                        timeout: int, show_thinking: bool,
@@ -193,7 +193,7 @@ class OllamaClient:
             print(f"\n  ❌ Error: {e}")
             return ""
     
-    def _generate_blocking(self, prompt: str, system: str, timeout: int, verbose: bool = False) -> str:
+    def _generate_blocking(self, prompt: str, system: str, timeout: int, verbose: bool = False, show_content: bool = True) -> str:
         """Non-streaming with spinner (for quick calls)."""
         timeout = min(max(timeout, 10), self.MAX_TIMEOUT)
         
@@ -207,14 +207,15 @@ class OllamaClient:
                 while not stop_spinner.is_set():
                     elapsed = int(time.time() - start_time)
                     remaining = timeout - elapsed
-                    if remaining > 0:
+                    if remaining > 0 and show_content:  # Only show spinner if show_content is True
                         sys.stdout.write(f"\r  {spinner_chars[i % len(spinner_chars)]} Thinking ({self.model})... [{remaining}s]  ")
-                    sys.stdout.flush()
+                        sys.stdout.flush()
                     time.sleep(0.1)
                     i += 1
             
             spinner_thread = threading.Thread(target=spin, daemon=True)
-            spinner_thread.start()
+            if show_content:  # Only start spinner if show_content is True
+                spinner_thread.start()
             
             llm = self._get_llm()
             from langchain_core.messages import HumanMessage, SystemMessage
@@ -233,26 +234,40 @@ class OllamaClient:
                 result = response.content if response else ""
             except FuturesTimeoutError:
                 stop_spinner.set()
-                print(f"\r  ⏱️ Timeout after {timeout}s                    ")
+                if show_content:
+                    spinner_thread.join(timeout=0.3)
+                    sys.stdout.write(f"\r                                                      \r")
+                    sys.stdout.flush()
+                print(f"  ⏱️ Timeout after {timeout}s")
                 return ""
             
             stop_spinner.set()
-            spinner_thread.join(timeout=0.3)
+            if show_content:
+                spinner_thread.join(timeout=0.3)
             
             if result:
                 result = re.sub(r'<think>.*?</think>', '', result, flags=re.DOTALL).strip()
                 elapsed = int(time.time() - start_time)
                 if verbose:
-                    print(f"\r  ✅ ({len(result)} chars, {elapsed}s)                    ")
+                    if show_content:
+                        print(f"\r  ✅ ({len(result)} chars, {elapsed}s)                    ")
+                    else:
+                        pass  # Silent mode
                 else:
-                    # Just clear spinner line
-                    sys.stdout.write(f"\r                                                      \r")
-                    sys.stdout.flush()
+                    # Just clear spinner line if it was shown
+                    if show_content:
+                        sys.stdout.write(f"\r                                                      \r")
+                        sys.stdout.flush()
             
             return result
             
         except Exception as e:
-            print(f"\r  ❌ Error: {e}")
+            stop_spinner.set()
+            if show_content:
+                spinner_thread.join(timeout=0.3)
+                sys.stdout.write(f"\r                                                      \r")
+                sys.stdout.flush()
+            print(f"  ❌ Error: {e}")
             return ""
     
     def __del__(self):

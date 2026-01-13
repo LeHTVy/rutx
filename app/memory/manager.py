@@ -4,11 +4,15 @@ Memory Manager for SNODE.
 Combines PostgreSQL (exact) and Vector DB (semantic) memory.
 """
 import uuid
+import asyncio
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 from .postgres import PostgresMemory, get_postgres
 from .vector import VectorMemory, get_vector
+from .areas import MemoryArea, classify_memory_area
+from .consolidation import get_memory_consolidator, ConsolidationConfig
+from .topics import History
 
 
 class MemoryManager:
@@ -19,15 +23,33 @@ class MemoryManager:
     - Vector DB: Semantic search for relevant context
     """
     
-    def __init__(self, auto_cleanup_days: int = 30):
+    def __init__(self, auto_cleanup_days: int = 30, enable_consolidation: bool = True):
         self.postgres = get_postgres()
         self.vector = get_vector()
         self.session_id: Optional[str] = None
         self.target_domain: Optional[str] = None
         self.auto_cleanup_days = auto_cleanup_days
+        self.enable_consolidation = enable_consolidation
+        
+        # Initialize consolidator if enabled
+        if enable_consolidation:
+            config = ConsolidationConfig(enabled=True)
+            self.consolidator = get_memory_consolidator(config)
+        else:
+            self.consolidator = None
+        
+        # Topic-based history (Phase 1)
+        self.history: Optional[History] = None
+        self._agent = None  # Will be set when agent is available
         
         # Run cleanup on init (async-friendly)
         self._cleanup_old_data()
+    
+    def set_agent(self, agent):
+        """Set agent instance for history compression."""
+        self._agent = agent
+        if self.history:
+            self.history.agent = agent
     
     def _cleanup_old_data(self):
         """Clean up old data based on retention policy."""
@@ -49,6 +71,10 @@ class MemoryManager:
         """
         self.target_domain = target_domain
         self.session_id = self.postgres.create_session(target_domain)
+        
+        # Initialize topic-based history
+        self.history = History(agent=self._agent)
+        
         print(f"📋 New session: {self.session_id}")
         return self.session_id
     
@@ -65,6 +91,10 @@ class MemoryManager:
                 self.session_id = full_session_id
                 # Get domain from context (primary)
                 self.target_domain = context.get("last_domain")
+                
+                # Load history from PostgreSQL if available
+                self._load_history_from_db()
+                
                 print(f"📋 Resumed session: {full_session_id}")
                 return {"session_id": full_session_id, "context": context}
         else:
@@ -76,6 +106,10 @@ class MemoryManager:
                 # Get domain from context (primary) or column (fallback)
                 self.target_domain = context.get("last_domain") or last.get("target_domain")
                 domain_display = self.target_domain or "no domain"
+                
+                # Load history from PostgreSQL if available
+                self._load_history_from_db()
+                
                 print(f"📋 Resumed last session: {self.session_id} ({domain_display})")
                 return {
                     "session_id": self.session_id,
@@ -99,15 +133,29 @@ class MemoryManager:
         user_message: str,
         assistant_message: str,
         tools_used: List[str] = None,
-        context: Dict = None
+        context: Dict = None,
+        area: str = None
     ):
         """
         Save a conversation turn (user + assistant).
         
         Saves to both PostgreSQL and Vector DB.
+        Optionally consolidates memories if enabled.
+        
+        Args:
+            user_message: User message
+            assistant_message: Assistant response
+            tools_used: List of tools used
+            context: Additional context
+            area: Memory area (MAIN, FRAGMENTS, SOLUTIONS, INSTRUMENTS)
         """
         session = self.get_or_create_session()
         domain = context.get("last_domain") if context else self.target_domain
+        
+        # Classify area if not provided
+        if not area:
+            area_enum = classify_memory_area(assistant_message, context or {})
+            area = area_enum.value
         
         # Save to PostgreSQL (exact)
         self.postgres.save_message(
@@ -125,23 +173,80 @@ class MemoryManager:
             context=context
         )
         
-        # Save to Vector DB (semantic)
-        self.vector.add_message(
-            session_id=session,
-            role="user",
-            content=user_message,
-            domain=domain
-        )
-        self.vector.add_message(
-            session_id=session,
-            role="assistant",
-            content=assistant_message,
-            domain=domain,
-            tools=tools_used
-        )
+        # Save to Vector DB with consolidation if enabled
+        if self.consolidator and self.enable_consolidation:
+            # Use consolidation for assistant message (contains findings)
+            metadata = {
+                "session_id": session,
+                "domain": domain,
+                "area": area,
+                "tools_used": ",".join(tools_used) if tools_used else "",
+                "role": "assistant"
+            }
+            
+            # Run consolidation (async, but we'll wait for it)
+            try:
+                result = asyncio.run(
+                    self.consolidator.process_new_memory(
+                        new_memory=assistant_message,
+                        area=area,
+                        metadata=metadata
+                    )
+                )
+                if not result.get("success"):
+                    # Fallback to direct save if consolidation fails
+                    self.vector.add_message(
+                        session_id=session,
+                        role="assistant",
+                        content=assistant_message,
+                        domain=domain,
+                        tools=tools_used,
+                        metadata={"area": area}
+                    )
+            except Exception as e:
+                print(f"  ⚠️ Consolidation error: {e}, saving directly")
+                self.vector.add_message(
+                    session_id=session,
+                    role="assistant",
+                    content=assistant_message,
+                    domain=domain,
+                    tools=tools_used,
+                    metadata={"area": area}
+                )
+        else:
+            # Direct save without consolidation
+            self.vector.add_message(
+                session_id=session,
+                role="user",
+                content=user_message,
+                domain=domain,
+                metadata={"area": area}
+            )
+            self.vector.add_message(
+                session_id=session,
+                role="assistant",
+                content=assistant_message,
+                domain=domain,
+                tools=tools_used,
+                metadata={"area": area}
+            )
         
         # Update session activity
         self.postgres.update_session_activity(session, context)
+        
+        # Add to topic-based history (Phase 1)
+        if self.history:
+            # User message starts new topic
+            if user_message:
+                self.history.new_topic()
+                self.history.add_message(ai=False, content=user_message)
+            
+            # Assistant message continues current topic
+            if assistant_message:
+                self.history.add_message(ai=True, content=assistant_message)
+            
+            # Save history to PostgreSQL
+            self._save_history_to_db()
     
     def save_finding(
         self,
@@ -206,6 +311,63 @@ class MemoryManager:
             ]
         
         return context
+    
+    # ==================== Topic-Based History (Phase 1) ====================
+    
+    def _load_history_from_db(self):
+        """Load history from PostgreSQL."""
+        if not self.session_id:
+            return
+        
+        history_data = self.postgres.get_history(self.session_id)
+        if history_data:
+            try:
+                import json
+                self.history = History.deserialize(
+                    json.dumps(history_data) if isinstance(history_data, dict) else history_data,
+                    agent=self._agent
+                )
+            except Exception as e:
+                print(f"  ⚠️ Failed to load history: {e}")
+                self.history = History(agent=self._agent)
+        else:
+            self.history = History(agent=self._agent)
+    
+    def _save_history_to_db(self):
+        """Save history to PostgreSQL."""
+        if not self.history or not self.session_id:
+            return
+        
+        try:
+            import json
+            history_dict = self.history.to_dict()
+            self.postgres.save_history(self.session_id, history_dict)
+        except Exception as e:
+            print(f"  ⚠️ Failed to save history: {e}")
+    
+    def get_history_messages(self) -> List[Dict[str, Any]]:
+        """Get messages from topic-based history for LLM."""
+        if not self.history:
+            return []
+        return self.history.output()
+    
+    async def compress_history(self) -> bool:
+        """Compress history if over context limit (Phase 2)."""
+        if not self.history:
+            return False
+        
+        if self.history.is_over_limit():
+            compressed = await self.history.compress()
+            if compressed:
+                self._save_history_to_db()
+            return compressed
+        return False
+    
+    def set_agent(self, agent):
+        """Set agent instance for history compression."""
+        self._agent = agent
+        if self.history:
+            self.history.agent = agent
     
     def format_context_for_llm(
         self,

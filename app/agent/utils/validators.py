@@ -98,19 +98,28 @@ TOOL_CAPABILITIES = {
     "amass": ["subdomain", "passive_recon", "dns"],
     "subfinder": ["subdomain", "passive_recon"],
     "assetfinder": ["subdomain", "passive_recon"],
-    "clatscope": ["osint", "whois", "ip_lookup", "phone", "email"],
+    "bbot": ["subdomain", "passive_recon", "osint"],
+    "recon-ng": ["subdomain", "passive_recon", "osint"],
+    "theharvester": ["subdomain", "passive_recon", "osint", "email"],
+    "clatscope": ["osint", "whois", "ip_lookup", "phone", "email", "tech_detection"],
+    "securitytrails": ["osint", "subdomain", "dns"],
+    "shodan": ["osint", "device_search", "ip_lookup"],
+    "whois": ["osint", "dns"],
+    "dig": ["dns"],
+    "dnsrecon": ["dns", "subdomain"],
     
     # Scanning
     "nmap": ["port_scan", "service_detection", "os_detection", "vuln_scan"],
     "masscan": ["port_scan", "fast_scan"],
     "rustscan": ["port_scan", "fast_scan"],
     "httpx": ["http_probe", "tech_detection"],
+    "gobuster": ["directory_bruteforce", "dns_bruteforce", "vhost"],
     
     # Directory/Content Discovery
-    "gobuster": ["directory_bruteforce", "dns_bruteforce", "vhost"],
     "ffuf": ["directory_bruteforce", "fuzzing", "parameter"],
     "dirsearch": ["directory_bruteforce"],
     "feroxbuster": ["directory_bruteforce"],
+    "katana": ["directory_bruteforce", "web_discovery"],
     
     # Vulnerability Scanning
     "nuclei": ["vuln_scan", "cve_detection", "template_scan"],
@@ -122,11 +131,16 @@ TOOL_CAPABILITIES = {
     "hydra": ["brute_force", "password"],
     "medusa": ["brute_force", "password"],
     "searchsploit": ["exploit_search"],
+    "metasploit": ["exploit_execution", "payload_generation"],
     
     # Post-Exploitation
     "linpeas": ["privesc", "linux"],
     "winpeas": ["privesc", "windows"],
     "crackmapexec": ["lateral_movement", "smb", "password_spray"],
+    
+    # Security Tech Detection
+    "wafw00f": ["tech_detection", "waf_detection"],
+    "whatweb": ["tech_detection", "web_server"],
 }
 
 # Required parameters for common tools

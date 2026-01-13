@@ -91,35 +91,92 @@ class ReconAgent(BaseAgent):
         return "general_recon"
     
     def _select_tools(self, recon_type: str, context: Dict[str, Any]) -> tuple:
-        """Select appropriate tools for the recon type with dynamic command lookup."""
+        """
+        Select appropriate tools using vector search + recon type classification.
         
-        # Tool sets for each recon type
-        tool_sets = {
-            "subdomain_enum": ["subfinder", "amass", "bbot"],
-            "osint": ["theHarvester", "recon-ng", "clatscope"],
-            "dns_info": ["dig", "dnsrecon", "clatscope"],
-            "waf_detect": ["wafw00f", "httpx"],
-            "tech_fingerprint": ["httpx", "whatweb", "wafw00f"],
-            "device_search": ["shodan", "clatscope"],
-            "general_recon": ["httpx", "subfinder", "clatscope"],
+        HYBRID APPROACH:
+        1. Use ChromaDB vector search with recon_type-enhanced query
+        2. Filter by specialized_tools and availability
+        3. Fallback to type-based tool mapping if vector search fails
+        """
+        # Build enhanced query for vector search
+        query = context.get("query", "")
+        recon_queries = {
+            "subdomain_enum": "subdomain enumeration passive OSINT",
+            "osint": "OSINT gathering emails hosts public data",
+            "dns_info": "DNS enumeration WHOIS lookup",
+            "waf_detect": "WAF detection technology fingerprinting",
+            "tech_fingerprint": "technology stack identification",
+            "device_search": "search exposed devices services",
+            "general_recon": "reconnaissance information gathering",
         }
         
-        # Command preferences per tool (ordered by priority)
-        COMMAND_PREFERENCES = {
-            "subfinder": ["enum", "scan", "silent"],
-            "amass": ["enum", "passive", "intel"],
-            "bbot": ["scan", "subdomains"],
-            "theHarvester": ["search", "all"],
-            "recon-ng": ["marketplace_search", "run"],
-            "clatscope": ["whois", "dns", "ip", "full"],
-            "dig": ["all", "any"],
-            "dnsrecon": ["standard", "enum"],
-            "wafw00f": ["detect"],
-            "httpx": ["probe", "tech_detect"],
-            "whatweb": ["scan", "quick"],
-            "shodan": ["search", "host"],
-        }
+        enhanced_query = query + " " + recon_queries.get(recon_type, recon_queries["general_recon"])
         
+        # Use vector search to discover tools
+        discovered = self._discover_tools_via_rag(enhanced_query, context, n_results=10)
+        
+        tools_run = set(context.get("tools_run", []))
+        available = []
+        commands = {}
+        skipped_already_run = []
+        
+        # Filter discovered tools
+        for match in discovered:
+            tool = match["tool"]
+            if not self.registry.is_available(tool):
+                continue
+            if tool in tools_run:
+                skipped_already_run.append(tool)
+                continue
+            if tool not in self.SPECIALIZED_TOOLS:
+                continue  # Only use specialized tools
+            
+            available.append(tool)
+            
+            # Use command from vector search result, or get from spec
+            command = match.get("command", "")
+            if command:
+                # Validate command exists in tool spec
+                spec = self.registry.tools.get(tool)
+                if spec and command in spec.commands:
+                    commands[tool] = command
+                else:
+                    # Fallback to first available command
+                    if spec and spec.commands:
+                        commands[tool] = list(spec.commands.keys())[0]
+            else:
+                # Get first available command
+                spec = self.registry.tools.get(tool)
+                if spec and spec.commands:
+                    commands[tool] = list(spec.commands.keys())[0]
+            
+            # Limit to top 3 tools
+            if len(available) >= 3:
+                break
+        
+        # FALLBACK: If vector search found nothing, use type-based mapping
+        if not available:
+            fallback_tools = {
+                "subdomain_enum": ["subfinder", "amass", "bbot"],
+                "osint": ["theHarvester", "recon-ng", "clatscope"],
+                "dns_info": ["dig", "dnsrecon", "clatscope"],
+                "waf_detect": ["wafw00f", "httpx"],
+                "tech_fingerprint": ["httpx", "whatweb", "wafw00f"],
+                "device_search": ["shodan", "clatscope"],
+                "general_recon": ["httpx", "subfinder", "clatscope"],
+            }
+            
+            tools_for_type = fallback_tools.get(recon_type, fallback_tools["general_recon"])
+            for tool in tools_for_type:
+                if self.registry.is_available(tool) and tool not in tools_run:
+                    available.append(tool)
+                    spec = self.registry.tools.get(tool)
+                    if spec and spec.commands:
+                        commands[tool] = list(spec.commands.keys())[0]
+                    break
+        
+        # Build reasoning
         reasoning_map = {
             "subdomain_enum": "Subdomain enumeration using passive OSINT sources",
             "osint": "OSINT gathering - emails, hosts, public data",
@@ -129,35 +186,19 @@ class ReconAgent(BaseAgent):
             "device_search": "Search for exposed devices/services",
             "general_recon": "General reconnaissance starting point",
         }
-        
-        tools_for_type = tool_sets.get(recon_type, tool_sets["general_recon"])
         reasoning = reasoning_map.get(recon_type, reasoning_map["general_recon"])
         
-        # Filter to only available tools and get their commands dynamically
-        available = []
-        commands = {}
+        if skipped_already_run:
+            reasoning += f" (skipped already-run: {', '.join(skipped_already_run)})"
         
-        for tool in tools_for_type:
-            if not self.registry.is_available(tool):
-                continue
-            
-            available.append(tool)
-            
-            # Get command from spec dynamically
-            spec = self.registry.tools.get(tool)
-            if spec and spec.commands:
-                available_cmds = list(spec.commands.keys())
-                
-                # Try preference first
-                if tool in COMMAND_PREFERENCES:
-                    for preferred in COMMAND_PREFERENCES[tool]:
-                        if preferred in available_cmds:
-                            commands[tool] = preferred
-                            break
-                
-                # Fallback to first available command
-                if tool not in commands and available_cmds:
-                    commands[tool] = available_cmds[0]
+        # If all tools were already run, suggest moving to next phase
+        if not available and skipped_already_run:
+            reasoning = f"All recon tools already run ({', '.join(skipped_already_run)}). Ready for port scanning phase."
+            available = ["nmap"] if self.registry.is_available("nmap") else []
+            if available:
+                spec = self.registry.tools.get("nmap")
+                if spec and spec.commands:
+                    commands["nmap"] = list(spec.commands.keys())[0]
         
         return available, commands, reasoning
     

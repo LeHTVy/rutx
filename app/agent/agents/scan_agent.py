@@ -22,41 +22,50 @@ class ScanAgent(BaseAgent):
     NOTE: Routing is handled by LLM in coordinator.py - no keyword matching needed.
     """
     
+    AGENT_NAME = "scan"
+    AGENT_DESCRIPTION = "Port scanning, service detection, and directory enumeration"
+    SPECIALIZED_TOOLS = [
+        # Port Scanning (specs/scanning.py, specs/network.py)
+        "nmap",
+        "masscan",
+        "httpx",
+        
+        # Directory Bruteforce (specs/vuln.py, specs/web.py)
+        "gobuster",
+        "dirsearch",
+        "feroxbuster",
+        
+        # Service Enumeration (specs/network.py)
+        "netcat",
+        "nbtscan",
+        "enum4linux",
+    ]
+    PENTEST_PHASES = [2]  # Scanning phase
+    
     def __init__(self, llm=None):
         super().__init__(llm)
-        self.name = "scan"
-        self.description = "Port scanning, service detection, and directory enumeration"
-        
-        # Phase 2 tools from tool specs
-        self.specialized_tools = [
-            # Port Scanning (specs/scanning.py, specs/network.py)
-            "nmap",
-            "masscan",
-            "httpx",
-            
-            # Directory Bruteforce (specs/vuln.py, specs/web.py)
-            "gobuster",
-            "dirsearch",
-            "feroxbuster",
-            
-            # Service Enumeration (specs/network.py)
-            "netcat",
-            "nbtscan",
-            "enum4linux",
-        ]
-        
-        self.pentest_phases = [2]  # Scanning phase
+        self.name = self.AGENT_NAME
+        self.description = self.AGENT_DESCRIPTION
+        # Keep for backward compatibility
+        self.specialized_tools = self.SPECIALIZED_TOOLS
+        self.pentest_phases = self.PENTEST_PHASES
     
     def plan(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Plan scanning tools and actions."""
         tools = self._select_tools(query, context)
         commands = self._get_suggested_commands(tools, context)
         
+        # Handle empty tools list
+        if not tools:
+            reasoning = "Phase 2 (Scanning): No tools selected - all scanning tools already run or unavailable"
+        else:
+            reasoning = f"Phase 2 (Scanning): Selected {', '.join(tools)} for port/service enumeration"
+        
         return {
             "agent": self.name,
             "tools": tools,
             "commands": commands,
-            "reasoning": f"Phase 2 (Scanning): Selected {', '.join(tools)} for port/service enumeration"
+            "reasoning": reasoning
         }
     
     def _classify_scan_type(self, query: str, context: Dict[str, Any] = None) -> str:
@@ -94,39 +103,67 @@ class ScanAgent(BaseAgent):
         return "full_scan"
     
     def _select_tools(self, query: str, context: Dict[str, Any]) -> List[str]:
-        """Select appropriate scanning tools based on context."""
-        scan_type = self._classify_scan_type(query, context)
-        tools = []
+        """
+        Select appropriate scanning tools using vector search + agent intelligence.
         
-        if scan_type == "port_scan":
-            # Prefer nmap for detailed scan, masscan for speed
-            if "fast" in query.lower() or "quick" in query.lower():
-                tools.append("masscan")
-            else:
-                tools.append("nmap")
-                
-        elif scan_type == "dir_bruteforce":
-            # Directory bruteforce
-            if self.registry.is_available("gobuster"):
-                tools.append("gobuster")
-            elif self.registry.is_available("dirsearch"):
-                tools.append("dirsearch")
-            elif self.registry.is_available("feroxbuster"):
-                tools.append("feroxbuster")
-                
-        elif scan_type == "http_probe":
-            tools.append("httpx")
+        HYBRID APPROACH:
+        1. Check user/analyzer requested tools (highest priority)
+        2. Use ChromaDB vector search to discover relevant tools
+        3. Filter and rank by agent's specialized_tools and context
+        4. Fallback to specialized_tools if vector search fails
+        """
+        tools = []
+        tools_run = set(context.get("tools_run", []))
+        
+        # PRIORITY 1: User/analyzer requested tools
+        user_requested_tool = context.get("user_requested_tool")
+        analyzer_next_tool = context.get("analyzer_next_tool")
+        requested_tool = user_requested_tool or analyzer_next_tool
+        if requested_tool:
+            if requested_tool in self.specialized_tools and self.registry.is_available(requested_tool):
+                if requested_tool not in tools_run:
+                    tools.append(requested_tool)
+                    return tools  # Return early with requested tool
+        
+        # PRIORITY 2: Vector search discovery
+        discovered = self._discover_tools_via_rag(query, context, n_results=10)
+        
+        # Filter discovered tools: must be available, in specialized_tools, and not already run
+        for match in discovered:
+            tool_name = match["tool"]
+            if (tool_name in self.specialized_tools and 
+                self.registry.is_available(tool_name) and 
+                tool_name not in tools_run):
+                tools.append(tool_name)
+                # Limit to top 3 tools from vector search
+                if len(tools) >= 3:
+                    break
+        
+        # PRIORITY 3: Fallback to classification-based selection if vector search found nothing
+        if not tools:
+            scan_type = self._classify_scan_type(query, context)
             
-        elif scan_type == "smb_enum":
-            if self.registry.is_available("enum4linux"):
-                tools.append("enum4linux")
-            if self.registry.is_available("nbtscan"):
-                tools.append("nbtscan")
-                
-        elif scan_type == "full_scan":
-            # Full scan: port scan + http probe
-            tools.append("nmap")
-            tools.append("httpx")
+            # Map scan types to tool preferences (still use classification as fallback)
+            type_tool_map = {
+                "port_scan": ["nmap", "masscan"],
+                "dir_bruteforce": ["gobuster", "dirsearch", "feroxbuster"],
+                "http_probe": ["httpx"],
+                "smb_enum": ["enum4linux", "nbtscan"],
+                "full_scan": ["nmap", "httpx"],
+            }
+            
+            preferred_tools = type_tool_map.get(scan_type, ["nmap"])
+            for tool in preferred_tools:
+                if self.registry.is_available(tool) and tool not in tools_run:
+                    tools.append(tool)
+                    break
+        
+        # FINAL FALLBACK: Select any available specialized tool
+        if not tools:
+            for tool in self.specialized_tools:
+                if self.registry.is_available(tool) and tool not in tools_run:
+                    tools.append(tool)
+                    break
         
         return tools
     

@@ -22,30 +22,33 @@ class VulnAgent(BaseAgent):
     NOTE: Routing is handled by LLM in coordinator.py - no keyword matching needed.
     """
     
+    AGENT_NAME = "vuln"
+    AGENT_DESCRIPTION = "Vulnerability assessment and CVE detection"
+    SPECIALIZED_TOOLS = [
+        # Vulnerability Scanners (specs/vuln.py)
+        "nuclei",
+        "nikto",
+        
+        # CMS Scanners (specs/web.py)
+        "wpscan",
+        "whatweb",
+        
+        # WAF Detection (specs/web.py)
+        "wafw00f",
+        
+        # API/Parameter fuzzing (specs/web.py, specs/vuln.py)
+        "arjun",
+        "ffuf",
+    ]
+    PENTEST_PHASES = [3]  # Vulnerability phase
+    
     def __init__(self, llm=None):
         super().__init__(llm)
-        self.name = "vuln"
-        self.description = "Vulnerability assessment and CVE detection"
-        
-        # Phase 3 tools from tool specs
-        self.specialized_tools = [
-            # Vulnerability Scanners (specs/vuln.py)
-            "nuclei",
-            "nikto",
-            
-            # CMS Scanners (specs/web.py)
-            "wpscan",
-            "whatweb",
-            
-            # WAF Detection (specs/web.py)
-            "wafw00f",
-            
-            # API/Parameter fuzzing (specs/web.py, specs/vuln.py)
-            "arjun",
-            "ffuf",
-        ]
-        
-        self.pentest_phases = [3]  # Vulnerability phase
+        self.name = self.AGENT_NAME
+        self.description = self.AGENT_DESCRIPTION
+        # Keep for backward compatibility
+        self.specialized_tools = self.SPECIALIZED_TOOLS
+        self.pentest_phases = self.PENTEST_PHASES
     
     def plan(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Plan vulnerability scanning tools and actions."""
@@ -93,38 +96,66 @@ class VulnAgent(BaseAgent):
         return "full_vuln"
     
     def _select_tools(self, query: str, context: Dict[str, Any]) -> List[str]:
-        """Select vulnerability scanning tools based on context."""
+        """
+        Select vulnerability scanning tools using vector search + vuln type classification.
+        
+        HYBRID APPROACH:
+        1. Use ChromaDB vector search with vuln_type-enhanced query
+        2. Filter by specialized_tools and availability
+        3. Fallback to type-based tool mapping if vector search fails
+        """
         vuln_type = self._classify_vuln_type(query, context)
         tools = []
+        tools_run = set(context.get("tools_run", []))
         
-        if vuln_type == "wordpress":
-            if self.registry.is_available("wpscan"):
-                tools.append("wpscan")
-            tools.append("nuclei")  # WordPress templates
+        # Build enhanced query for vector search
+        vuln_queries = {
+            "wordpress": "WordPress vulnerability scanning CMS",
+            "cve_scan": "CVE vulnerability scanning nuclei",
+            "web_server": "web server vulnerability scanning nikto",
+            "waf_detect": "WAF detection bypass",
+            "api_fuzz": "API fuzzing discovery",
+            "full_vuln": "vulnerability scanning CVE detection",
+        }
+        
+        enhanced_query = query + " " + vuln_queries.get(vuln_type, vuln_queries["full_vuln"])
+        
+        # Use vector search to discover tools
+        discovered = self._discover_tools_via_rag(enhanced_query, context, n_results=10)
+        
+        # Filter discovered tools
+        for match in discovered:
+            tool = match["tool"]
+            if (tool in self.SPECIALIZED_TOOLS and 
+                self.registry.is_available(tool) and 
+                tool not in tools_run):
+                tools.append(tool)
+                if len(tools) >= 3:
+                    break
+        
+        # FALLBACK: Type-based mapping if vector search found nothing
+        if not tools:
+            type_tool_map = {
+                "wordpress": ["wpscan", "nuclei"],
+                "cve_scan": ["nuclei"],
+                "web_server": ["nikto", "nuclei"],
+                "waf_detect": ["wafw00f"],
+                "api_fuzz": ["arjun", "ffuf"],
+                "full_vuln": ["nuclei", "nikto"],
+            }
             
-        elif vuln_type == "cve_scan":
-            tools.append("nuclei")
-            
-        elif vuln_type == "web_server":
-            if self.registry.is_available("nikto"):
-                tools.append("nikto")
-            tools.append("nuclei")
-            
-        elif vuln_type == "waf_detect":
-            if self.registry.is_available("wafw00f"):
-                tools.append("wafw00f")
-                
-        elif vuln_type == "api_fuzz":
-            if self.registry.is_available("arjun"):
-                tools.append("arjun")
-            if self.registry.is_available("ffuf"):
-                tools.append("ffuf")
-                
-        elif vuln_type == "full_vuln":
-            # Full vuln scan
-            tools.append("nuclei")
-            if self.registry.is_available("nikto"):
-                tools.append("nikto")
+            preferred_tools = type_tool_map.get(vuln_type, ["nuclei"])
+            for tool in preferred_tools:
+                if self.registry.is_available(tool) and tool not in tools_run:
+                    tools.append(tool)
+                    break
+        
+        # FINAL FALLBACK: Any available specialized tool
+        if not tools:
+            for tool in self.SPECIALIZED_TOOLS:
+                if self.registry.is_available(tool) and tool not in tools_run:
+                    tools.append(tool)
+                    break
         
         return tools
     

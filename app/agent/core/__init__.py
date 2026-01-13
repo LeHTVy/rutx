@@ -33,6 +33,10 @@ from .context_aggregator import (
     get_context_aggregator,
     AggregatedContext,
 )
+from .target_collector import (
+    TargetCollector,
+    get_target_collector,
+)
 
 # Re-export from app.memory for backward compatibility
 from app.memory import (
@@ -61,6 +65,10 @@ __all__ = [
     "SessionContext",
     "get_context_aggregator",
     "AggregatedContext",
+    
+    # Target Collection
+    "TargetCollector",
+    "get_target_collector",
     
     # Memory (backward compat - prefer app.memory)
     "AgentMemory",

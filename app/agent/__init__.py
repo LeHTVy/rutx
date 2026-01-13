@@ -76,7 +76,7 @@ __all__ = [
     
     # Roles
     "RoleManager",
-    "AgentRole",
+    "AgentRole", 
     "get_role_manager",
     
     # Memory

@@ -59,13 +59,22 @@ class UnifiedRAG:
             metadata={"description": "Persistent scan findings (subdomains, hosts, vulns)"}
         )
         
+        # Cloud service metadata collection
+        self.cloud_services_collection = self.client.get_or_create_collection(
+            name="cloud_services",
+            metadata={"description": "Cloud service provider metadata (CDN, hosting, etc.)"}
+        )
+        
         # Lazy-loaded components
         self._tool_index_populated = False
+        self._cloud_services_indexed = False
         self._cve_db = None
         self._embedding_model = None
         
         # Populate tools on first use
         self._ensure_tools_indexed()
+        # Populate cloud services on first use
+        self._ensure_cloud_services_indexed()
     
     @classmethod
     def get_instance(cls) -> "UnifiedRAG":
@@ -168,6 +177,58 @@ class UnifiedRAG:
         
         self._tool_index_populated = True
     
+    def _ensure_cloud_services_indexed(self):
+        """Ensure cloud service metadata is indexed in ChromaDB."""
+        if self._cloud_services_indexed:
+            return
+        
+        # Check if already populated
+        if self.cloud_services_collection.count() > 0:
+            self._cloud_services_indexed = True
+            return
+        
+        # Populate from cloud_metadata
+        from .cloud_metadata import CLOUD_SERVICES
+        
+        ids = []
+        documents = []
+        metadatas = []
+        
+        for service_name, service in CLOUD_SERVICES.items():
+            # Create searchable document
+            doc_parts = [
+                service.name,
+                service_name,
+                service.category,
+                service.description,
+                " ".join(service.ip_prefixes),
+                " ".join(service.asn_ranges),
+                " ".join(service.detection_headers),
+                " ".join(service.detection_patterns),
+            ]
+            doc = " ".join(doc_parts)
+            
+            doc_id = f"cloud_{service_name}"
+            ids.append(doc_id)
+            documents.append(doc)
+            metadatas.append({
+                "service": service_name,
+                "name": service.name,
+                "category": service.category,
+                "ip_prefixes": ",".join(service.ip_prefixes),
+                "asn_ranges": ",".join(service.asn_ranges),
+            })
+        
+        if ids:
+            self.cloud_services_collection.add(
+                ids=ids,
+                documents=documents,
+                metadatas=metadatas,
+            )
+            print(f"  📚 Indexed {len(ids)} cloud services in UnifiedRAG")
+        
+        self._cloud_services_indexed = True
+    
     def search_tools(self, query: str, n_results: int = 5, 
                      category: str = None) -> List[Dict[str, Any]]:
         """
@@ -208,6 +269,84 @@ class UnifiedRAG:
                 })
         
         return matches
+    
+    def query_tools(self, query: str, n_results: int = 10, 
+                    filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+        """
+        Enhanced tool query with flexible filtering for agent use.
+        
+        Args:
+            query: Natural language query describing the task
+            n_results: Number of results to return
+            filters: Optional filters dict with keys:
+                - category: Filter by tool category
+                - tool: Filter by specific tool name
+                - min_score: Minimum similarity score (0-1)
+                - exclude_tools: List of tool names to exclude
+        
+        Returns:
+            List of tool:command pairs with metadata, sorted by relevance
+        """
+        self._ensure_tools_indexed()
+        
+        # Build where filter for ChromaDB
+        where_filter = {}
+        if filters:
+            if "category" in filters:
+                where_filter["category"] = filters["category"]
+            if "tool" in filters:
+                where_filter["tool"] = filters["tool"]
+        
+        # Query ChromaDB
+        results = self.tools_collection.query(
+            query_texts=[query],
+            n_results=min(n_results * 2, 50),  # Get more results for filtering
+            where=where_filter if where_filter else None,
+            include=["metadatas", "documents", "distances"]
+        )
+        
+        matches = []
+        if results and results.get("ids") and results["ids"][0]:
+            exclude_tools = filters.get("exclude_tools", []) if filters else []
+            min_score = filters.get("min_score", 0.3) if filters else 0.3
+            
+            for i, doc_id in enumerate(results["ids"][0]):
+                meta = results["metadatas"][0][i] if results.get("metadatas") else {}
+                distance = results["distances"][0][i] if results.get("distances") else 0
+                
+                tool_name = meta.get("tool", doc_id.split(":")[0])
+                
+                # Apply filters
+                if exclude_tools and tool_name in exclude_tools:
+                    continue
+                
+                # Convert distance to similarity score (0-1, higher is better)
+                score = max(0, 1 - distance)
+                if score < min_score:
+                    continue
+                
+                matches.append({
+                    "tool": tool_name,
+                    "command": meta.get("command", ""),
+                    "category": meta.get("category", ""),
+                    "description": meta.get("description", ""),
+                    "params": meta.get("params", "").split(",") if meta.get("params") else [],
+                    "score": score,
+                    "id": doc_id,
+                })
+        
+        # Sort by score (highest first) and deduplicate by tool:command
+        seen = set()
+        unique_matches = []
+        for match in sorted(matches, key=lambda x: x["score"], reverse=True):
+            key = (match["tool"], match["command"])
+            if key not in seen:
+                seen.add(key)
+                unique_matches.append(match)
+                if len(unique_matches) >= n_results:
+                    break
+        
+        return unique_matches
     
     def add_conversation_turn(self, user_msg: str, ai_msg: str,
                               tools_used: List[str] = None,
@@ -418,20 +557,43 @@ class UnifiedRAG:
             "timestamp": datetime.now().isoformat(),
         }
         
-        # Upsert to avoid duplicates
+        # Check if subdomain already exists before storing (avoid duplicates)
         try:
-            self.findings_collection.upsert(
+            # Check existing
+            existing = self.findings_collection.get(
                 ids=[doc_id],
-                documents=[doc],
-                metadatas=[metadata],
+                include=["metadatas"]
             )
+            
+            # Only add if new or if IP/source has changed (update)
+            if not existing.get("ids") or not existing["ids"]:
+                # New subdomain - add it
+                self.findings_collection.add(
+                    ids=[doc_id],
+                    documents=[doc],
+                    metadatas=[metadata],
+                )
+            else:
+                # Exists - check if we need to update (e.g., new IP or source)
+                existing_meta = existing.get("metadatas", [{}])[0] if existing.get("metadatas") else {}
+                existing_ip = existing_meta.get("ip", "")
+                existing_source = existing_meta.get("source", "")
+                
+                # Update if IP or source is new/different
+                if (ip and ip != existing_ip) or (source and source != existing_source):
+                    self.findings_collection.update(
+                        ids=[doc_id],
+                        documents=[doc],
+                        metadatas=[metadata],
+                    )
+                # Otherwise, skip - already exists with same data
         except Exception as e:
             print(f"  ⚠️ Failed to store subdomain: {e}")
     
     def add_host(self, ip: str, hostname: str = None, ports: List[int] = None,
                  services: Dict[int, str] = None, domain: str = None,
                  session_id: str = None):
-        """Store discovered host with ports in RAG."""
+        """Store discovered host with ports in RAG. Only updates if new ports/services found."""
         from datetime import datetime
         
         doc_id = f"host_{ip.replace('.', '_')}"
@@ -451,19 +613,56 @@ class UnifiedRAG:
         }
         
         try:
-            self.findings_collection.upsert(
+            # Check if host already exists
+            existing = self.findings_collection.get(
                 ids=[doc_id],
-                documents=[doc],
-                metadatas=[metadata],
+                include=["metadatas"]
             )
+            
+            if not existing.get("ids") or not existing["ids"]:
+                # New host - add it
+                self.findings_collection.add(
+                    ids=[doc_id],
+                    documents=[doc],
+                    metadatas=[metadata],
+                )
+            else:
+                # Host exists - check if we have new ports/services
+                existing_meta = existing.get("metadatas", [{}])[0] if existing.get("metadatas") else {}
+                existing_ports_str = existing_meta.get("ports", "")
+                existing_ports = set(existing_ports_str.split(",")) if existing_ports_str else set()
+                new_ports = set(map(str, ports or []))
+                
+                # Update if we found new ports or services
+                if new_ports - existing_ports:
+                    # Merge ports
+                    merged_ports = existing_ports | new_ports
+                    metadata["ports"] = ",".join(sorted(merged_ports, key=lambda x: int(x) if x.isdigit() else 999))
+                    
+                    # Update document with merged info
+                    merged_port_info = ", ".join([f"{p}/{services.get(int(p), 'unknown')}" for p in merged_ports if p.isdigit()])
+                    doc = f"Host {ip} ({hostname or 'unknown'}). Open ports: {merged_port_info}. Domain: {domain or 'unknown'}."
+                    
+                    self.findings_collection.update(
+                        ids=[doc_id],
+                        documents=[doc],
+                        metadatas=[metadata],
+                    )
+                # Otherwise, skip - no new information
         except Exception as e:
             print(f"  ⚠️ Failed to store host: {e}")
     
     def get_subdomains(self, domain: str, limit: int = 200) -> List[str]:
         """Get all stored subdomains for a domain."""
         try:
+            # ChromaDB requires $and for multiple conditions
             results = self.findings_collection.get(
-                where={"domain": domain, "type": "subdomain"},
+                where={
+                    "$and": [
+                        {"domain": domain},
+                        {"type": "subdomain"}
+                    ]
+                },
                 limit=limit
             )
             
@@ -476,8 +675,136 @@ class UnifiedRAG:
             
             return subdomains
         except Exception as e:
-            print(f"  ⚠️ Failed to get subdomains: {e}")
+            # Fallback: get all for domain and filter
+            try:
+                results = self.findings_collection.get(
+                    where={"domain": domain},
+                    limit=limit * 2
+                )
+                subdomains = []
+                if results and results.get("metadatas"):
+                    for meta in results["metadatas"]:
+                        if meta.get("type") == "subdomain":
+                            subdomain = meta.get("subdomain")
+                            if subdomain and subdomain not in subdomains:
+                                subdomains.append(subdomain)
+                return subdomains[:limit]
+            except Exception:
+                return []
+    
+    def get_ips(self, domain: str, limit: int = 50) -> List[str]:
+        """Get all stored IP addresses for a domain from findings."""
+        try:
+            results = self.findings_collection.get(
+                where={"domain": domain},
+                limit=500
+            )
+            
+            ips = set()
+            if results and results.get("metadatas"):
+                for meta in results["metadatas"]:
+                    # Check for IP in various fields
+                    ip = meta.get("ip") or meta.get("host")
+                    if ip and self._is_valid_ip(ip):
+                        ips.add(ip)
+                    
+                    # Also check for IPs stored as subdomain (e.g. from SecurityTrails)
+                    subdomain = meta.get("subdomain", "")
+                    if subdomain and self._is_valid_ip(subdomain):
+                        ips.add(subdomain)
+            
+            return list(ips)[:limit]
+        except Exception as e:
+            print(f"  ⚠️ Failed to get IPs: {e}")
             return []
+    
+    def _is_valid_ip(self, ip: str) -> bool:
+        """Check if string is a valid IP address."""
+        import re
+        ipv4_pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
+        return bool(re.match(ipv4_pattern, ip))
+    
+    def categorize_ip(self, ip: str, asn: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Categorize an IP address using cloud service metadata.
+        
+        Uses both direct lookup and semantic search for flexibility.
+        
+        Returns:
+            Dict with category info: {service, category, is_cdn, is_hosting, is_origin, name}
+        """
+        from .cloud_metadata import categorize_ip as categorize_ip_direct
+        
+        # First try direct lookup (fast)
+        result = categorize_ip_direct(ip, asn)
+        
+        # If not found, try semantic search in ChromaDB (for future extensions)
+        if not result.get("service"):
+            self._ensure_cloud_services_indexed()
+            try:
+                # Search for IP prefix matches
+                query = f"IP prefix {ip.split('.')[0]}"
+                matches = self.cloud_services_collection.query(
+                    query_texts=[query],
+                    n_results=5,
+                    include=["metadatas"]
+                )
+                
+                if matches and matches.get("metadatas") and matches["metadatas"][0]:
+                    # Check if any prefix matches
+                    for meta in matches["metadatas"][0]:
+                        prefixes = meta.get("ip_prefixes", "").split(",")
+                        for prefix in prefixes:
+                            if ip.startswith(prefix.strip()):
+                                return {
+                                    "service": meta.get("service"),
+                                    "category": meta.get("category", "unknown"),
+                                    "is_cdn": meta.get("category", "") in ["cdn", "cdn_waf"],
+                                    "is_hosting": meta.get("category", "") == "hosting",
+                                    "is_origin": False,
+                                    "name": meta.get("name", "Unknown")
+                                }
+            except Exception:
+                pass
+        
+        return result
+    
+    def categorize_ips(self, ips: List[str], asns: Optional[Dict[str, int]] = None) -> Dict[str, List[str]]:
+        """
+        Categorize multiple IPs into cloud service categories.
+        
+        Args:
+            ips: List of IP addresses
+            asns: Optional dict mapping IP -> ASN
+        
+        Returns:
+            Dict with categorized IPs: {
+                "cloudflare": [...],
+                "digitalocean": [...],
+                "google_cloud": [...],
+                "origin": [...]  # Unknown IPs (potential origin servers)
+            }
+        """
+        categorized = {}
+        origin_ips = []
+        
+        for ip in ips:
+            asn = asns.get(ip) if asns else None
+            category_info = self.categorize_ip(ip, asn)
+            
+            service = category_info.get("service")
+            if service:
+                if service not in categorized:
+                    categorized[service] = []
+                categorized[service].append(ip)
+            elif category_info.get("is_origin"):
+                origin_ips.append(ip)
+        
+        # Store origin IPs as "historical_ips" (potential origin servers)
+        if origin_ips:
+            categorized["historical_ips"] = origin_ips
+        
+        return categorized
     
     def add_vulnerability(self, vuln_type: str, severity: str, target: str,
                          details: str = None, cve_id: str = None,
