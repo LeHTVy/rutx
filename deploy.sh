@@ -87,12 +87,26 @@ echo -e "${GREEN}✓${NC} PostgreSQL configured"
 # ============================================================
 echo -e "${BLUE}[3/8]${NC} Setting up project directory..."
 
+# Check if current directory is already a git repo
+CURRENT_DIR="$(pwd)"
+IS_GIT_REPO=false
+if [ -d ".git" ]; then
+    IS_GIT_REPO=true
+    echo -e "${GREEN}✓${NC} Detected git repository in current directory"
+fi
+
 if [ -n "$REPO_URL" ]; then
-    # Clone from Git
-    if [ -d "$PROJECT_DIR" ]; then
+    # Clone from Git (only if PROJECT_DIR is different from current)
+    if [ "$CURRENT_DIR" = "$PROJECT_DIR" ]; then
+        echo -e "${GREEN}✓${NC} Already in target directory. Skipping clone."
+    elif [ -d "$PROJECT_DIR" ]; then
         echo -e "${YELLOW}⚠${NC}  Directory exists. Pulling latest changes..."
         cd "$PROJECT_DIR"
-        git pull
+        if [ -d ".git" ]; then
+            git pull
+        else
+            echo -e "${YELLOW}⚠${NC}  Not a git repo. Using existing directory."
+        fi
     else
         echo -e "${YELLOW}⚠${NC}  Cloning repository..."
         sudo mkdir -p "$(dirname $PROJECT_DIR)"
@@ -100,17 +114,32 @@ if [ -n "$REPO_URL" ]; then
         sudo chown -R $USER:$USER "$PROJECT_DIR"
     fi
 else
-    # Use current directory or create new
-    if [ ! -d "$PROJECT_DIR" ]; then
-        echo -e "${YELLOW}⚠${NC}  Creating project directory..."
-        sudo mkdir -p "$PROJECT_DIR"
-        sudo chown -R $USER:$USER "$PROJECT_DIR"
-    fi
-    
-    if [ "$(pwd)" != "$PROJECT_DIR" ]; then
-        echo -e "${YELLOW}⚠${NC}  Copying files to $PROJECT_DIR..."
-        sudo cp -r . "$PROJECT_DIR/"
-        sudo chown -R $USER:$USER "$PROJECT_DIR"
+    # Use current directory (if already git pulled) or copy to target
+    if [ "$CURRENT_DIR" = "$PROJECT_DIR" ]; then
+        echo -e "${GREEN}✓${NC} Already in target directory. Using current location."
+    elif [ "$IS_GIT_REPO" = true ]; then
+        # Current dir is git repo, but target is different
+        if [ ! -d "$PROJECT_DIR" ]; then
+            echo -e "${YELLOW}⚠${NC}  Copying git repository to $PROJECT_DIR..."
+            sudo mkdir -p "$PROJECT_DIR"
+            sudo cp -r . "$PROJECT_DIR/"
+            sudo chown -R $USER:$USER "$PROJECT_DIR"
+        else
+            echo -e "${GREEN}✓${NC} Target directory exists. Using it."
+        fi
+    else
+        # Not a git repo, just copy files
+        if [ ! -d "$PROJECT_DIR" ]; then
+            echo -e "${YELLOW}⚠${NC}  Creating project directory..."
+            sudo mkdir -p "$PROJECT_DIR"
+            sudo chown -R $USER:$USER "$PROJECT_DIR"
+        fi
+        
+        if [ "$CURRENT_DIR" != "$PROJECT_DIR" ]; then
+            echo -e "${YELLOW}⚠${NC}  Copying files to $PROJECT_DIR..."
+            sudo cp -r . "$PROJECT_DIR/"
+            sudo chown -R $USER:$USER "$PROJECT_DIR"
+        fi
     fi
 fi
 
