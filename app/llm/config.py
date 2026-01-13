@@ -21,6 +21,8 @@ class LLMConfig:
     
     def __init__(self):
         self.config = self.load_config()
+        # Auto-detect and use available model if current model doesn't exist
+        self._auto_detect_model()
     
     def load_config(self) -> dict:
         """Load configuration from file or return defaults"""
@@ -55,13 +57,43 @@ class LLMConfig:
         """Detect available Ollama models"""
         import requests
         try:
-            response = requests.get(f"{self.config.get('endpoint', 'http://localhost:11434')}/api/tags", timeout=5)
+            endpoint = self.config.get('endpoint', 'http://localhost:11434')
+            # Remove /api/chat if present, use base endpoint
+            if '/api/' in endpoint:
+                endpoint = endpoint.split('/api/')[0]
+            response = requests.get(f"{endpoint}/api/tags", timeout=5)
             if response.status_code == 200:
                 data = response.json()
                 return [m.get('name', '') for m in data.get('models', [])]
         except:
             pass
         return []
+    
+    def _auto_detect_model(self):
+        """Auto-detect and switch to available model if current model doesn't exist"""
+        current_model = self.config.get("model", "")
+        available_models = self.detect_ollama_models()
+        
+        if not available_models:
+            return  # Can't detect, keep current config
+        
+        # Check if current model exists (exact match or partial match)
+        model_exists = False
+        for model in available_models:
+            if current_model == model or current_model in model or model.startswith(current_model.split(':')[0]):
+                model_exists = True
+                # Update to exact model name if partial match
+                if current_model != model:
+                    self.config["model"] = model
+                    self.save_config(self.config)
+                break
+        
+        # If current model doesn't exist, use first available model
+        if not model_exists and available_models:
+            new_model = available_models[0]
+            self.config["model"] = new_model
+            self.save_config(self.config)
+            print(f"  🔄 Auto-switched to available model: {new_model}")
     
     def interactive_setup(self) -> dict:
         """Interactive model selection"""

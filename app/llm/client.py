@@ -39,7 +39,7 @@ class OllamaClient:
     """LangChain-Ollama client with STREAMING and waiting spinner."""
     
     DEFAULT_TIMEOUT = 120
-    MAX_TIMEOUT = 300
+    MAX_TIMEOUT = 600  # Increased for deepseek-r1 and other slow models
     
     def __init__(self, model: str = None):
         self.model = model or get_current_model()
@@ -72,10 +72,29 @@ class OllamaClient:
             verbose: If True, show detailed timing/debug info
             show_content: If True, show streaming content live
         """
+        # Auto-adjust timeout for slow models (deepseek-r1, etc.)
+        timeout = self._adjust_timeout_for_model(timeout)
+        
         if stream:
             return self._generate_stream_with_spinner(prompt, system, timeout, show_thinking, verbose, show_content)
         else:
             return self._generate_blocking(prompt, system, timeout, verbose, show_content)
+    
+    def _adjust_timeout_for_model(self, timeout: int) -> int:
+        """Adjust timeout based on model type. Slow models need more time."""
+        # Models that are known to be slow
+        slow_models = ["deepseek-r1", "deepseek", "qwen", "yi"]
+        
+        model_lower = self.model.lower()
+        is_slow_model = any(slow in model_lower for slow in slow_models)
+        
+        if is_slow_model:
+            # For slow models, multiply timeout by 2-3x, but cap at MAX_TIMEOUT
+            adjusted = min(timeout * 3, self.MAX_TIMEOUT)
+            # Minimum 300s for slow models
+            return max(adjusted, 300)
+        
+        return timeout
     
     def _generate_stream_with_spinner(self, prompt: str, system: str, 
                                        timeout: int, show_thinking: bool,
