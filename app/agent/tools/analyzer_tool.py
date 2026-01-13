@@ -252,8 +252,7 @@ Check tool installation with `/tools`
                 )
                 
                 if cve_results.get("cves"):
-                    # Filter CVEs to only include those that actually match detected technologies
-                    # This prevents false positives like Rocket.Chat when it's not detected
+
                     filtered_cves = []
                     detected_tech_lower = [t.lower() for t in detected_tech]
                     
@@ -419,6 +418,19 @@ Check tool installation with `/tools`
                 next_reason = data.get("next_reason", "")
                 summary = data.get("summary", "")
                 
+                # CRITICAL: Validate that next_tool is not already in tools_run
+                rejected_tool = None
+                if next_tool and tools_run_list:
+                    if next_tool in tools_run_list:
+                        rejected_tool = next_tool
+                        logger.warning(f"LLM suggested '{next_tool}' but it's already in tools_run: {tools_run_list}. Rejecting suggestion.")
+                        # Clear next_tool to force user/planner to suggest something else
+                        next_tool = None
+                        next_reason = None  # Clear reason too since tool was rejected
+                        # Update summary to reflect this
+                        if summary:
+                            summary += f" Note: {rejected_tool} was already executed in this session. Need a different tool for next step."
+                
                 # Normalize next_target - never allow "None" string
                 domain = context.get("last_domain") or context.get("domain", "")
                 
@@ -431,29 +443,59 @@ Check tool installation with `/tools`
                         next_target = domain if domain else ""
                 
                 # Build response with attack-focused analysis
+                # Use UI components for better formatting (separate panels)
                 response_text = ""
+                use_ui_components = False
                 
-                if findings_str:
-                    response_text += findings_str
+                try:
+                    from app.ui.components import AnalyzerResultCard
+                    from app.ui.console import get_console
+                    analyzer_card = AnalyzerResultCard(get_console())
+                    panels = analyzer_card.render(
+                        findings=findings,
+                        best_attack=best_attack,
+                        summary=summary,
+                        next_tool=next_tool,
+                        next_target=next_target if next_target else domain,
+                        next_reason=next_reason
+                    )
+                    
+                    # Render panels immediately if we have them
+                    if panels:
+                        use_ui_components = True
+                        console = get_console()
+                        for panel in panels:
+                            console.print(panel)
+                            console.print()  # Spacing between panels
+                        # Keep response_text empty since we already rendered via UI
+                        response_text = ""
+                except (ImportError, Exception) as e:
+                    # Fallback to markdown format if UI components fail
+                    logger.warning(f"UI components not available, using markdown: {e}")
                 
-                if best_attack:
-                    response_text += f"\n## ⚡ Best Attack Vector\n{best_attack}\n"
-                
-                if summary:
-                    response_text += f"\n## 📊 Analysis\n{summary}\n"
-                
-                # Show next step with specific target
-                if next_tool:
-                    next_step = f"Use **{next_tool}**"
-                    if next_target:
-                        next_step += f" on `{next_target}`"
-                    elif domain:
-                        next_step += f" on `{domain}`"
-                    if next_reason:
-                        next_step += f" - {next_reason}"
-                    response_text += f"\n\n**💡 Next Attack Step:** {next_step}"
-                elif next_reason:
-                    response_text += f"\n\n**💡 Recommended next step:** {next_reason}"
+                # Fallback: Build markdown response if UI components not available
+                if not use_ui_components:
+                    if findings_str:
+                        response_text += findings_str
+                    
+                    if best_attack:
+                        response_text += f"\n## ⚡ Best Attack Vector\n{best_attack}\n"
+                    
+                    if summary:
+                        response_text += f"\n## 📊 Analysis\n{summary}\n"
+                    
+                    # Show next step with specific target
+                    if next_tool:
+                        next_step = f"Use **{next_tool}**"
+                        if next_target:
+                            next_step += f" on `{next_target}`"
+                        elif domain:
+                            next_step += f" on `{domain}`"
+                        if next_reason:
+                            next_step += f" - {next_reason}"
+                        response_text += f"\n\n**💡 Next Attack Step:** {next_step}"
+                    elif next_reason:
+                        response_text += f"\n\n**💡 Recommended next step:** {next_reason}"
                 
                 # Store next_tool in context for "do the next step" command
                 if next_tool:
@@ -598,12 +640,23 @@ Check tool installation with `/tools`
                         "next_action": "auto_chain"
                     }
                 
-                return {
-                    "response": response_text,
+                # Ensure we have a response text to avoid "No response" error
+                # If UI components rendered, use summary as fallback response text
+                fallback_response = summary if summary else "Analysis complete."
+                final_response = response_text if response_text else fallback_response
+                
+                result = {
+                    "response": final_response,  
                     "context": context,
                     "next_action": "respond",
-                    "response_streamed": True  # Response was already streamed
+                    "response_streamed": use_ui_components  
                 }
+                
+                if use_ui_components:
+                    result["suggested_tools"] = []  
+                    result["suggestion_message"] = ""  
+                
+                return result
             else:
                 # No JSON data extracted - fallback to raw response
                 logger.warning("Analyzer: No structured data extracted, using raw response")

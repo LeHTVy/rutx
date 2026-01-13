@@ -9,6 +9,9 @@ import json
 from typing import Dict, Any
 from app.agent.tools.base import AgentTool
 from app.llm.client import OllamaClient
+from app.ui import get_logger
+
+logger = get_logger()
 
 
 class IntentClassifierTool(AgentTool):

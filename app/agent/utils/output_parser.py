@@ -82,9 +82,9 @@ Extract and return a JSON object with ONLY the fields that have actual findings:
 - "hosts": array of {{"hostname": "...", "ip": "..."}} objects
 - "ports": array of {{"port": number, "service": "...", "host": "...", "protocol": "tcp/udp", "version": "..."}} objects
 - "vulnerabilities": array of {{"type": "...", "severity": "high/medium/low", "target": "...", "details": "..."}}
-- "emails": array of email addresses
+- "emails": array of email addresses **ONLY if they are related to the target domain** (e.g., admin@{domain}, contact@{domain}). DO NOT include registrar emails (like abuse@registrar.com) or generic emails from whois output.
 - "technologies": array of detected technology names (e.g., "nginx", "wordpress", "apache")
-- "urls": array of interesting URLs found
+- "urls": array of interesting URLs found **ONLY if they are related to the target domain** (e.g., https://{domain}/path, https://subdomain.{domain}). DO NOT include registrar URLs (like icann.org, whois servers) or generic administrative URLs from whois output.
 - "asns": array of {{"asn": number, "name": "...", "org": "..."}} objects (if ASN information found)
 - "os_detected": string with OS information (if detected, e.g., from nmap)
 
@@ -93,7 +93,8 @@ RULES:
 2. Only include fields that have actual data found
 3. Do not invent or guess - only extract what's explicitly in the output
 4. For hosts, extract both hostname AND IP address when available
-5. Return empty {{}} if no structured findings found
+5. **CRITICAL for emails/URLs**: Only extract emails/URLs that are ACTUALLY related to the target domain "{domain}". Ignore registrar emails (abuse@registrar.com), whois server URLs (icann.org, whois servers), and other administrative/registrar-related data.
+6. Return empty {{}} if no structured findings found
 
 JSON:'''
 
@@ -201,11 +202,30 @@ JSON:'''
             if valid_vulns:
                 result["vulnerabilities"] = valid_vulns
         
-        # Validate emails
+        # Validate emails - filter to only include emails related to target domain
         if "emails" in findings and isinstance(findings["emails"], list):
             email_pattern = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
-            valid_emails = [e for e in findings["emails"] 
-                          if isinstance(e, str) and email_pattern.match(e)]
+            valid_emails = []
+            for e in findings["emails"]:
+                if isinstance(e, str) and email_pattern.match(e):
+                    # Only include emails that are related to target domain
+                    # Exclude registrar emails (abuse@registrar.com, etc.)
+                    if domain:
+                        # Extract domain from email
+                        email_domain = e.split('@')[1].lower() if '@' in e else ""
+                        target_base = domain.lower().replace('www.', '').split('.')[0]  # e.g., "hellogroup" from "hellogroup.co.za"
+                        target_full = domain.lower().replace('www.', '')  # e.g., "hellogroup.co.za"
+                        
+                        # Include if email domain matches target or contains target base
+                        if (target_full in email_domain or 
+                            target_base in email_domain or
+                            email_domain.endswith('.' + target_full) or
+                            email_domain == target_full):
+                            valid_emails.append(e)
+                    else:
+                        # If no domain specified, include all valid emails
+                        valid_emails.append(e)
+            
             if valid_emails:
                 result["emails"] = list(set(valid_emails))
         
@@ -216,12 +236,35 @@ JSON:'''
             if valid_tech:
                 result["technologies"] = list(set(valid_tech))
         
-        # Validate URLs
+        # Validate URLs - filter to only include URLs related to target domain
         if "urls" in findings and isinstance(findings["urls"], list):
-            valid_urls = [u for u in findings["urls"]
-                         if isinstance(u, str) and (u.startswith("http://") or u.startswith("https://"))]
+            valid_urls = []
+            for url in findings["urls"]:
+                if isinstance(url, str) and (url.startswith("http://") or url.startswith("https://")):
+                    # Only include URLs that are related to target domain
+                    # Exclude registrar URLs (icann.org, whois servers, etc.)
+                    if domain:
+                        target_base = domain.lower().replace('www.', '').split('.')[0]  # e.g., "hellogroup"
+                        target_full = domain.lower().replace('www.', '')  # e.g., "hellogroup.co.za"
+                        url_lower = url.lower()
+                        
+                        # Exclude common registrar/admin URLs
+                        exclude_domains = ['icann.org', 'whois', 'registrar', '1api.net', 'nic.', 'iana.org']
+                        if any(excluded in url_lower for excluded in exclude_domains):
+                            continue
+                        
+                        # Include if URL contains target domain or target base
+                        if (target_full in url_lower or 
+                            target_base in url_lower or
+                            url_lower.endswith('.' + target_full) or
+                            url_lower.endswith(target_full)):
+                            valid_urls.append(url)
+                    else:
+                        # If no domain specified, include all valid URLs
+                        valid_urls.append(url)
+            
             if valid_urls:
-                result["urls"] = valid_urls[:50]  # Limit to 50
+                result["urls"] = list(set(valid_urls))[:50]  # Limit to 50 and dedupe
         
         return result
     

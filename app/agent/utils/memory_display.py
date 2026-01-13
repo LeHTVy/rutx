@@ -59,13 +59,29 @@ class MemoryDisplayService:
         except Exception:
             pass
         
-        # Emails
+        # Emails - filter to only show emails related to target domain
         emails = context.get("emails", [])
         if emails:
-            response_parts.append(f"### 📧 Emails ({len(emails)} found)\n")
+            # Filter emails to only include those related to target domain
+            domain_lower = domain.lower().replace('www.', '')
+            target_base = domain_lower.split('.')[0] if '.' in domain_lower else domain_lower
+            
+            filtered_emails = []
             for email in emails:
-                response_parts.append(f"  • {email}")
-            response_parts.append("")
+                if '@' in email:
+                    email_domain = email.split('@')[1].lower()
+                    # Include if email domain matches target
+                    if (domain_lower in email_domain or 
+                        target_base in email_domain or
+                        email_domain.endswith('.' + domain_lower) or
+                        email_domain == domain_lower):
+                        filtered_emails.append(email)
+            
+            if filtered_emails:
+                response_parts.append(f"### 📧 Emails ({len(filtered_emails)} found)\n")
+                for email in filtered_emails:
+                    response_parts.append(f"  • {email}")
+                response_parts.append("")
         
         # Subdomains - combine session + RAG
         subdomains = context.get("subdomains", [])
@@ -163,13 +179,34 @@ class MemoryDisplayService:
                     response_parts.append(f"  • {asn}")
             response_parts.append("")
         
-        # Interesting URLs
+        # Interesting URLs - filter to only show URLs related to target domain
         interesting_urls = context.get("interesting_urls", [])
         if interesting_urls:
-            response_parts.append(f"### 🔗 Interesting URLs ({len(interesting_urls)} found)\n")
+            # Filter URLs to only include those related to target domain
+            domain_lower = domain.lower().replace('www.', '')
+            target_base = domain_lower.split('.')[0] if '.' in domain_lower else domain_lower
+            
+            filtered_urls = []
+            exclude_domains = ['icann.org', 'whois', 'registrar', '1api.net', 'nic.', 'iana.org']
+            
             for url in interesting_urls:
-                response_parts.append(f"  • {url}")
-            response_parts.append("")
+                url_lower = url.lower()
+                # Exclude registrar/admin URLs
+                if any(excluded in url_lower for excluded in exclude_domains):
+                    continue
+                
+                # Include if URL contains target domain
+                if (domain_lower in url_lower or 
+                    target_base in url_lower or
+                    url_lower.endswith('.' + domain_lower) or
+                    url_lower.endswith(domain_lower)):
+                    filtered_urls.append(url)
+            
+            if filtered_urls:
+                response_parts.append(f"### 🔗 Interesting URLs ({len(filtered_urls)} found)\n")
+                for url in filtered_urls:
+                    response_parts.append(f"  • {url}")
+                response_parts.append("")
         
         # ─────────────────────────────────────────────────────────
         # PORT SCAN RESULTS

@@ -12,7 +12,7 @@ from rich.table import Table
 from rich.columns import Columns
 from rich.text import Text
 from rich.markdown import Markdown
-from rich.box import ROUNDED, DOUBLE_EDGE
+from rich.box import ROUNDED, DOUBLE_EDGE, MINIMAL
 from .console import get_console
 from .themes import get_theme, SeverityColor
 
@@ -192,6 +192,83 @@ class AnalysisCard:
             border_style=self.theme.info,
             box=ROUNDED
         )
+
+
+class AnalyzerResultCard:
+    """Display analyzer results with separate panels for each section."""
+    
+    def __init__(self, console: Console = None):
+        self.console = console or get_console()
+        self.theme = get_theme()
+    
+    def render(self, findings: List[Dict[str, Any]] = None, best_attack: str = None, 
+               summary: str = None, next_tool: str = None, next_target: str = None, 
+               next_reason: str = None) -> List[Panel]:
+        """
+        Render analyzer results as separate panels.
+        
+        Returns list of Panel objects to be displayed separately.
+        """
+        panels = []
+        
+        # Findings Panel
+        if findings:
+            findings_content = []
+            for finding in findings[:10]:  # Limit to 10 findings
+                severity = finding.get("severity", "Unknown")
+                color = self.theme.severity_colors.get(severity.lower(), "white")
+                issue = finding.get("issue", "N/A")
+                attack = finding.get("attack") or finding.get("risk", "")
+                
+                findings_content.append(f"[{color}]🔴 {severity.upper()}[/] {issue}")
+                if attack:
+                    findings_content.append(f"   → {attack}")
+                findings_content.append("")
+            
+            if len(findings) > 10:
+                findings_content.append(f"[dim]... and {len(findings) - 10} more findings[/]")
+            
+            panels.append(Panel(
+                "\n".join(findings_content),
+                title="🎯 Attack Vectors Identified",
+                border_style="dim",
+                box=MINIMAL
+            ))
+        
+        # Best Attack Vector Panel
+        if best_attack:
+            panels.append(Panel(
+                best_attack,
+                title="⚡ Best Attack Vector",
+                border_style="dim",
+                box=MINIMAL
+            ))
+        
+        # Analysis Summary Panel
+        if summary:
+            panels.append(Panel(
+                summary,
+                title="📊 Analysis",
+                border_style="dim",
+                box=MINIMAL
+            ))
+        
+        # Next Step Panel
+        if next_tool:
+            next_step_content = f"[bold]{next_tool}[/]"
+            if next_target:
+                next_step_content += f" on [cyan]{next_target}[/]"
+            if next_reason:
+                next_step_content += f"\n[dim]{next_reason}[/]"
+            
+            panels.append(Panel(
+                next_step_content,
+                title="💡 Next Step",
+                border_style="dim",
+                box=MINIMAL
+            ))
+        
+        return panels
 
 
 class ProgressIndicator:

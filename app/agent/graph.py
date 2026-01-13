@@ -57,11 +57,11 @@ class AgentState(TypedDict):
     messages: List[Message]
     
     # Intent classification
-    intent: str  # "security_task", "question", "confirm", "tool_select"
+    intent: str 
     
     # Planning
     suggested_tools: List[str]
-    suggested_commands: Dict[str, str]  # {tool_name: command_name} from semantic search
+    suggested_commands: Dict[str, str] 
     suggestion_message: str
     tool_params: Dict[str, Any]
     
@@ -90,9 +90,9 @@ class AgentState(TypedDict):
     next_action: str  # "plan", "confirm", "execute", "analyze", "respond", "end"
     
     # Mode management
-    mode: str  # "manual" or "autochain"
-    autochain_iteration: int  # Current iteration number (0-4)
-    autochain_results: List[Dict[str, Any]]  # Accumulated results from all iterations
+    mode: str  
+    autochain_iteration: int  
+    autochain_results: List[Dict[str, Any]]  
 
 
 # ============================================================
@@ -632,6 +632,11 @@ def auto_chain_node(state: AgentState) -> AgentState:
 
 def respond_node(state: AgentState) -> AgentState:
     """Format and return final response."""
+    # If response was already streamed/rendered via UI components, just end
+    # (UI components already show analysis and recommendations)
+    if state.get("response_streamed"):
+        return {**state, "next_action": "end"}
+    
     # If we have a suggestion waiting for confirmation
     if state.get("suggestion_message") and state.get("suggested_tools"):
         return {
@@ -644,10 +649,19 @@ def respond_node(state: AgentState) -> AgentState:
     if state.get("response"):
         return {**state, "next_action": "end"}
     
-    # Fallback if no response
+    # If we have suggested_tools but no message, create a simple suggestion
+    # (This should only happen if UI components weren't used)
+    if state.get("suggested_tools"):
+        tools = ", ".join(state.get("suggested_tools", []))
+        return {
+            **state,
+            "response": f"Suggested tools: {tools}. Type 'yes' to proceed.",
+            "next_action": "end"
+        }
+    
     return {
         **state,
-        "response": "I couldn't process that request. Please try again with more details.",
+        "response": "",  
         "next_action": "end"
     }
 
@@ -1043,15 +1057,6 @@ class LangGraphAgent:
             context.pop("_enable_autochain", None)
             context.pop("_autochain_trigger", None)
         
-        # Check if AutoChain mode should be enabled (from "attack" command)
-        if context and context.get("_enable_autochain"):
-            self.set_mode("autochain")
-            # Use original trigger query if available
-            if context.get("_autochain_trigger"):
-                query = context.get("_autochain_trigger")
-            context.pop("_enable_autochain", None)
-            context.pop("_autochain_trigger", None)
-        
         # If we have a pending confirmation and user says yes/no
         suggested_tools = []
         tool_params = {}
@@ -1059,8 +1064,17 @@ class LangGraphAgent:
             suggested_tools = self.last_suggestion.get("tools", [])
             tool_params = self.last_suggestion.get("params", {})
         
-        # Handle autochain mode
+        # Handle autochain mode - check BEFORE normal flow
+        # If mode is autochain and user just confirmed, use original trigger query
         if self.mode == "autochain" and self.autochain_iteration_count < 5:
+            # If user just confirmed (query is "yes" or similar), use stored trigger query
+            if query.lower() in ["yes", "y", "ok", "go", "run", "execute", "proceed"]:
+                # Get original trigger from context if available
+                original_query = self.context.get("_autochain_trigger") or self.context.get("last_autochain_query")
+                if original_query:
+                    query = original_query
+                # Store for next iteration
+                self.context["last_autochain_query"] = query
             # Run autochain loop
             return self._run_autochain_iteration(query, self.context)
         
