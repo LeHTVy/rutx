@@ -23,6 +23,10 @@ chromadb>=1.0.0
 # HTTP Client
 httpx>=0.28.0
 
+# CLI Interface
+prompt_toolkit>=3.0.0
+rich>=14.0.0
+
 # Phoenix Tracing & Observability (Optional)
 arize-phoenix>=4.0.0
 opentelemetry-api>=1.20.0
