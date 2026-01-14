@@ -1,6 +1,10 @@
 {
   "provider": "ollama",
   "model": "qwen3:8b",
+  "planner_model": null,
+  "analyzer_model": null,
+  "executor_model": null,
+  "reasoning_model": null,
   "temperature": 0,
   "endpoint": "http://localhost:11434"
 }

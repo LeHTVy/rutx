@@ -87,6 +87,7 @@ con
 
 # LLM Configuration (may contain API keys)
 # llm_config.json stored in data/ is already ignored above
+app/llm/config.json
 
 # ============================================================================
 # IDE & Editors
