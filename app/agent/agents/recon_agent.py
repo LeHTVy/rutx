@@ -72,7 +72,8 @@ class ReconAgent(BaseAgent):
                 has_subdomains=has_subdomains
             )
             
-            llm = OllamaClient()
+            # Use planner model for tool selection
+            llm = OllamaClient(model="planner")
             response = llm.generate(prompt, timeout=10, stream=False).strip().lower()
             
             # Extract valid recon type

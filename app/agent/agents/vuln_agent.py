@@ -81,7 +81,8 @@ class VulnAgent(BaseAgent):
                 target=context.get("target_domain") or context.get("last_domain") or "not set"
             )
             
-            llm = OllamaClient()
+            # Use planner model for tool selection
+            llm = OllamaClient(model="planner")
             response = llm.generate(prompt, timeout=10, stream=False).strip().lower()
             
             # Extract valid vuln type

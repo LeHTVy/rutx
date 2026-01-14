@@ -9,7 +9,7 @@ import re
 import sys
 import threading
 import time
-from typing import Optional, Callable
+from typing import Optional, Callable, List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 from app.llm import get_llm_config
@@ -42,7 +42,29 @@ class OllamaClient:
     MAX_TIMEOUT = 600  # Increased for deepseek-r1 and other slow models
     
     def __init__(self, model: str = None):
-        self.model = model or get_current_model()
+        """
+        Initialize OllamaClient.
+        
+        Args:
+            model: Model name to use. If None, uses get_current_model().
+                   Can also use special values:
+                   - "planner" - uses planner_model from config
+                   - "analyzer" - uses analyzer_model from config
+        """
+        if model == "planner":
+            from app.llm.config import get_planner_model
+            self.model = get_planner_model()
+        elif model == "analyzer":
+            from app.llm.config import get_analyzer_model
+            self.model = get_analyzer_model()
+        elif model == "executor":
+            from app.llm.config import get_executor_model
+            self.model = get_executor_model()
+        elif model == "reasoning":
+            from app.llm.config import get_reasoning_model
+            self.model = get_reasoning_model()
+        else:
+            self.model = model or get_current_model()
         self._llm = None
         self._executor = ThreadPoolExecutor(max_workers=2)
     
@@ -56,6 +78,166 @@ class OllamaClient:
                 num_ctx=4096,
             )
         return self._llm
+    
+    def generate_with_tools(self, prompt: str, tools: List[Dict[str, Any]], 
+                           system: str = None, timeout: int = 90) -> Dict[str, Any]:
+        """
+        Generate response using function calling (for FunctionGemma).
+        
+        Args:
+            prompt: User prompt
+            tools: List of tool definitions in OpenAI function calling format
+            system: Optional system message
+            timeout: Max seconds to wait
+            
+        Returns:
+            Dict with:
+                - "content": str - Text response (if any)
+                - "tool_calls": List[Dict] - Tool calls to execute
+                - "message": str - Full response message
+        """
+        import requests
+        import json
+        
+        # Check if this is FunctionGemma
+        is_functiongemma = "functiongemma" in self.model.lower()
+        if not is_functiongemma:
+            # Fallback to regular generate
+            response_text = self.generate(prompt, system, timeout, stream=False)
+            return {
+                "content": response_text,
+                "tool_calls": [],
+                "message": response_text
+            }
+        
+        # Get endpoint
+        config = get_llm_config()
+        endpoint = config.get_config().get("endpoint", "http://localhost:11434")
+        if "/api/" in endpoint:
+            endpoint = endpoint.split("/api/")[0]
+        
+        # Prepare messages
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        
+        # Prepare request
+        request_data = {
+            "model": self.model,
+            "messages": messages,
+            "tools": tools,
+            "stream": False
+        }
+        
+        try:
+            response = requests.post(
+                f"{endpoint}/api/chat",
+                json=request_data,
+                timeout=timeout
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            # Parse response
+            message = data.get("message", {})
+            content = message.get("content", "")
+            tool_calls = message.get("tool_calls", [])
+            
+            return {
+                "content": content,
+                "tool_calls": tool_calls,
+                "message": message
+            }
+        except Exception as e:
+            # Fallback to regular generate on error
+            print(f"  ⚠️ Function calling failed: {e}. Falling back to regular generation.")
+            response_text = self.generate(prompt, system, timeout, stream=False)
+            return {
+                "content": response_text,
+                "tool_calls": [],
+                "message": response_text
+            }
+    
+    def generate_with_tools(self, prompt: str, tools: List[Dict[str, Any]], 
+                           system: str = None, timeout: int = 90) -> Dict[str, Any]:
+        """
+        Generate response using function calling (for FunctionGemma).
+        
+        Args:
+            prompt: User prompt
+            tools: List of tool definitions in OpenAI function calling format
+            system: Optional system message
+            timeout: Max seconds to wait
+            
+        Returns:
+            Dict with:
+                - "content": str - Text response (if any)
+                - "tool_calls": List[Dict] - Tool calls to execute
+                - "message": str - Full response message
+        """
+        import requests
+        import json
+        
+        # Check if this is FunctionGemma
+        is_functiongemma = "functiongemma" in self.model.lower()
+        if not is_functiongemma:
+            # Fallback to regular generate
+            response_text = self.generate(prompt, system, timeout, stream=False)
+            return {
+                "content": response_text,
+                "tool_calls": [],
+                "message": response_text
+            }
+        
+        # Get endpoint
+        config = get_llm_config()
+        endpoint = config.get_config().get("endpoint", "http://localhost:11434")
+        if "/api/" in endpoint:
+            endpoint = endpoint.split("/api/")[0]
+        
+        # Prepare messages
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        
+        # Prepare request
+        request_data = {
+            "model": self.model,
+            "messages": messages,
+            "tools": tools,
+            "stream": False
+        }
+        
+        try:
+            response = requests.post(
+                f"{endpoint}/api/chat",
+                json=request_data,
+                timeout=timeout
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            # Parse response
+            message = data.get("message", {})
+            content = message.get("content", "")
+            tool_calls = message.get("tool_calls", [])
+            
+            return {
+                "content": content,
+                "tool_calls": tool_calls,
+                "message": message
+            }
+        except Exception as e:
+            # Fallback to regular generate on error
+            print(f"  ⚠️ Function calling failed: {e}. Falling back to regular generation.")
+            response_text = self.generate(prompt, system, timeout, stream=False)
+            return {
+                "content": response_text,
+                "tool_calls": [],
+                "message": response_text
+            }
     
     def generate(self, prompt: str, system: str = None, timeout: int = 90, 
                  stream: bool = True, show_thinking: bool = False,

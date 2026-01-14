@@ -80,7 +80,8 @@ class AnalyzerTool(AgentTool):
         except Exception:
             pass
         
-        llm = OllamaClient()
+        # Use analyzer model for analyzing tool outputs
+        llm = OllamaClient(model="analyzer")
         
         # === CHECK IF ANY TOOLS SUCCEEDED ===
         successful_tools = [t for t, d in results.items() if d.get("success")]
@@ -709,7 +710,8 @@ Check tool installation with `/tools`
         if context is None:
             context = {}
         
-        llm = OllamaClient()
+        # Use analyzer model for analyzing tool outputs
+        llm = OllamaClient(model="analyzer")
         
         # Build results summary
         results_str = ""
@@ -778,7 +780,8 @@ Provide a brief summary (1-2 sentences) of what was found in this iteration."""
         if context is None:
             context = {}
         
-        llm = OllamaClient()
+        # Use analyzer model for analyzing tool outputs
+        llm = OllamaClient(model="analyzer")
         
         # Aggregate all results from 5 iterations
         all_results_str = ""

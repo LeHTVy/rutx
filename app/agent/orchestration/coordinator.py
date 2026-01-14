@@ -238,7 +238,8 @@ ROUTING LOGIC:
 Which agent should handle this task? Return ONLY the agent name (one word)."""
 
         try:
-            llm = OllamaClient()
+            # Use planner model for tool selection
+            llm = OllamaClient(model="planner")
             response = llm.generate(prompt, timeout=15, stream=False).strip().lower()
             
             # Extract agent name - find first valid agent in response
@@ -289,6 +290,8 @@ Which agent should handle this task? Return ONLY the agent name (one word)."""
         
         PRIORITIZES USER-SPECIFIED TOOLS over agent's automatic selection.
         
+        Supports FunctionGemma with function calling if planner model is FunctionGemma.
+        
         Returns:
             Dict with agent name, tools, commands, and reasoning.
         """
@@ -303,7 +306,15 @@ Which agent should handle this task? Return ONLY the agent name (one word)."""
             context["user_requested_tool"] = analyzer_next_tool
             context["user_requested_target"] = context.get("analyzer_next_target")
         
-        # Get agent's plan - with user tool priority
+        # Check if planner model is FunctionGemma - use function calling
+        from app.llm.config import get_planner_model
+        planner_model = get_planner_model()
+        
+        if "functiongemma" in planner_model.lower():
+            # Use FunctionGemma with function calling
+            return self._plan_with_functiongemma(query, context, agent)
+        
+        # Get agent's plan - with user tool priority (regular method)
         plan = agent.plan_with_user_priority(query, context)
         
         # Add routing info
@@ -311,6 +322,97 @@ Which agent should handle this task? Return ONLY the agent name (one word)."""
         plan["phase"] = self._infer_phase(context)
         
         return plan
+    
+    def _plan_with_functiongemma(self, query: str, context: Dict[str, Any], agent) -> Dict[str, Any]:
+        """
+        Plan using FunctionGemma with function calling.
+        
+        Converts available tools to function definitions and lets FunctionGemma
+        select tools via function calling.
+        """
+        from app.llm.client import OllamaClient
+        from app.llm.function_calling import tools_to_function_definitions, parse_tool_calls
+        from app.tools.registry import get_registry
+        
+        registry = get_registry()
+        
+        # Get available tools for this agent
+        available_tools = []
+        if hasattr(agent, 'SPECIALIZED_TOOLS') and agent.SPECIALIZED_TOOLS:
+            available_tools = [t for t in agent.SPECIALIZED_TOOLS if registry.is_available(t)]
+        else:
+            # Fallback: get all available tools
+            available_tools = [t for t in registry.list_tools() if registry.is_available(t)]
+        
+        # Filter out already-run tools
+        tools_run = set(context.get("tools_run", []))
+        available_tools = [t for t in available_tools if t not in tools_run]
+        
+        if not available_tools:
+            return {
+                "agent": agent.AGENT_NAME,
+                "tools": [],
+                "commands": {},
+                "reasoning": "No available tools to run (all tools already executed)",
+                "routed_by": "functiongemma",
+                "phase": self._infer_phase(context)
+            }
+        
+        # Convert tools to function definitions
+        function_defs = tools_to_function_definitions(available_tools[:20], registry)  # Limit to 20 tools
+        
+        # Build prompt for FunctionGemma
+        context_str = self._summarize_context(context)
+        prompt = f"""Select the best security tools to run for this task.
+
+TASK: {query}
+CONTEXT: {context_str}
+
+Available tools: {', '.join(available_tools[:10])}
+Tools already run: {', '.join(list(tools_run)[:5]) if tools_run else 'None'}
+
+Select 1-3 tools that best accomplish this task. Consider:
+- What has already been run (don't repeat)
+- What information we already have
+- The most efficient path to the goal"""
+        
+        # Call FunctionGemma with function calling
+        llm = OllamaClient(model="planner")
+        result = llm.generate_with_tools(
+            prompt=prompt,
+            tools=function_defs,
+            system="You are a penetration testing tool selector. Select tools using function calling.",
+            timeout=30
+        )
+        
+        # Parse tool calls
+        tool_calls = parse_tool_calls(result.get("tool_calls", []))
+        
+        if not tool_calls:
+            # Fallback to regular planning if no tool calls
+            plan = agent.plan_with_user_priority(query, context)
+            plan["routed_by"] = "functiongemma_fallback"
+            plan["phase"] = self._infer_phase(context)
+            return plan
+        
+        # Extract selected tools
+        selected_tools = [tc["tool"] for tc in tool_calls]
+        
+        # Get commands for selected tools
+        commands = {}
+        for tool in selected_tools:
+            spec = registry.tools.get(tool)
+            if spec and spec.commands:
+                commands[tool] = list(spec.commands.keys())[0]
+        
+        return {
+            "agent": agent.AGENT_NAME,
+            "tools": selected_tools,
+            "commands": commands,
+            "reasoning": f"FunctionGemma selected {len(selected_tools)} tools via function calling",
+            "routed_by": "functiongemma",
+            "phase": self._infer_phase(context)
+        }
     
     def execute_with_agent(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """

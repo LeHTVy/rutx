@@ -310,8 +310,8 @@ class BaseAgent(ABC):
             # If template has unmatched keys, use simpler approach
             prompt = prompt_template
         
-        # Ask LLM
-        llm = OllamaClient()
+        # Ask LLM (use planner model for phase completion analysis)
+        llm = OllamaClient(model="planner")
         response = llm.generate(prompt, timeout=30, stream=False)
         
         # Parse response
@@ -643,7 +643,8 @@ class BaseAgent(ABC):
                 output=truncated_output
             )
             
-            llm = OllamaClient()
+            # Use planner model for tool selection
+            llm = OllamaClient(model="planner")
             response = llm.generate(prompt, timeout=15, stream=False)
             
             # Parse JSON response

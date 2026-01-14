@@ -256,23 +256,58 @@ def run_snode():
             
             # Model switch command
             if user_input.lower().startswith("/model"):
-                parts = user_input.split(maxsplit=1)
+                parts = user_input.split(maxsplit=2)
                 if len(parts) == 1:
-                    # Show available models
+                    # Show available models and current configuration
                     import subprocess
                     from app.agent.graph import get_current_model
+                    from app.llm.config import get_planner_model, get_analyzer_model, get_executor_model, get_reasoning_model
                     result = subprocess.run(["ollama", "list"], capture_output=True, text=True)
-                    console.print(f"\n[bold]Current model:[/] {get_current_model()}")
+                    console.print(f"\n[bold]Current default model:[/] {get_current_model()}")
+                    console.print(f"[bold]Planner model:[/] {get_planner_model()} [dim](tool selection)[/]")
+                    console.print(f"[bold]Analyzer model:[/] {get_analyzer_model()} [dim](output analysis)[/]")
+                    console.print(f"[bold]Executor model:[/] {get_executor_model()} [dim](code/command generation)[/]")
+                    console.print(f"[bold]Reasoning model:[/] {get_reasoning_model()} [dim](complex reasoning)[/]")
                     console.print(f"\n[bold]Available models:[/]\n{result.stdout}")
-                    console.print("[dim]Usage: /model <model_name>[/]\n")
-                else:
+                    console.print("[dim]Usage:[/]")
+                    console.print("[dim]  /model <model_name> - Set default model[/]")
+                    console.print("[dim]  /model planner <model_name> - Set planner model (FunctionGemma, nemotron-mini)[/]")
+                    console.print("[dim]  /model analyzer <model_name> - Set analyzer model (deepseek-r1, qwen3, nemotron-3-nano)[/]")
+                    console.print("[dim]  /model executor <model_name> - Set executor model (qwen2.5-coder, codellama, starcoder2)[/]")
+                    console.print("[dim]  /model reasoning <model_name> - Set reasoning model (deepseek-r1, qwen3, llama3)[/]\n")
+                elif len(parts) == 2:
+                    # Set default model
                     new_model = parts[1].strip()
                     from app.agent.graph import set_current_model
                     set_current_model(new_model)
                     llm_config.set_model(new_model)
                     # Clear agent's LLM cache to use new model
                     agent.messages = []
-                    console.print(f"[green]✅ Switched to model: {new_model}[/]\n")
+                    console.print(f"[green]✅ Switched default model to: {new_model}[/]\n")
+                elif len(parts) == 3:
+                    # Set planner or analyzer model
+                    model_type = parts[1].strip().lower()
+                    new_model = parts[2].strip()
+                    
+                    if model_type == "planner":
+                        llm_config.set_planner_model(new_model)
+                        console.print(f"[green]✅ Set planner model to: {new_model}[/]")
+                        console.print(f"[dim]  (Used for tool selection - FunctionGemma recommended)[/]\n")
+                    elif model_type == "analyzer":
+                        llm_config.set_analyzer_model(new_model)
+                        console.print(f"[green]✅ Set analyzer model to: {new_model}[/]")
+                        console.print(f"[dim]  (Used for analyzing tool outputs - deepseek-r1/qwen3 recommended)[/]\n")
+                    elif model_type == "executor":
+                        llm_config.set_executor_model(new_model)
+                        console.print(f"[green]✅ Set executor model to: {new_model}[/]")
+                        console.print(f"[dim]  (Used for code/command generation - qwen2.5-coder recommended)[/]\n")
+                    elif model_type == "reasoning":
+                        llm_config.set_reasoning_model(new_model)
+                        console.print(f"[green]✅ Set reasoning model to: {new_model}[/]")
+                        console.print(f"[dim]  (Used for complex reasoning - deepseek-r1/qwen3 recommended)[/]\n")
+                    else:
+                        console.print(f"[red]❌ Unknown model type: {model_type}[/]")
+                        console.print("[dim]Use 'planner', 'analyzer', 'executor', or 'reasoning'[/]\n")
                 continue
             
             # Resume session command
@@ -857,33 +892,35 @@ def run_snode():
                 response_streamed = False
             
             # Display result with Gemini-style UI
-            try:
-                from app.ui import get_gemini_ui
-                gemini_ui = get_gemini_ui()
-                
-                if needs_confirmation:
-                    # Show suggestion with Gemini style
-                    gemini_ui.render_info_card("💡 Suggestion", response, border_style="yellow")
-                    console.print("[dim]Type 'yes' to proceed, 'no' to cancel[/]\n")
-                elif not response_streamed:
-                    # Render response in Gemini style
-                    gemini_ui.render_response(response)
-                # else: response was already streamed, no need to print again
-            except ImportError:
-                # Fallback to old style
+            # If response was already streamed, don't print again
+            if response_streamed:
+                # Response was already streamed during generation, just add spacing
                 console.print()
-                if needs_confirmation:
-                    console.print(Panel(
-                        Markdown(response),
-                        title="💡 SNODE Suggestion",
-                        border_style="yellow",
-                    ))
-                    console.print("[dim]Type 'yes' to proceed, 'no' to cancel[/]\n")
-                elif not response_streamed:
-                    console.print(Markdown(response))
+            else:
+                try:
+                    from app.ui import get_gemini_ui
+                    gemini_ui = get_gemini_ui()
+                    
+                    if needs_confirmation:
+                        # Show suggestion with Gemini style
+                        gemini_ui.render_info_card("💡 Suggestion", response, border_style="yellow")
+                        console.print("[dim]Type 'yes' to proceed, 'no' to cancel[/]\n")
+                    else:
+                        # Render response in Gemini style
+                        gemini_ui.render_response(response)
+                except ImportError:
+                    # Fallback to old style
                     console.print()
-                else:
-                    console.print()  # Add spacing
+                    if needs_confirmation:
+                        console.print(Panel(
+                            Markdown(response),
+                            title="💡 SNODE Suggestion",
+                            border_style="yellow",
+                        ))
+                        console.print("[dim]Type 'yes' to proceed, 'no' to cancel[/]\n")
+                    else:
+                        console.print(Markdown(response))
+                        console.print()
             
             # Save to persistent memory
             if memory:
