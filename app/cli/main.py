@@ -913,8 +913,9 @@ def run_snode():
             # If response was already streamed, don't print again
             if response_streamed:
                 # Response was already streamed during generation, just add spacing
+                # Don't print response again to avoid duplication
                 console.print()
-            else:
+            elif response and response.strip():
                 try:
                     from app.ui import get_gemini_ui
                     gemini_ui = get_gemini_ui()

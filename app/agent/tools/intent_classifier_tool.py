@@ -53,7 +53,12 @@ class IntentClassifierTool(AgentTool):
             context["_enable_autochain"] = True
             context["_autochain_trigger"] = query  # Store original query
             logger.info("AutoChain Mode will be enabled - 5 iterations with comprehensive analysis")
-            # Don't modify the query, just set the flag
+            # Attack commands are ALWAYS security tasks - return immediately
+            # This ensures "attack hellogroup" goes to target_verification, not question node
+            return {
+                "intent": "security_task",
+                "context": context
+            }
         
         # Quick confirmations (exact matches - no LLM needed)
         if query in ["yes", "y", "ok", "go", "run", "execute", "proceed"]:
@@ -192,7 +197,25 @@ JSON only, no explanation:"""
         else:
             detector_llm = OllamaClient()
         
-        # Detect simple question using prompt file
+        # FAST PATH: Check for simple identity questions first (no LLM needed)
+        # BUT: Exclude if query contains action verbs (attack, scan, assess, etc.)
+        action_verbs = ["attack", "scan", "assess", "pentest", "pwn", "hack", "enumerate", 
+                       "check", "find", "lookup", "run", "use", "exploit", "test"]
+        query_lower = query.lower().strip()
+        has_action_verb = any(verb in query_lower for verb in action_verbs)
+        
+        # Only check simple questions if NO action verbs present
+        if not has_action_verb:
+            simple_keywords = ["who are you", "what are you", "what is snode", "what can you do", 
+                              "tell me about yourself", "who is snode", "what is this"]
+            if any(keyword in query_lower for keyword in simple_keywords):
+                logger.info("Fast path: Simple identity question detected, routing to question node")
+                return {
+                    "intent": "question",
+                    "context": context
+                }
+        
+        # Detect simple question using prompt file (for other simple questions)
         try:
             simple_question_prompt = format_prompt(
                 "simple_question_detector",
@@ -211,7 +234,7 @@ JSON only, no explanation:"""
             is_simple_question = "SIMPLE_QUESTION" in response_upper
             
             if is_simple_question:
-                logger.info("Fast path: Simple question detected via prompt, skipping LLM classification")
+                logger.info("Simple question detected via LLM, routing to question node")
                 return {
                     "intent": "question",
                     "context": context

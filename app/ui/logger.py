@@ -38,6 +38,13 @@ class UILogger:
         icon = icon or self.theme.icons.get("warning", "")
         self.manager.print_warning(f"{icon} {message}" if icon else message)
     
+    def debug(self, message: str):
+        """Print debug message (dimmed, only shown in debug mode)."""
+        # Only show debug messages if DEBUG env var is set
+        import os
+        if os.getenv("DEBUG", "").lower() in ("1", "true", "yes"):
+            self.console.print(f"[dim]DEBUG: {message}[/]")
+    
     def dim(self, message: str):
         """Print dim message."""
         self.console.print(f"[dim]{message}[/]")

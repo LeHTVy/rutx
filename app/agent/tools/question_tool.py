@@ -178,6 +178,7 @@ Scan Results: No scan results found. Run nmap first."""
         
 
         if is_simple_question:
+            # Simple questions: fast, no streaming, no thinking
             response = llm.generate(prompt, timeout=30, stream=False)
             return {
                 "response": response or "Please rephrase.",
@@ -185,9 +186,11 @@ Scan Results: No scan results found. Run nmap first."""
                 "response_streamed": False 
             }
         else:
+            # Complex questions: stream with thinking, but mark as streamed
             response = llm.generate(prompt, timeout=60, stream=True, show_thinking=True, show_content=True)
+            # When streaming, response is already printed, so return empty to avoid duplicate
             return {
-                "response": response or "Please rephrase.",
+                "response": "",  # Empty because it was already streamed
                 "next_action": "end",
                 "response_streamed": True  # Flag to indicate response was already streamed
             }

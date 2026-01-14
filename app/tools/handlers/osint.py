@@ -149,7 +149,10 @@ def handle_securitytrails(action_input: Dict[str, Any], state: Any) -> str:
     
     Best tool for finding origin IP behind Cloudflare/CDN.
     """
-    from config import SECURITYTRAILS_API_KEY
+    import os
+    from dotenv import load_dotenv
+    load_dotenv()
+    SECURITYTRAILS_API_KEY = os.getenv("SECURITYTRAILS_API_KEY", "")
     
     domain = action_input.get("domain", "")
     command = action_input.get("command", "history")  # history, domain, subdomains, associated, whois

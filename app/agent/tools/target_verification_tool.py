@@ -103,7 +103,10 @@ class TargetVerificationTool(AgentTool):
                 conversation_context += f"\n(Resolved domain: {context.get('target_domain')})"
             
             extraction_prompt = format_prompt("target_extraction", query=query, conversation_context=conversation_context)
-            llm = OllamaClient()
+            # Use general model for target extraction (better at understanding intent and extracting entities)
+            from app.llm.config import get_general_model
+            general_model = get_general_model()
+            llm = OllamaClient(model="general") if general_model else OllamaClient()
             extraction_response = llm.generate(extraction_prompt, timeout=20, stream=False, show_content=False).strip()
             
             # Parse extraction JSON

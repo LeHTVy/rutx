@@ -31,6 +31,16 @@ Even from broken grammar, extract the core target:
 - "do the thing for microsfot" → entity_name: "microsoft"
 - "asess tht comapny form sout africa" → entity_name: "that company", user_context: "South Africa"
 - "scan them" (from context) → is_followup: true
+- "attack hellogroup" → entity_name: "hellogroup" (extract entity name, ignore action verb "attack")
+- "scan example" → entity_name: "example" (extract entity name, ignore action verb "scan")
+- "assess target company" → entity_name: "target company" (extract entity name, ignore action verb "assess")
+
+IMPORTANT: Action verbs (attack, scan, assess, pentest, pwn, hack, check, find, lookup, run, use, exploit, test) are COMMANDS - IGNORE them and extract the TARGET entity name that follows.
+- "attack hellogroup" → entity_name: "hellogroup" (extract entity name, ignore action verb)
+- "scan example" → entity_name: "example" (extract entity name, ignore action verb)
+- "assess target company" → entity_name: "target company" (extract entity name, ignore action verb)
+
+IMPORTANT: Action verbs (attack, scan, assess, pentest, pwn, hack, check, find, lookup, run, use, exploit, test) are commands - IGNORE them and extract the TARGET entity name that follows.
 
 Return JSON:
 {{
@@ -48,6 +58,9 @@ Return JSON:
 EXAMPLES:
 Query: "scna exmaple.com for vulneralbities"
 → {{"entity_name": "example.com", "corrected_from": "exmaple.com", "user_context": "", "search_query": "example.com official website", "is_followup": false, "is_correction": false, "resolved_domain": "example.com", "confidence": "high", "interpretation": "User wants to scan example.com for vulnerabilities"}}
+
+Query: "attack hellogroup"
+→ {{"entity_name": "hellogroup", "corrected_from": null, "user_context": "", "search_query": "hellogroup official website", "is_followup": false, "is_correction": false, "resolved_domain": "", "confidence": "high", "interpretation": "User wants to attack hellogroup - extract entity name 'hellogroup' to find domain"}}
 
 Query: "no its hellogroup in South Africa"
 Context: (Previously discussed: nasdaq, Resolved domain: nasdaq.com)
