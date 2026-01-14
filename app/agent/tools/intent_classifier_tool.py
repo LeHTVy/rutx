@@ -101,7 +101,21 @@ class IntentClassifierTool(AgentTool):
             # Only use LLM if: mod_text exists AND fast path found nothing
             if mod_text and len(mod_text) > 5 and not modifications:
                 try:
-                    llm = OllamaClient()
+                    # Use lightweight model for intent classification (fast task)
+                    # Prefer planner model if available (FunctionGemma is fast), otherwise default
+                    from app.llm.config import get_planner_model
+                    planner_model = get_planner_model()
+                    # If planner is FunctionGemma or other lightweight model, use it
+                    if "functiongemma" in planner_model.lower() or "nemotron" in planner_model.lower():
+                        llm = OllamaClient(model="planner")
+                    else:
+                        # Use lightweight model for parsing modifications
+                        from app.llm.config import get_planner_model
+                        planner_model = get_planner_model()
+                        if "functiongemma" in planner_model.lower() or "nemotron" in planner_model.lower():
+                            llm = OllamaClient(model="planner")
+                        else:
+                            llm = OllamaClient()
                     parse_prompt = f"""User confirmed a security scan with modifications: "{mod_text}"
 
 Extract any modifications. Return JSON only:
@@ -147,10 +161,7 @@ JSON only, no explanation:"""
                 context["correction_query"] = query
                 return {"intent": "security_task", "context": context}
         
-        # Check for "do the next step" command and use analyzer recommendation
-        # Match: "do the next step", "next step", "do the next suggest step", etc.
         query_lower = query.lower()
-        # Match: "next step", "do the next step", "do as your suggestion", "as your suggestion", etc.
         is_suggestion_command = (
             "next step" in query_lower or 
             ("do" in query_lower and "step" in query_lower) or 
@@ -163,7 +174,6 @@ JSON only, no explanation:"""
             # Check context first
             analyzer_next_tool = context.get("analyzer_next_tool")
             
-            # If not in context, check session memory (for persistence across queries)
             if not analyzer_next_tool:
                 try:
                     from app.memory import get_session_memory

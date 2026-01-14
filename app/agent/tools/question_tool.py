@@ -46,6 +46,8 @@ class QuestionTool(AgentTool):
                 # Fall through to regular question handling
                 pass
         
+        # Use default model for simple questions (should be lightweight, not deepseek-r1)
+        # For complex reasoning questions, could use reasoning model, but keep simple for now
         llm = OllamaClient()
         
         # Check if user wants to see scan results

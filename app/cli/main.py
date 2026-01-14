@@ -153,7 +153,19 @@ def run_snode():
     )
     
     model_name = llm_config.get_model()
-    console.print(f"\n[bold green]🤖 Snode Agent Ready![/] [dim](Model: {model_name})[/]")
+    # Show model configuration
+    from app.llm.config import get_planner_model, get_analyzer_model
+    planner = get_planner_model()
+    analyzer = get_analyzer_model()
+    
+    # Show default model, but also show planner/analyzer if different
+    model_info = f"Default: {model_name}"
+    if planner != model_name:
+        model_info += f", Planner: {planner}"
+    if analyzer != model_name:
+        model_info += f", Analyzer: {analyzer}"
+    
+    console.print(f"\n[bold green]🤖 Snode Agent Ready![/] [dim]({model_info})[/]")
     console.print("[dim]Type 'help' for commands, Tab for autocomplete, ↑/↓ for history[/]")
     console.print("[dim]Quick: scan, vuln, recon, web, full + target[/]")
     console.print("[dim]Use @file.txt to load targets, ``` for multi-line input[/]\n")

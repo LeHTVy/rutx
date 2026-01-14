@@ -14,7 +14,7 @@ class LLMConfig:
     
     DEFAULT_CONFIG = {
         "provider": "ollama",
-        "model": "mistral:latest",  # Default model for general tasks
+        "model": "qwen3:8b",  # Default model for general tasks
         "planner_model": None,  # Model for tool selection (FunctionGemma, nemotron-mini)
         "analyzer_model": None,  # Model for analyzing tool outputs (deepseek-r1, qwen3, nemotron-3-nano)
         "executor_model": None,  # Model for code/command generation (qwen2.5-coder, codellama, starcoder2)
@@ -25,9 +25,7 @@ class LLMConfig:
     
     def __init__(self):
         self.config = self.load_config()
-        # Auto-detect and use available model if current model doesn't exist
         self._auto_detect_model()
-        # Auto-detect planner/analyzer models if not configured
         self._auto_detect_models()
     
     def load_config(self) -> dict:
@@ -112,7 +110,6 @@ class LLMConfig:
         import requests
         try:
             endpoint = self.config.get('endpoint', 'http://localhost:11434')
-            # Remove /api/chat if present, use base endpoint
             if '/api/' in endpoint:
                 endpoint = endpoint.split('/api/')[0]
             response = requests.get(f"{endpoint}/api/tags", timeout=5)
@@ -129,9 +126,8 @@ class LLMConfig:
         available_models = self.detect_ollama_models()
         
         if not available_models:
-            return  # Can't detect, keep current config
-        
-        # Check if current model exists (exact match or partial match)
+            return 
+
         model_exists = False
         for model in available_models:
             if current_model == model or current_model in model or model.startswith(current_model.split(':')[0]):
@@ -142,20 +138,38 @@ class LLMConfig:
                     self.save_config(self.config)
                 break
         
-        # If current model doesn't exist, use first available model
         if not model_exists and available_models:
-            new_model = available_models[0]
-            self.config["model"] = new_model
-            self.save_config(self.config)
-            print(f"  🔄 Auto-switched to available model: {new_model}")
+            qwen3_8b = [m for m in available_models if "qwen3:8b" in m.lower() or ("qwen3" in m.lower() and "8b" in m.lower())]
+            if qwen3_8b:
+                new_model = qwen3_8b[0]
+                self.config["model"] = new_model
+                self.save_config(self.config)
+                print(f"  🔄 Auto-switched default model to qwen3:8b: {new_model}")
+            else:
+                # Fallback: other lightweight models (fast for simple tasks)
+                lightweight_models = [m for m in available_models if any(x in m.lower() for x in [
+                    "qwen3", "mistral", "nemotron", "functiongemma", "qwen2.5", "llama3.2", "phi", "gemma"
+                ]) and "deepseek-r1" not in m.lower() and "llama3" not in m.lower()]
+                
+                if lightweight_models:
+                    new_model = lightweight_models[0]
+                    self.config["model"] = new_model
+                    self.save_config(self.config)
+                    print(f"  🔄 Auto-switched default model to lightweight: {new_model}")
+                else:
+                    new_model = available_models[0]
+                    if "deepseek-r1" in new_model.lower():
+                        print(f"  ⚠️ Warning: Default model is slow ({new_model}). Consider setting qwen3:8b or another lightweight model.")
+                    self.config["model"] = new_model
+                    self.save_config(self.config)
+                    print(f"  🔄 Auto-switched to available model: {new_model}")
     
     def _auto_detect_models(self):
         """Auto-detect and set planner/analyzer models if not configured."""
         available_models = self.detect_ollama_models()
         if not available_models:
             return
-        
-        # Auto-detect FunctionGemma for planner if available
+
         if not self.config.get("planner_model"):
             functiongemma_models = [m for m in available_models if "functiongemma" in m.lower() or "function-gemma" in m.lower()]
             if functiongemma_models:
@@ -273,7 +287,6 @@ def get_llm_config() -> LLMConfig:
     return _config_instance
 
 
-# Helper functions for getting models for specific tasks
 def get_planner_model() -> str:
     """Get model for tool selection/planning tasks."""
     config = get_llm_config()

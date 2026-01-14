@@ -44,7 +44,13 @@ class SNODEIntelligence:
         """Lazy-load LLM client."""
         if self._llm is None:
             from app.llm.client import OllamaClient
-            self._llm = OllamaClient()
+            # Use lightweight model for intelligence layer (fast classification)
+            from app.llm.config import get_planner_model
+            planner_model = get_planner_model()
+            if "functiongemma" in planner_model.lower() or "nemotron" in planner_model.lower():
+                self._llm = OllamaClient(model="planner")
+            else:
+                self._llm = OllamaClient()
         return self._llm
     
     def understand_query(self, query: str, context: dict = None) -> Dict[str, Any]:

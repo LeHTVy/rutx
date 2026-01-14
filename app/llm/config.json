@@ -1,6 +1,6 @@
 {
   "provider": "ollama",
-  "model": "mistral",
+  "model": "qwen3:8b",
   "temperature": 0,
   "endpoint": "http://localhost:11434"
 }
