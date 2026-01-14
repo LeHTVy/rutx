@@ -5,6 +5,7 @@ Handles queries about customers, technologies, and vulnerabilities.
 Integrates with CustomerQuerySystem to query PostgreSQL and ChromaDB.
 """
 
+import json
 from typing import Dict, Any, Optional
 from app.agent.tools.base import AgentTool
 from app.rag.customer_query import get_customer_query_system

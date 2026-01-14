@@ -36,37 +36,51 @@ class QuestionTool(AgentTool):
 Technologies: {context.get('detected_tech', [])}
 Tools Run: {', '.join(context.get('tools_run', []))}"""
         
-        # Initialize lightweight LLM for detection tasks (reused for multiple detections)
-        from app.llm.config import get_planner_model
-        planner_model = get_planner_model()
-        if "functiongemma" in planner_model.lower() or "nemotron" in planner_model.lower():
-            detector_llm = OllamaClient(model="planner")
-        else:
-            detector_llm = OllamaClient()
+        # FAST PATH: Skip customer query detection for simple identity questions
+        # These are clearly NOT customer queries
+        simple_identity_questions = [
+            "who are you", "what are you", "what is snode", "what can you do",
+            "tell me about yourself", "who is snode", "what is this"
+        ]
+        query_lower = query.lower().strip()
+        is_simple_identity = any(keyword in query_lower for keyword in simple_identity_questions)
         
-        # Check if this is a customer query using prompt file
-        from app.agent.prompt_loader import format_prompt
-        try:
-            customer_detection_prompt = format_prompt(
-                "customer_query_detector",
-                query=query,
-                context_str=base_context
-            )
-            
-            customer_detection_response = detector_llm.generate(
-                customer_detection_prompt,
-                timeout=8,
-                stream=False
-            )
-            
-            response_upper = customer_detection_response.strip().upper()
-            is_customer_query = "CUSTOMER_QUERY" in response_upper
-            
-            logger.debug(f"Customer query detection: {'CUSTOMER_QUERY' if is_customer_query else 'NOT_CUSTOMER_QUERY'}")
-            
-        except Exception as e:
-            logger.warning(f"Customer query detection failed: {e}, defaulting to NOT_CUSTOMER_QUERY")
+        if is_simple_identity:
             is_customer_query = False
+            logger.debug("Fast path: Simple identity question, skipping customer query detection")
+        else:
+            # Check if this is a customer query using prompt file
+            from app.agent.prompt_loader import format_prompt
+            from app.llm.config import get_planner_model
+            
+            # Initialize lightweight LLM for detection
+            planner_model = get_planner_model()
+            if "functiongemma" in planner_model.lower() or "nemotron" in planner_model.lower():
+                detector_llm = OllamaClient(model="planner")
+            else:
+                detector_llm = OllamaClient()
+            
+            try:
+                customer_detection_prompt = format_prompt(
+                    "customer_query_detector",
+                    query=query,
+                    context_str=base_context
+                )
+                
+                customer_detection_response = detector_llm.generate(
+                    customer_detection_prompt,
+                    timeout=8,
+                    stream=False
+                )
+                
+                response_upper = customer_detection_response.strip().upper()
+                is_customer_query = "CUSTOMER_QUERY" in response_upper
+                
+                logger.debug(f"Customer query detection: {'CUSTOMER_QUERY' if is_customer_query else 'NOT_CUSTOMER_QUERY'}")
+                
+            except Exception as e:
+                logger.warning(f"Customer query detection failed: {e}, defaulting to NOT_CUSTOMER_QUERY")
+                is_customer_query = False
         
         if is_customer_query:
             try:
