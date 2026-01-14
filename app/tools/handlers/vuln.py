@@ -11,7 +11,6 @@ from app.tools.handlers import register_handler
 @register_handler("vuln_scan")
 def handle_vuln_scan(action_input: Dict[str, Any], state: Any) -> str:
     """Vulnerability scan on a single host."""
-    from app.sandbox.executors import NucleiExecutor
     from app.core.state import get_subdomain_file
     import subprocess
     
@@ -55,16 +54,39 @@ def handle_vuln_scan(action_input: Dict[str, Any], state: Any) -> str:
     # Nuclei scan
     print(f"  🔴 [NUCLEI] Scanning {target}...")
     
-    executor = NucleiExecutor()
-    result = executor.scan(f"https://{target}")
+    from app.tools.registry import get_registry
+    registry = get_registry()
+    scan_result = registry.execute("nuclei", "scan_json", {"target": f"https://{target}"})
     
     output += f"═══ NUCLEI SCAN: {target} ═══\n"
-    output += f"Vulnerabilities found: {len(result.vulnerabilities)}\n"
-    if result.vulnerabilities:
-        for v in result.vulnerabilities[:5]:
-            output += f"  [{v['severity'].upper()}] {v['name']}\n"
+    
+    if not scan_result.success:
+        output += f"  Error: {scan_result.error}\n"
     else:
-        output += "  No critical/high/medium vulnerabilities detected.\n"
+        # Parse JSON output from nuclei
+        vulnerabilities = []
+        for line in scan_result.output.strip().split('\n'):
+            if not line.strip():
+                continue
+            try:
+                import json
+                data = json.loads(line)
+                vulnerabilities.append({
+                    "template": data.get("template-id", "unknown"),
+                    "name": data.get("info", {}).get("name", "Unknown"),
+                    "severity": data.get("info", {}).get("severity", "unknown"),
+                    "matched": data.get("matched-at", ""),
+                    "description": data.get("info", {}).get("description", ""),
+                })
+            except (json.JSONDecodeError, AttributeError):
+                continue
+        
+        output += f"Vulnerabilities found: {len(vulnerabilities)}\n"
+        if vulnerabilities:
+            for v in vulnerabilities[:5]:
+                output += f"  [{v['severity'].upper()}] {v['name']}\n"
+        else:
+            output += "  No critical/high/medium vulnerabilities detected.\n"
     
     # Nikto for thorough mode
     if mode == "thorough":

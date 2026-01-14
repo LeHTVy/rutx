@@ -50,7 +50,6 @@ class PromptLoader:
         """Load raw prompt text."""
         prompt_path = self.prompts_dir / f"{name}.md"
         if not prompt_path.exists():
-            # Fallback to verify if it is in roles subdir (legacy support)
             role_path = self.prompts_dir / "roles" / f"{name}.md"
             if role_path.exists():
                 prompt_path = role_path
@@ -73,8 +72,6 @@ class PromptLoader:
         if not content:
             return None
             
-        # Basic parsing - treat whole file as system prompt
-        # In a real implementation we might parse YAML frontmatter here
         return RolePrompt(
             name=role_name,
             description=f"Role for {role_name}",
@@ -90,7 +87,6 @@ class PromptLoader:
         try:
             return template.format(**context)
         except KeyError:
-             # If template has keys that aren't provided, use partial formatting
             for key, value in context.items():
                 template = template.replace(f"{{{key}}}", str(value))
             return template

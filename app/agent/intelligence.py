@@ -91,7 +91,6 @@ class SNODEIntelligence:
             except Exception:
                 pass
         
-        # Get relevant tools based on LLM suggestion
         if self.rag:
             try:
                 for term in result["expanded_terms"][:3]:
@@ -102,7 +101,6 @@ class SNODEIntelligence:
             except Exception:
                 pass
         
-        # Check if analyzer recommendation should override
         if context and "next step" in query.lower() and context.get("analyzer_next_tool"):
             analyzer_tool = context.get("analyzer_next_tool")
             result["relevant_tools"] = [analyzer_tool] + result["relevant_tools"]

@@ -25,11 +25,9 @@ def tools_to_function_definitions(tools: List[str], registry) -> List[Dict[str, 
         if not spec:
             continue
         
-        # Build parameters schema from tool commands
         properties = {}
         required = []
         
-        # Common parameters for security tools
         if tool_name in ["subfinder", "amass", "bbot", "dig", "whois"]:
             properties["domain"] = {
                 "type": "string",

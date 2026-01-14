@@ -11,7 +11,7 @@ from app.tools.handlers import register_handler
 @register_handler("subdomain_enum")
 def handle_subdomain_enum(action_input: Dict[str, Any], state: Any) -> str:
     """Enumerate subdomains for a domain."""
-    from app.sandbox.executors import SubfinderExecutor, BbotExecutor
+    from app.tools.registry import get_registry
     from app.core.state import save_subdomains
     
     domain = action_input.get("domain", state.context.get("last_domain", ""))
@@ -20,14 +20,24 @@ def handle_subdomain_enum(action_input: Dict[str, Any], state: Any) -> str:
     
     print(f"  🔍 Enumerating subdomains for {domain}...")
     
+    registry = get_registry()
     all_subs = set()
     
     # Use Subfinder - faster and more reliable
     try:
         print("    Running subfinder...")
-        result = SubfinderExecutor().enumerate(domain)
-        all_subs.update(result.subdomains)
-        print(f"    Subfinder found {len(result.subdomains)} subdomains")
+        result = registry.execute("subfinder", "enum", {"domain": domain})
+        if result.success:
+            # Parse subdomains from output (one per line)
+            subdomains = [
+                line.strip().lower()
+                for line in result.output.split('\n')
+                if line.strip() and '.' in line and domain in line.lower()
+            ]
+            all_subs.update(subdomains)
+            print(f"    Subfinder found {len(subdomains)} subdomains")
+        else:
+            print(f"    Subfinder error: {result.error}")
     except Exception as e:
         print(f"    Subfinder error: {e}")
     
@@ -35,9 +45,18 @@ def handle_subdomain_enum(action_input: Dict[str, Any], state: Any) -> str:
     if len(all_subs) < 10:
         try:
             print("    Running bbot (subfinder found few results)...")
-            result = BbotExecutor().enumerate(domain)
-            all_subs.update(result.subdomains)
-            print(f"    BBOT found {len(result.subdomains)} additional subdomains")
+            result = registry.execute("bbot", "subdomains", {"domain": domain})
+            if result.success:
+                # Parse subdomains from output
+                subdomains = [
+                    line.strip().lower()
+                    for line in result.output.split('\n')
+                    if line.strip() and '.' in line and domain in line.lower()
+                ]
+                all_subs.update(subdomains)
+                print(f"    BBOT found {len(subdomains)} additional subdomains")
+            else:
+                print(f"    BBOT error: {result.error}")
         except Exception as e:
             print(f"    BBOT error: {e}")
     
@@ -52,7 +71,7 @@ def handle_subdomain_enum(action_input: Dict[str, Any], state: Any) -> str:
 @register_handler("port_scan")
 def handle_port_scan(action_input: Dict[str, Any], state: Any) -> str:
     """Port scan discovered subdomains."""
-    from app.sandbox.executors import NmapExecutor
+    from app.tools.registry import get_registry
     from app.core.state import get_subdomain_file
     
     subdomain_file = get_subdomain_file()
@@ -77,21 +96,39 @@ def handle_port_scan(action_input: Dict[str, Any], state: Any) -> str:
     
     print(f"  🔌 Port scanning {target_count} targets...")
     
-    executor = NmapExecutor()
+    registry = get_registry()
     ports = action_input.get("ports", "22,80,443,8080,8443")
-    result = executor.scan_from_file(scan_file, ports)
+    result = registry.execute("nmap", "from_file", {"file": scan_file, "ports": ports})
     
-    if "error" in result:
-        return f"Error: {result['error']}"
+    if not result.success:
+        return f"Error: {result.error}"
+    
+    # Parse nmap output to extract open ports per host
+    open_ports = {}
+    for line in result.output.split('\n'):
+        if 'Ports:' in line and 'Host:' in line:
+            parts = line.split('Ports:')
+            if len(parts) >= 2:
+                host = parts[0].replace('Host:', '').strip().split()[0]
+                ports_str = parts[1].strip()
+                
+                port_list = []
+                for port_info in ports_str.split(','):
+                    if '/open/' in port_info:
+                        p = int(port_info.split('/')[0].strip())
+                        port_list.append(p)
+                
+                if port_list:
+                    open_ports[host] = port_list
     
     state.context["has_ports"] = True
-    state.context["port_scan_results"] = result
+    state.context["port_scan_results"] = open_ports
     
-    output = f"Scanned targets, {len(result)} hosts have open ports.\n"
-    for host, ports in list(result.items())[:10]:
-        output += f"  {host}: {', '.join(map(str, ports))}\n"
-    if len(result) > 10:
-        output += f"  ... and {len(result) - 10} more hosts\n"
+    output = f"Scanned targets, {len(open_ports)} hosts have open ports.\n"
+    for host, ports_list in list(open_ports.items())[:10]:
+        output += f"  {host}: {', '.join(map(str, ports_list))}\n"
+    if len(open_ports) > 10:
+        output += f"  ... and {len(open_ports) - 10} more hosts\n"
     
     return output
 
@@ -99,7 +136,7 @@ def handle_port_scan(action_input: Dict[str, Any], state: Any) -> str:
 @register_handler("quick_scan")
 def handle_quick_scan(action_input: Dict[str, Any], state: Any) -> str:
     """Quick port scan on a single target."""
-    from app.sandbox.executors import NmapExecutor
+    from app.tools.registry import get_registry
     
     target = action_input.get("target", "")
     if not target:
@@ -107,14 +144,28 @@ def handle_quick_scan(action_input: Dict[str, Any], state: Any) -> str:
     
     print(f"  🔌 Quick scanning {target}...")
     
-    executor = NmapExecutor()
-    result = executor.quick_scan(target)
+    registry = get_registry()
+    result = registry.execute("nmap", "quick_scan", {"target": target})
     
     if not result.success:
         return f"Error: {result.error}"
     
+    # Parse nmap output to extract open ports
+    open_ports = []
+    for line in result.output.split('\n'):
+        if 'Ports:' in line:
+            parts_str = line.split('Ports:')[1].strip()
+            for port_str in parts_str.split(','):
+                parts = port_str.strip().split('/')
+                if len(parts) >= 5 and parts[1] == 'open':
+                    open_ports.append({
+                        "port": int(parts[0]),
+                        "protocol": parts[2],
+                        "service": parts[4] if parts[4] else "unknown"
+                    })
+    
     output = f"Target: {target}\n"
-    for port in result.open_ports:
+    for port in open_ports:
         output += f"  {port['port']}/{port['protocol']}: {port.get('service', 'unknown')}\n"
     
     return output

@@ -132,7 +132,7 @@ class SystemResources:
                         category=category
                     ))
                 except Exception:
-                    pass  # Skip unreadable files
+                    pass  
     
     def _categorize_wordlist(self, filename: str) -> str:
         """Guess wordlist category from filename."""

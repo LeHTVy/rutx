@@ -48,7 +48,7 @@ class VectorMemory:
             response = requests.post(
                 "http://localhost:11434/api/embeddings",
                 json={
-                    "model": "nomic-embed-text",  # or "all-minilm"
+                    "model": "nomic-embed-text",  
                     "prompt": text
                 },
                 timeout=30
@@ -79,7 +79,7 @@ class VectorMemory:
         
         # Create deterministic pseudo-embedding
         words = text.lower().split()[:100]
-        embedding = [0.0] * 384  # Match nomic-embed-text dimension
+        embedding = [0.0] * 384  
         
         for i, word in enumerate(words):
             hash_val = int(hashlib.md5(word.encode()).hexdigest()[:8], 16)
@@ -101,20 +101,16 @@ class VectorMemory:
         """
         sanitized = {}
         for key, value in metadata.items():
-            # Skip None values - ChromaDB doesn't handle them well
             if value is None:
                 continue
             
             if isinstance(value, (str, int, float, bool)):
                 sanitized[key] = value
             elif isinstance(value, list):
-                # Convert list to JSON string
                 sanitized[key] = json.dumps(value)
             elif isinstance(value, dict):
-                # Convert dict to JSON string
                 sanitized[key] = json.dumps(value)
             else:
-                # Convert other types to string
                 sanitized[key] = str(value)
         return sanitized
     
@@ -130,7 +126,6 @@ class VectorMemory:
         """Add a message to vector memory."""
         doc_id = str(uuid.uuid4())
         
-        # Build metadata
         meta = {
             "session_id": session_id,
             "role": role,
@@ -142,16 +137,12 @@ class VectorMemory:
         if tools:
             meta["tools"] = ",".join(tools)
         if metadata:
-            # Only add non-None values from metadata
             meta.update({k: v for k, v in metadata.items() if v is not None})
         
-        # Sanitize metadata for ChromaDB compatibility
         meta = self._sanitize_metadata(meta)
         
-        # Generate embedding
         embedding = self._get_embedding(content)
         
-        # Add to collection
         self.collection.add(
             ids=[doc_id],
             embeddings=[embedding],
@@ -159,7 +150,6 @@ class VectorMemory:
             metadatas=[meta]
         )
         
-        # Also index in UnifiedRAG for cross-collection search
         if tools:
             try:
                 from app.rag.unified_memory import get_unified_rag
@@ -172,7 +162,7 @@ class VectorMemory:
                     session_id=session_id
                 )
             except Exception:
-                pass  # Don't fail if UnifiedRAG is unavailable
+                pass  
         
         return doc_id
     

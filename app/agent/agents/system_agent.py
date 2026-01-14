@@ -27,7 +27,7 @@ class SystemAgent(BaseAgent):
     AGENT_NAME = "system"
     AGENT_DESCRIPTION = "System utilities - wordlists, resources, workspace management"
     SPECIALIZED_TOOLS = []  # Uses internal system capabilities, not external tools
-    PENTEST_PHASES = [1, 2, 3, 4, 5, 6]  # Available in all phases
+    PENTEST_PHASES = [1, 2, 3, 4, 5, 6]  
     
     # Keywords that suggest system tasks
     SYSTEM_KEYWORDS = [

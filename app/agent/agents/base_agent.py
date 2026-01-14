@@ -96,19 +96,15 @@ class BaseAgent(ABC):
         Returns:
             List of tool names mentioned in query (preserves original case)
         """
-        # Get all registered tools
         all_tools = list(self.registry.tools.keys())
         
-        # Normalize query for matching
         query_lower = query.lower()
         
-        # Find tools mentioned in query (case-insensitive match)
         user_tools = []
         for tool in all_tools:
-            # Case-insensitive matching with word boundaries
             pattern = rf'\b{re.escape(tool.lower())}\b'
             if re.search(pattern, query_lower, re.IGNORECASE):
-                user_tools.append(tool)  # Keep original case from registry
+                user_tools.append(tool)  
         
         return user_tools
     
@@ -143,33 +139,26 @@ class BaseAgent(ABC):
                 tech = context.get("detected_tech", [])[:2]
                 enhanced_query += f" technology: {', '.join(tech)}"
             
-            # Build filters
             filters = {
-                "min_score": 0.3,  # Minimum relevance score
+                "min_score": 0.3,  
             }
             
-            # Filter by category if agent has specialized tools
             if self.SPECIALIZED_TOOLS:
-                # Get categories for specialized tools
                 categories = set()
                 for tool_name in self.SPECIALIZED_TOOLS:
                     spec = self.registry.tools.get(tool_name)
                     if spec:
                         categories.add(spec.category.value)
                 
-                # If all specialized tools are in one category, filter by it
                 if len(categories) == 1:
                     filters["category"] = list(categories)[0]
             
-            # Exclude tools already run
             tools_run = context.get("tools_run", [])
             if tools_run:
                 filters["exclude_tools"] = tools_run
             
-            # Query ChromaDB
             matches = rag.query_tools(enhanced_query, n_results=n_results, filters=filters)
             
-            # Further filter by specialized_tools if available
             if self.SPECIALIZED_TOOLS:
                 filtered_matches = [
                     m for m in matches 

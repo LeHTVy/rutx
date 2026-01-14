@@ -403,7 +403,7 @@ def format_scan_data(scan_data: Dict[str, Any]) -> str:
     subdomains = scan_data.get("subdomains", [])
     if subdomains:
         parts.append(f"\nALL Subdomains Found ({len(subdomains)}):")
-        for sub in subdomains:  # No limit - include ALL
+        for sub in subdomains:  
             parts.append(f"  - {sub}")
     
     # Tool results - extended output
