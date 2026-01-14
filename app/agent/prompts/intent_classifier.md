@@ -24,6 +24,9 @@ CLASSIFY AS ONE OF:
   
 - QUESTION: Conceptual question needing explanation (no action, no data)
   * Examples: "what is XSS", "explain this CVE", "how does SQL injection work"
+  * Identity questions: "who are you", "what are you", "what is SNODE", "what can you do"
+  * General questions: "how does this work", "what is this", "tell me about X"
+  * Questions WITHOUT domain/IP addresses and WITHOUT action verbs (scan, run, check, find, etc.)
 
 IMPORTANT DISTINCTION:
 - "lookup IP for domain.com" → SECURITY_TASK (needs to FETCH new data from external API)

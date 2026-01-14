@@ -37,6 +37,12 @@ from .target_collector import (
     TargetCollector,
     get_target_collector,
 )
+from .checklist_manager import (
+    ChecklistManager,
+    get_checklist_manager,
+    Task,
+    TaskStatus,
+)
 
 # Re-export from app.memory for backward compatibility
 from app.memory import (
@@ -69,6 +75,12 @@ __all__ = [
     # Target Collection
     "TargetCollector",
     "get_target_collector",
+    
+    # Checklist Management
+    "ChecklistManager",
+    "get_checklist_manager",
+    "Task",
+    "TaskStatus",
     
     # Memory (backward compat - prefer app.memory)
     "AgentMemory",

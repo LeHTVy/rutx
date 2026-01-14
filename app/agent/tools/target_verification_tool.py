@@ -57,10 +57,9 @@ class TargetVerificationTool(AgentTool):
                 logger.info(f"Correction mode: clearing previous target '{old_target}'")
                 context.pop("target_domain", None)
                 context["last_candidate"] = old_target.split(".")[0] if "." in old_target else old_target
-            context["is_correction"] = False  # Reset flag
+            context["is_correction"] = False  
         
-        # 1. Check if we already have a verified target in context (SKIP re-verification)
-        # BUT only if this is NOT a correction!
+
         if not is_correction_from_context:
             if context.get("target_domain") and "." in context.get("target_domain"):
                 print(f"  📍 Using verified target: {context.get('target_domain')}")
@@ -68,13 +67,10 @@ class TargetVerificationTool(AgentTool):
             if context.get("last_domain") and "." in context.get("last_domain"):
                 return {**proceed_to_planner(), "context": context}
             
-        # 2. Quick regex check for explicit domain/IP (bypass verification)
-        # NOTE: Even if the domain looks like a typo, store it and proceed
-        # The LLM in planner_node will correct it if needed
+            
         domain_match = re.search(r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}', query)
         if domain_match:
             potential_domain = domain_match.group()
-            # Store it even if it might be a typo - better to have something than nothing
             if not context.get("last_domain"):
                 context["last_domain"] = potential_domain
                 print(f"  📍 Domain found in query: {potential_domain}")
@@ -93,7 +89,7 @@ class TargetVerificationTool(AgentTool):
             messages = self.state.get("messages", []) if self.state else []
             conversation_context = "None"
             if messages:
-                recent = messages[-6:]  # Last 3 exchanges
+                recent = messages[-6:]  
                 context_lines = []
                 for msg in recent:
                     role = msg.get("role", "user").upper()
@@ -101,7 +97,6 @@ class TargetVerificationTool(AgentTool):
                     context_lines.append(f"{role}: {content}")
                 conversation_context = "\n".join(context_lines) if context_lines else "None"
             
-            # Also include any stored entities from context
             if context.get("last_candidate"):
                 conversation_context += f"\n(Previously discussed: {context.get('last_candidate')})"
             if context.get("target_domain"):
@@ -124,7 +119,7 @@ class TargetVerificationTool(AgentTool):
             user_context = extraction.get("user_context", "")
             search_query = extraction.get("search_query", "")
             is_followup = extraction.get("is_followup", False)
-            is_correction = extraction.get("is_correction", False)  # LLM detects corrections semantically
+            is_correction = extraction.get("is_correction", False)
             resolved_domain = extraction.get("resolved_domain", "")
             corrected_from = extraction.get("corrected_from")
             confidence = extraction.get("confidence", "medium")

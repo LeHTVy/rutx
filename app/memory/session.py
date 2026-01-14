@@ -466,7 +466,35 @@ class SessionMemory:
         self.hypotheses.clear()
         self.llm_messages.clear()
         self.failed_actions.clear()
+        self.checklists.clear()
         self.session_start = datetime.now().isoformat()
+    
+    def save_checklist(self, checklist: List[Dict[str, Any]], session_id: str = None):
+        """Save checklist to session memory."""
+        if not hasattr(self, 'checklists'):
+            self.checklists = {}
+        session_id = session_id or "default"
+        self.checklists[session_id] = checklist
+    
+    def load_checklist(self, session_id: str = None) -> List[Dict[str, Any]]:
+        """Load checklist from session memory."""
+        if not hasattr(self, 'checklists'):
+            return []
+        session_id = session_id or "default"
+        return self.checklists.get(session_id, [])
+    
+    def update_task_status(self, task_id: str, status: str, results: Dict[str, Any] = None, session_id: str = None):
+        """Update task status in checklist."""
+        checklist = self.load_checklist(session_id)
+        for task in checklist:
+            if task.get("id") == task_id:
+                task["status"] = status
+                if results:
+                    task["results"] = results
+                task["completed_at"] = datetime.now().isoformat() if status in ["completed", "failed"] else None
+                self.save_checklist(checklist, session_id)
+                return True
+        return False
     
     def export(self) -> Dict[str, Any]:
         """Export session data for persistence."""

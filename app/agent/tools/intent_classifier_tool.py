@@ -162,14 +162,86 @@ JSON only, no explanation:"""
                 return {"intent": "security_task", "context": context}
         
         query_lower = query.lower()
-        is_suggestion_command = (
-            "next step" in query_lower or 
-            ("do" in query_lower and "step" in query_lower) or 
-            ("suggest" in query_lower and "step" in query_lower) or
-            ("do" in query_lower and "suggestion" in query_lower) or
-            ("as" in query_lower and "suggestion" in query_lower) or
-            ("your suggestion" in query_lower)
-        )
+        
+        # Build context summary for detection prompts
+        context_summary = ""
+        if context.get("tools_run"):
+            context_summary += f"Tools already run: {', '.join(context.get('tools_run', []))}\n"
+        if context.get("subdomain_count"):
+            context_summary += f"Subdomains found: {context.get('subdomain_count')}\n"
+        if context.get("has_ports"):
+            context_summary += "Port scan completed\n"
+        if context.get("detected_tech"):
+            context_summary += f"Technologies detected: {', '.join(context.get('detected_tech', [])[:5])}\n"
+        
+        # Check if query contains a domain/IP - strong signal for SECURITY_TASK
+        domain_pattern = r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}'
+        has_domain = bool(re.search(domain_pattern, query))
+        domain_note = "NOTE: Message contains a domain/IP address" if has_domain else ""
+        
+        # ─────────────────────────────────────────────────────────
+        # FAST PATH: Simple questions using prompt file
+        # ─────────────────────────────────────────────────────────
+        from app.agent.prompt_loader import format_prompt
+        from app.llm.config import get_planner_model
+        
+        # Initialize lightweight LLM for detection
+        planner_model = get_planner_model()
+        if "functiongemma" in planner_model.lower() or "nemotron" in planner_model.lower():
+            detector_llm = OllamaClient(model="planner")
+        else:
+            detector_llm = OllamaClient()
+        
+        # Detect simple question using prompt file
+        try:
+            simple_question_prompt = format_prompt(
+                "simple_question_detector",
+                query=query,
+                context_summary=context_summary if context_summary else "No prior context",
+                domain_note=domain_note
+            )
+            
+            simple_question_response = detector_llm.generate(
+                simple_question_prompt,
+                timeout=8,
+                stream=False
+            )
+            
+            response_upper = simple_question_response.strip().upper()
+            is_simple_question = "SIMPLE_QUESTION" in response_upper
+            
+            if is_simple_question:
+                logger.info("Fast path: Simple question detected via prompt, skipping LLM classification")
+                return {
+                    "intent": "question",
+                    "context": context
+                }
+        except Exception as e:
+            logger.warning(f"Simple question detection failed: {e}, continuing with full classification")
+        
+        # Detect suggestion command using prompt file
+        suggested_tools_str = ', '.join(suggested_tools) if suggested_tools else "None"
+        try:
+            suggestion_prompt = format_prompt(
+                "suggestion_command_detector",
+                query=query,
+                context_summary=context_summary if context_summary else "No prior context",
+                suggested_tools=suggested_tools_str
+            )
+            
+            suggestion_response = detector_llm.generate(
+                suggestion_prompt,
+                timeout=8,
+                stream=False
+            )
+            
+            response_upper = suggestion_response.strip().upper()
+            is_suggestion_command = "SUGGESTION_COMMAND" in response_upper
+            
+        except Exception as e:
+            logger.warning(f"Suggestion command detection failed: {e}, defaulting to NOT_SUGGESTION_COMMAND")
+            is_suggestion_command = False
+        
         if is_suggestion_command:
             # Check context first
             analyzer_next_tool = context.get("analyzer_next_tool")
@@ -193,55 +265,61 @@ JSON only, no explanation:"""
                 context["user_requested_tool"] = analyzer_next_tool
                 context["user_requested_target"] = context.get("analyzer_next_target")
         
-        if query.startswith(("yes", "ok", "let's", "lets", "go with")):
-            is_short_confirmation = len(query) < 20
+        # Detect confirmation using prompt file
+        try:
+            confirmation_prompt = format_prompt(
+                "confirmation_detector",
+                query=query,
+                context_summary=context_summary if context_summary else "No prior context",
+                suggested_tools=suggested_tools_str
+            )
             
-            selected = []
-            for tool in suggested_tools:
-                if tool.lower() in query:
-                    selected.append(tool)
+            confirmation_response = detector_llm.generate(
+                confirmation_prompt,
+                timeout=8,
+                stream=False
+            )
             
-            if selected:
-                return {
-                    "intent": "confirm",
-                    "confirmed": True,
-                    "selected_tools": selected,
-                    "context": context
-                }
+            response_upper = confirmation_response.strip().upper()
+            is_confirmation = "CONFIRMATION" in response_upper
             
-            # Only confirm if we have pending tools AND query is short
-            if suggested_tools and is_short_confirmation:
-                return {"intent": "confirm", "confirmed": True, "context": context}
+            if is_confirmation:
+                # Extract selected tools if mentioned in query
+                selected = []
+                if suggested_tools:
+                    for tool in suggested_tools:
+                        if tool.lower() in query_lower:
+                            selected.append(tool)
+                
+                if selected:
+                    return {
+                        "intent": "confirm",
+                        "confirmed": True,
+                        "selected_tools": selected,
+                        "context": context
+                    }
+                
+                # General confirmation
+                if suggested_tools:
+                    return {"intent": "confirm", "confirmed": True, "context": context}
+                    
+        except Exception as e:
+            logger.warning(f"Confirmation detection failed: {e}, continuing with full classification")
         
         # ============================================================
-        # LLM-BASED INTENT CLASSIFICATION
+        # LLM-BASED INTENT CLASSIFICATION (Full classification)
         # ============================================================
         llm = OllamaClient()
         
-        # Build context summary
-        context_summary = ""
-        if context.get("tools_run"):
-            context_summary += f"Tools already run: {', '.join(context.get('tools_run', []))}\n"
-        if context.get("subdomain_count"):
-            context_summary += f"Subdomains found: {context.get('subdomain_count')}\n"
-        if context.get("has_ports"):
-            context_summary += "Port scan completed\n"
-        if context.get("detected_tech"):
-            context_summary += f"Technologies detected: {', '.join(context.get('detected_tech', [])[:5])}\n"
+        # Add subdomains to context summary if available
         if context.get("subdomains"):
             context_summary += f"Subdomains stored in memory: {len(context.get('subdomains', []))}\n"
         
-        # Check if query contains a domain/IP - strong signal for SECURITY_TASK
-        domain_pattern = r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}'
-        has_domain = bool(re.search(domain_pattern, query))
-        
         # Load intent prompt
-        from app.agent.prompt_loader import format_prompt
-        
         prompt = format_prompt("intent_classifier",
             query=query,
             context_summary=context_summary if context_summary else "No prior context",
-            domain_note="NOTE: Message contains a domain/IP address" if has_domain else ""
+            domain_note=domain_note
         )
 
         # ─────────────────────────────────────────────────────────
@@ -276,10 +354,7 @@ JSON only, no explanation:"""
             # Log what we understood
             if understanding.get("detected_target"):
                 print(f"  📍 Target: {understanding['detected_target']}")
-            
-            # Don't suggest tools here - wait until target is verified in planner_node
-            # Tools will be suggested by specialized agents after target verification
-            
+        
             print(f"  → Intent: {intent.upper()}")
             
             return {

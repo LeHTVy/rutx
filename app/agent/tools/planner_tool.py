@@ -69,6 +69,49 @@ class PlannerTool(AgentTool):
             print(f"  ⚡ Learning: {agg_context.learning_hints[0]}")
         
         # ============================================================
+        # STEP 1.5: CHECKLIST INTEGRATION (if checklist exists)
+        # ============================================================
+        checklist = context.get("checklist", [])
+        current_task_id = context.get("current_task_id")
+        checklist_manager = get_checklist_manager()
+        session_id = context.get("session_id", "default")
+        
+        # If checklist exists, get next task
+        if checklist:
+            # Load checklist into manager if not already loaded
+            if not checklist_manager.get_checklist(session_id):
+                from app.agent.core import Task
+                for task_data in checklist:
+                    task = Task.from_dict(task_data)
+                    checklist_manager.add_task(task, session_id)
+            
+            # Get next task from checklist
+            next_task = checklist_manager.get_next_task(session_id)
+            
+            if next_task:
+                # Mark task as in progress
+                checklist_manager.mark_in_progress(next_task.id, session_id)
+                context["current_task_id"] = next_task.id
+                
+                # Update query to focus on current task
+                query = f"{query} - Task: {next_task.description}"
+                
+                # Add task's required tools as context
+                if next_task.required_tools:
+                    context["task_required_tools"] = next_task.required_tools
+                    context["task_phase"] = next_task.phase
+                
+                print(f"  📋 Working on task: {next_task.description} (Phase {next_task.phase})")
+            else:
+                # All tasks done or blocked
+                progress = checklist_manager.get_progress(session_id)
+                if progress["completed"] == progress["total"]:
+                    print(f"  ✅ All checklist tasks completed ({progress['completed']}/{progress['total']})")
+                    context["checklist_complete"] = True
+                else:
+                    print(f"  ⚠️ No available tasks (Progress: {progress['completed']}/{progress['total']})")
+        
+        # ============================================================
         # STEP 2: GET PLAN FROM COORDINATOR
         # ============================================================
         print(f"  🧠 Coordination: Routing '{query}'...")

@@ -25,7 +25,7 @@ class BaseAgent(ABC):
     AGENT_NAME = "base"
     AGENT_DESCRIPTION = "Base agent"
     SPECIALIZED_TOOLS: List[str] = []
-    PENTEST_PHASES: List[int] = [1, 2, 3, 4]  # Phases this agent handles
+    PENTEST_PHASES: List[int] = [1, 2, 3, 4] 
     
     def __init__(self, llm=None):
         """Initialize agent with optional LLM client."""
@@ -33,7 +33,6 @@ class BaseAgent(ABC):
         self._tool_index = None
         self._registry = None
         
-        # Initialize hierarchy support if available
         if _HIERARCHY_AVAILABLE:
             self._subordinates: List[SubordinateAgent] = []
     

@@ -51,7 +51,10 @@ class OllamaClient:
                    - "planner" - uses planner_model from config
                    - "analyzer" - uses analyzer_model from config
         """
-        if model == "planner":
+        if model == "general":
+            from app.llm.config import get_general_model
+            self.model = get_general_model()
+        elif model == "planner":
             from app.llm.config import get_planner_model
             self.model = get_planner_model()
         elif model == "analyzer":

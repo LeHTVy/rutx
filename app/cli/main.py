@@ -273,9 +273,10 @@ def run_snode():
                     # Show available models and current configuration
                     import subprocess
                     from app.agent.graph import get_current_model
-                    from app.llm.config import get_planner_model, get_analyzer_model, get_executor_model, get_reasoning_model
+                    from app.llm.config import get_planner_model, get_analyzer_model, get_executor_model, get_reasoning_model, get_general_model
                     result = subprocess.run(["ollama", "list"], capture_output=True, text=True)
                     console.print(f"\n[bold]Current default model:[/] {get_current_model()}")
+                    console.print(f"[bold]General model:[/] {get_general_model()} [dim](task breakdown)[/]")
                     console.print(f"[bold]Planner model:[/] {get_planner_model()} [dim](tool selection)[/]")
                     console.print(f"[bold]Analyzer model:[/] {get_analyzer_model()} [dim](output analysis)[/]")
                     console.print(f"[bold]Executor model:[/] {get_executor_model()} [dim](code/command generation)[/]")
@@ -283,6 +284,7 @@ def run_snode():
                     console.print(f"\n[bold]Available models:[/]\n{result.stdout}")
                     console.print("[dim]Usage:[/]")
                     console.print("[dim]  /model <model_name> - Set default model[/]")
+                    console.print("[dim]  /model general <model_name> - Set general model (qwen3:8b, nemotron-mini)[/]")
                     console.print("[dim]  /model planner <model_name> - Set planner model (FunctionGemma, nemotron-mini)[/]")
                     console.print("[dim]  /model analyzer <model_name> - Set analyzer model (deepseek-r1, qwen3, nemotron-3-nano)[/]")
                     console.print("[dim]  /model executor <model_name> - Set executor model (qwen2.5-coder, codellama, starcoder2)[/]")
@@ -301,7 +303,11 @@ def run_snode():
                     model_type = parts[1].strip().lower()
                     new_model = parts[2].strip()
                     
-                    if model_type == "planner":
+                    if model_type == "general":
+                        llm_config.set_general_model(new_model)
+                        console.print(f"[green]✅ Set general model to: {new_model}[/]")
+                        console.print(f"[dim]  (Used for task breakdown - qwen3:8b/nemotron-mini recommended)[/]\n")
+                    elif model_type == "planner":
                         llm_config.set_planner_model(new_model)
                         console.print(f"[green]✅ Set planner model to: {new_model}[/]")
                         console.print(f"[dim]  (Used for tool selection - FunctionGemma recommended)[/]\n")
@@ -319,7 +325,7 @@ def run_snode():
                         console.print(f"[dim]  (Used for complex reasoning - deepseek-r1/qwen3 recommended)[/]\n")
                     else:
                         console.print(f"[red]❌ Unknown model type: {model_type}[/]")
-                        console.print("[dim]Use 'planner', 'analyzer', 'executor', or 'reasoning'[/]\n")
+                        console.print("[dim]Use 'general', 'planner', 'analyzer', 'executor', or 'reasoning'[/]\n")
                 continue
             
             # Resume session command

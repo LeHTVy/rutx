@@ -15,6 +15,7 @@ class LLMConfig:
     DEFAULT_CONFIG = {
         "provider": "ollama",
         "model": "qwen3:8b",  # Default model for general tasks
+        "general_model": None,  # Model for task breakdown and general reasoning (qwen3:8b, nemotron-mini)
         "planner_model": None,  # Model for tool selection (FunctionGemma, nemotron-mini)
         "analyzer_model": None,  # Model for analyzing tool outputs (deepseek-r1, qwen3, nemotron-3-nano)
         "executor_model": None,  # Model for code/command generation (qwen2.5-coder, codellama, starcoder2)
@@ -91,6 +92,18 @@ class LLMConfig:
     def set_executor_model(self, model: str):
         """Set model for code/command generation"""
         self.config["executor_model"] = model
+        self.save_config(self.config)
+    
+    def get_general_model(self) -> str:
+        """Get model for task breakdown and general reasoning. Falls back to default model if not set."""
+        general_model = self.config.get("general_model")
+        if general_model:
+            return general_model
+        return self.get_model()
+    
+    def set_general_model(self, model: str):
+        """Set model for task breakdown and general reasoning"""
+        self.config["general_model"] = model
         self.save_config(self.config)
     
     def get_reasoning_model(self) -> str:
@@ -303,6 +316,12 @@ def get_executor_model() -> str:
     """Get model for code/command generation."""
     config = get_llm_config()
     return config.get_executor_model()
+
+
+def get_general_model() -> str:
+    """Get model for task breakdown and general reasoning."""
+    config = get_llm_config()
+    return config.get_general_model()
 
 
 def get_reasoning_model() -> str:

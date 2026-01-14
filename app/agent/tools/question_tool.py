@@ -7,6 +7,9 @@ Answers questions using LLM knowledge + scan context + web research.
 from typing import Dict, Any, Optional
 from app.agent.tools.base import AgentTool
 from app.llm.client import OllamaClient
+from app.ui import get_logger
+
+logger = get_logger()
 
 
 class QuestionTool(AgentTool):
@@ -28,14 +31,42 @@ class QuestionTool(AgentTool):
         if context is None:
             context = self.state.get("context", {}) if self.state else {}
         
-        # Check if this is a customer query
-        customer_keywords = [
-            "khách hàng", "customer", "client", "khách hàng của tôi",
-            "trong số khách hàng", "customers", "clients",
-            "ai đang sử dụng", "who is using", "which customer"
-        ]
-        query_lower = query.lower()
-        is_customer_query = any(kw in query_lower for kw in customer_keywords)
+        # Build base context string
+        base_context = f"""Target: {context.get('last_domain', 'Not set')}
+Technologies: {context.get('detected_tech', [])}
+Tools Run: {', '.join(context.get('tools_run', []))}"""
+        
+        # Initialize lightweight LLM for detection tasks (reused for multiple detections)
+        from app.llm.config import get_planner_model
+        planner_model = get_planner_model()
+        if "functiongemma" in planner_model.lower() or "nemotron" in planner_model.lower():
+            detector_llm = OllamaClient(model="planner")
+        else:
+            detector_llm = OllamaClient()
+        
+        # Check if this is a customer query using prompt file
+        from app.agent.prompt_loader import format_prompt
+        try:
+            customer_detection_prompt = format_prompt(
+                "customer_query_detector",
+                query=query,
+                context_str=base_context
+            )
+            
+            customer_detection_response = detector_llm.generate(
+                customer_detection_prompt,
+                timeout=8,
+                stream=False
+            )
+            
+            response_upper = customer_detection_response.strip().upper()
+            is_customer_query = "CUSTOMER_QUERY" in response_upper
+            
+            logger.debug(f"Customer query detection: {'CUSTOMER_QUERY' if is_customer_query else 'NOT_CUSTOMER_QUERY'}")
+            
+        except Exception as e:
+            logger.warning(f"Customer query detection failed: {e}, defaulting to NOT_CUSTOMER_QUERY")
+            is_customer_query = False
         
         if is_customer_query:
             try:
@@ -43,17 +74,41 @@ class QuestionTool(AgentTool):
                 customer_tool = CustomerQueryTool(self.state)
                 return customer_tool.execute(query=query, context=context)
             except Exception as e:
-                # Fall through to regular question handling
+                logger.warning(f"Customer query tool failed: {e}")
                 pass
         
-        # Use default model for simple questions (should be lightweight, not deepseek-r1)
-        # For complex reasoning questions, could use reasoning model, but keep simple for now
+        # Classify question complexity using prompt file
+        try:
+            classification_prompt = format_prompt(
+                "question_complexity",
+                query=query,
+                context_str=base_context
+            )
+            
+            # Reuse detector_llm for classification
+            classification_response = detector_llm.generate(
+                classification_prompt,
+                timeout=10,
+                stream=False
+            )
+            
+            # Parse response
+            response_upper = classification_response.strip().upper()
+            is_simple_question = "SIMPLE" in response_upper
+            
+            logger.debug(f"Question complexity: {'SIMPLE' if is_simple_question else 'COMPLEX'}")
+            
+        except Exception as e:
+            # Fallback: assume complex if classification fails
+            logger.warning(f"Question complexity classification failed: {e}, defaulting to COMPLEX")
+            is_simple_question = False
+        
+        # Initialize LLM for answering
         llm = OllamaClient()
         
-        # Check if user wants to see scan results
+        # Build detailed context string for answering (includes scan results if available)
         query_lower = query.lower()
         if any(phrase in query_lower for phrase in ["show nmap", "nmap results", "scan results", "port scan results", "show scan"]):
-            # Try to get scan results from context or RAG
             scan_results = []
             tools_run = context.get("tools_run", [])
             if "nmap" in tools_run:
@@ -62,13 +117,11 @@ class QuestionTool(AgentTool):
                 if results.get("nmap"):
                     scan_results.append(f"nmap results: {results['nmap'].get('output', 'No output available')[:2000]}")
             
-            # Also try to get from RAG
             domain = context.get("last_domain") or context.get("target_domain")
             if domain:
                 try:
                     from app.rag.unified_memory import get_unified_rag
                     rag = get_unified_rag()
-                    # Query for scan results
                     scan_docs = rag.query_collection("findings", f"nmap scan results for {domain}", limit=5)
                     if scan_docs:
                         scan_results.append(f"Historical scan results from RAG: {len(scan_docs)} documents found")
@@ -76,25 +129,39 @@ class QuestionTool(AgentTool):
                     pass
             
             if scan_results:
-                context_str = f"""Target: {context.get('last_domain', 'Not set')}
-Technologies: {context.get('detected_tech', [])}
+                context_str = f"""{base_context}
 Scan Results Available: Yes
 {chr(10).join(scan_results)}"""
             else:
-                context_str = f"""Target: {context.get('last_domain', 'Not set')}
-Technologies: {context.get('detected_tech', [])}
+                context_str = f"""{base_context}
 Scan Results: No scan results found. Run nmap first."""
         else:
-            context_str = f"""Target: {context.get('last_domain', 'Not set')}
-Technologies: {context.get('detected_tech', [])}"""
+            context_str = base_context
         
-        # Try web research for questions that might need fresh info
+        # Detect if web research is needed using prompt file
         web_context = ""
-        needs_research = any(kw in query.lower() for kw in [
-            "latest", "new", "recent", "2024", "2025", "2026",
-            "how to", "what is", "explain", "tutorial", "guide",
-            "bypass", "exploit", "vulnerability", "cve-", "poc"
-        ])
+        try:
+            research_detection_prompt = format_prompt(
+                "web_research_detector",
+                query=query,
+                context_str=context_str
+            )
+            
+            # Use lightweight model for quick detection
+            research_detection_response = detector_llm.generate(
+                research_detection_prompt,
+                timeout=8,
+                stream=False
+            )
+            
+            response_upper = research_detection_response.strip().upper()
+            needs_research = "NEEDS_RESEARCH" in response_upper
+            
+            logger.debug(f"Web research detection: {'NEEDS_RESEARCH' if needs_research else 'NO_RESEARCH'}")
+            
+        except Exception as e:
+            logger.warning(f"Web research detection failed: {e}, defaulting to NO_RESEARCH")
+            needs_research = False
         
         if needs_research:
             try:
@@ -109,11 +176,18 @@ Technologies: {context.get('detected_tech', [])}"""
         from app.agent.prompt_loader import format_prompt
         prompt = format_prompt("general_chat", query=query, context_str=context_str, web_context=web_context)
         
-        # Stream with show_content=True to see thinking process
-        response = llm.generate(prompt, timeout=90, stream=True, show_thinking=True, show_content=True)
-        
-        return {
-            "response": response or "Please rephrase.",
-            "next_action": "end",
-            "response_streamed": True  # Flag to indicate response was already streamed
-        }
+
+        if is_simple_question:
+            response = llm.generate(prompt, timeout=30, stream=False)
+            return {
+                "response": response or "Please rephrase.",
+                "next_action": "end",
+                "response_streamed": False 
+            }
+        else:
+            response = llm.generate(prompt, timeout=60, stream=True, show_thinking=True, show_content=True)
+            return {
+                "response": response or "Please rephrase.",
+                "next_action": "end",
+                "response_streamed": True  # Flag to indicate response was already streamed
+            }

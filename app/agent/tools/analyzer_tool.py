@@ -646,12 +646,64 @@ Check tool installation with `/tools`
                 fallback_response = summary if summary else "Analysis complete."
                 final_response = response_text if response_text else fallback_response
                 
-                result = {
-                    "response": final_response,  
-                    "context": context,
-                    "next_action": "respond",
-                    "response_streamed": use_ui_components  
-                }
+                # ============================================================
+                # CHECKLIST COMPLETION CHECK
+                # ============================================================
+                checklist = context.get("checklist", [])
+                current_task_id = context.get("current_task_id")
+                
+                if checklist and current_task_id:
+                    from app.agent.core import get_checklist_manager
+                    checklist_manager = get_checklist_manager()
+                    session_id = context.get("session_id", "default")
+                    
+                    # Mark current task as completed with results
+                    checklist_manager.mark_completed(current_task_id, execution_results, session_id)
+                    
+                    # Check if checklist is complete
+                    if checklist_manager.is_complete(session_id):
+                        context["checklist_complete"] = True
+                        progress = checklist_manager.get_progress(session_id)
+                        print(f"  ✅ Checklist complete! ({progress['completed']}/{progress['total']} tasks)")
+                        
+                        # Route to reasoning for comprehensive analysis
+                        result = {
+                            "response": final_response,
+                            "context": context,
+                            "next_action": "reasoning",  # Route to reasoning node
+                            "response_streamed": use_ui_components
+                        }
+                    else:
+                        # Get next task
+                        next_task = checklist_manager.get_next_task(session_id)
+                        if next_task:
+                            print(f"  📋 Next task: {next_task.description} (Phase {next_task.phase})")
+                            context["current_task_id"] = None  # Will be set by planner
+                            # Route back to planner for next task
+                            result = {
+                                "response": final_response,
+                                "context": context,
+                                "next_action": "planner",  # Route back to planner
+                                "response_streamed": use_ui_components
+                            }
+                        else:
+                            # No next task available (all blocked or done)
+                            result = {
+                                "response": final_response,
+                                "context": context,
+                                "next_action": "respond",
+                                "response_streamed": use_ui_components
+                            }
+                    # Update checklist in context
+                    context["checklist"] = checklist_manager.to_dict(session_id)
+                else:
+                    # No checklist, normal flow
+                    result = {
+                        "response": final_response,  
+                        "context": context,
+                        "next_action": "respond",
+                        "response_streamed": use_ui_components  
+                    }
                 
                 if use_ui_components:
                     result["suggested_tools"] = []  

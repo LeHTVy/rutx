@@ -248,22 +248,24 @@ Return ONLY the phase number (1-6):"""
         )
         
         try:
-            response = self.llm.generate(prompt, timeout=60, stream=False)
+            # Use shorter timeout for intent classification (should be fast)
+            response = self.llm.generate(prompt, timeout=15, stream=False)
             response_clean = response.strip().upper()
             
-            # Extract intent from response
-            if "SECURITY" in response_clean or "TASK" in response_clean:
-                return "SECURITY_TASK"
-            if "MEMORY" in response_clean:
-                return "MEMORY_QUERY"
+            # Extract intent from response - check QUESTION first (more specific)
             if "QUESTION" in response_clean:
                 return "QUESTION"
+            if "MEMORY" in response_clean:
+                return "MEMORY_QUERY"
+            if "SECURITY" in response_clean or "TASK" in response_clean:
+                return "SECURITY_TASK"
             
-            # Default based on response content
-            return "SECURITY_TASK"
+            # Default to QUESTION for unclear cases (safer than assuming SECURITY_TASK)
+            return "QUESTION"
             
         except Exception:
-            return "SECURITY_TASK"
+            # On timeout/error, default to QUESTION (safer than SECURITY_TASK)
+            return "QUESTION"
     
     def get_relevant_cves(self, technologies: List[str]) -> List[Dict]:
         """Get CVEs for detected technologies."""

@@ -92,7 +92,12 @@ class AgentState(TypedDict):
     # Mode management
     mode: str  
     autochain_iteration: int  
-    autochain_results: List[Dict[str, Any]]  
+    autochain_results: List[Dict[str, Any]]
+    
+    # Checklist management
+    checklist: Optional[List[Dict[str, Any]]]  # Task checklist
+    current_task_id: Optional[str]  # Task currently being executed
+    checklist_complete: bool  # Flag to route to reasoning when complete  
 
 
 # ============================================================
@@ -703,6 +708,43 @@ def memory_query_node(state: AgentState) -> AgentState:
     return {**state, **result}
 
 
+def task_breakdown_node(state: AgentState) -> AgentState:
+    """
+    Break down user request into checklist tasks.
+    
+    Uses general model to analyze user prompt and create structured task checklist.
+    Only runs for complex SECURITY_TASK requests (attack, assess, etc.).
+    """
+    from app.agent.tools.task_breakdown_tool import TaskBreakdownTool
+    
+    tool = TaskBreakdownTool(state)
+    result = tool.execute(
+        query=state.get("query", ""),
+        context=state.get("context", {})
+    )
+    
+    # Merge result into state
+    return {**state, **result}
+
+
+def reasoning_node(state: AgentState) -> AgentState:
+    """
+    Comprehensive reasoning and analysis of all results.
+    
+    Uses reasoning model to analyze complete checklist results and provide
+    final assessment, recommendations, and next steps.
+    """
+    from app.agent.tools.reasoning_tool import ReasoningTool
+    
+    tool = ReasoningTool(state)
+    result = tool.execute(
+        context=state.get("context", {})
+    )
+    
+    # Merge result into state
+    return {**state, **result}
+
+
 # ============================================================
 # GRAPH ROUTING
 # ============================================================
@@ -755,11 +797,13 @@ def build_graph():
     
     # Add nodes
     graph.add_node("intent", intent_node)
+    graph.add_node("task_breakdown", task_breakdown_node)  # NEW: Task breakdown for complex requests
     graph.add_node("target_verification", target_verification_node)
     graph.add_node("planner", planner_node)
     graph.add_node("confirm", confirm_node)
     graph.add_node("executor", executor_node)
     graph.add_node("analyzer", analyzer_node)
+    graph.add_node("reasoning", reasoning_node)  # NEW: Comprehensive reasoning
     graph.add_node("auto_chain", auto_chain_node)  # NEW: Auto-chain for autonomous mode
     graph.add_node("respond", respond_node)
     graph.add_node("question", question_node)
@@ -773,11 +817,23 @@ def build_graph():
         "intent",
         route_after_intent,
         {
+            "task_breakdown": "task_breakdown",
             "target_verification": "target_verification",
             "planner": "planner",
             "confirm": "confirm",
             "memory_query": "memory_query",
             "question": "question"
+        }
+    )
+    
+    # Task breakdown routes to planner
+    graph.add_conditional_edges(
+        "task_breakdown",
+        route_after_action,
+        {
+            "planner": "planner",
+            "respond": "respond",
+            END: END
         }
     )
     
@@ -828,10 +884,21 @@ def build_graph():
         "analyzer",
         route_after_action,
         {
+            "reasoning": "reasoning",  # NEW: Route to reasoning if checklist complete
             "confirm": "respond",
             "respond": "respond",
             "planner": "planner",
             "auto_chain": "auto_chain",  # NEW: Auto-chain for autonomous mode
+            END: END
+        }
+    )
+    
+    # Reasoning routes to respond
+    graph.add_conditional_edges(
+        "reasoning",
+        route_after_action,
+        {
+            "respond": "respond",
             END: END
         }
     )
