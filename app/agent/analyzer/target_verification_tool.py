@@ -287,7 +287,10 @@ If information is not available, use "N/A" for that field. Return ONLY the JSON 
             # 5. LLM Analysis with Full Context
             # OPTIMIZATION: If we already have company_info with website domain, we can extract domain directly
             # and skip the expensive verification prompt (saves ~45s)
+            # BUT: Only skip if domain is valid (has TLD and proper format)
             extracted_domain_from_company = None
+            analysis = {}  # Initialize analysis dict
+            
             if company_info and company_info.get("website") and company_info.get("website") != "N/A":
                 website = company_info.get("website", "").strip()
                 # Extract domain from website URL if it's a full URL
@@ -295,16 +298,35 @@ If information is not available, use "N/A" for that field. Return ONLY the JSON 
                 if domain_match:
                     extracted_domain_from_company = domain_match.group(1) if domain_match.lastindex else domain_match.group(0)
             
-            # If we have a clear domain from company_info, skip expensive verification prompt
+            # Validate domain before skipping verification prompt
             if extracted_domain_from_company and "." in extracted_domain_from_company:
                 # Clean domain - remove trailing dot if present
                 extracted_domain_from_company = extracted_domain_from_company.rstrip(".")
-                logger.info(f"Found domain from company info: {extracted_domain_from_company}, skipping verification prompt")
-                analysis = {
-                    "status": "clear",
-                    "primary_domain": extracted_domain_from_company
-                }
-            else:
+                
+                # Validate domain format - must have at least 2 parts (domain.tld)
+                domain_parts = extracted_domain_from_company.split(".")
+                is_valid_domain = (
+                    extracted_domain_from_company and 
+                    not extracted_domain_from_company.startswith(".") and 
+                    len(domain_parts) >= 2 and
+                    all(len(part) > 0 for part in domain_parts) and
+                    len(extracted_domain_from_company) > 4  # Minimum: a.co
+                )
+                
+                if is_valid_domain:
+                    logger.info(f"Found valid domain from company info: {extracted_domain_from_company}, skipping verification prompt")
+                    analysis = {
+                        "status": "clear",
+                        "primary_domain": extracted_domain_from_company
+                    }
+                else:
+                    # Domain from company_info is not valid (missing TLD or invalid format)
+                    # Must run verification prompt to resolve to correct domain
+                    logger.info(f"Found domain from company info but invalid format: '{extracted_domain_from_company}', running verification prompt to resolve")
+                    extracted_domain_from_company = None  # Reset to force verification prompt
+            
+            # Run verification prompt if we don't have a valid domain from company_info
+            if not analysis.get("status") == "clear":
                 # Fallback to verification prompt if no clear domain from company_info
                 verification_prompt = format_prompt(
                     "target_verification",
