@@ -166,16 +166,25 @@ def prompt_analysis_node(state: AgentState) -> AgentState:
         context["target_hint"] = target
     
     # Create checklist if needed
+    response_text = ""
     if analysis.get("needs_checklist", True):
         checklist_result = analyzer.create_checklist(query, context)
         context = checklist_result.get("context", context)
         if checklist_result.get("checklist"):
             context["checklist"] = checklist_result["checklist"]
+            # Build response message about checklist creation
+            checklist = context.get("checklist", [])
+            if checklist:
+                response_text = f"✅ Created {len(checklist)} tasks in checklist.\n\n"
+                response_text += "Next step: Verify target domain, then proceed with execution.\n"
+                response_text += "Type 'yes' to continue to target verification."
     
     return {
         **state,
         "context": context,
-        "prompt_analysis": analysis
+        "prompt_analysis": analysis,
+        "response": response_text if response_text else "Prompt analyzed. Proceeding to target verification...",
+        "next_action": "target_verification" if analysis.get("needs_checklist", True) else "planner"
     }
 
 
@@ -819,6 +828,7 @@ def route_after_action(state: AgentState) -> str:
     routes = {
         "plan": "planner",
         "planner": "planner",
+        "target_verification": "target_verification",
         "confirm": "respond",
         "executor": "executor",
         "execute": "executor",
