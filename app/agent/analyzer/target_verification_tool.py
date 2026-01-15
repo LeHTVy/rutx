@@ -297,6 +297,8 @@ If information is not available, use "N/A" for that field. Return ONLY the JSON 
             
             # If we have a clear domain from company_info, skip expensive verification prompt
             if extracted_domain_from_company and "." in extracted_domain_from_company:
+                # Clean domain - remove trailing dot if present
+                extracted_domain_from_company = extracted_domain_from_company.rstrip(".")
                 logger.info(f"Found domain from company info: {extracted_domain_from_company}, skipping verification prompt")
                 analysis = {
                     "status": "clear",
@@ -334,7 +336,7 @@ If information is not available, use "N/A" for that field. Return ONLY the JSON 
             context["last_candidate"] = entity_name
             
             if status == "clear" and analysis.get("primary_domain"):
-                real_domain = analysis.get("primary_domain").strip()
+                real_domain = analysis.get("primary_domain").strip().rstrip(".")  # Remove trailing dot
                 
                 # Validate domain - must be a proper domain, not just TLD
                 # Check: must have at least 2 parts (domain.tld), not start with dot, and have valid length
@@ -349,7 +351,12 @@ If information is not available, use "N/A" for that field. Return ONLY the JSON 
                 
                 if not is_valid:
                     logger.warning(f"Invalid domain format: '{real_domain}', treating as ambiguous")
-                    # Fall through to ambiguous handling
+                    # Treat as ambiguous and ask user
+                    return {
+                        "response": f"Invalid domain format detected: '{real_domain}'. Could you provide the correct domain name?",
+                        "context": context,
+                        "next_action": "end"
+                    }
                 else:
                     logger.success(f"Resolved '{entity_name}' -> '{real_domain}'")
                     
