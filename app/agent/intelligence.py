@@ -190,12 +190,16 @@ Return ONLY the phase number (1-6):"""
         if context.get("port_count") or context.get("open_ports"):
             count = context.get("port_count") or len(context.get("open_ports", []))
             parts.append(f"Ports: {count}")
+        if context.get("has_ports"):
+            parts.append("Port scan completed")
         if context.get("vulns_found"):
             parts.append(f"Vulns: {len(context['vulns_found'])}")
         if context.get("tools_run"):
-            parts.append(f"Tools: {', '.join(context['tools_run'][-3:])}")
+            parts.append(f"Tools already run: {', '.join(context.get('tools_run', [])[-5:])}")
+        if context.get("detected_tech"):
+            parts.append(f"Technologies detected: {', '.join(context.get('detected_tech', [])[:5])}")
         
-        return "; ".join(parts) if parts else "No data"
+        return "\n".join(parts) if parts else "No prior context"
     
     def build_rich_prompt(self, query: str, context: dict = None, 
                           understanding: dict = None) -> str:

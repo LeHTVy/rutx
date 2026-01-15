@@ -180,20 +180,17 @@ JSON only, no explanation:"""
         
         query_lower = query.lower()
         
-        # Build context summary for detection prompts
-        context_summary = ""
-        if context.get("tools_run"):
-            context_summary += f"Tools already run: {', '.join(context.get('tools_run', []))}\n"
-        if context.get("subdomain_count"):
-            context_summary += f"Subdomains found: {context.get('subdomain_count')}\n"
-        if context.get("has_ports"):
-            context_summary += "Port scan completed\n"
-        if context.get("detected_tech"):
-            context_summary += f"Technologies detected: {', '.join(context.get('detected_tech', [])[:5])}\n"
+        # Use intelligence layer to build context summary and detect domain
+        # This avoids code duplication with intelligence.py
+        from app.agent.intelligence import get_intelligence
+        intel = get_intelligence()
         
-        # Check if query contains a domain/IP - strong signal for SECURITY_TASK
-        domain_pattern = r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}'
-        has_domain = bool(re.search(domain_pattern, query))
+        # Build context summary using intelligence layer (no duplication)
+        context_summary = intel._build_context_summary(context) if context else "No prior context"
+        
+        # Check if query contains a domain/IP using intelligence layer
+        detected_target = intel._extract_target(query)
+        has_domain = detected_target is not None
         domain_note = "NOTE: Message contains a domain/IP address" if has_domain else ""
         
         # ─────────────────────────────────────────────────────────
@@ -216,6 +213,14 @@ JSON only, no explanation:"""
         query_lower = query.lower().strip()
         has_action_verb = any(verb in query_lower for verb in action_verbs)
         
+        # #region agent log
+        try:
+            import json
+            with open("snode_debug.log", "a") as f:
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"intent_classifier_tool.py:217","message":"Action verb check","data":{"query":query,"query_lower":query_lower,"has_action_verb":has_action_verb,"matched_verbs":[v for v in action_verbs if v in query_lower]},"timestamp":int(__import__("time").time()*1000)})+"\n")
+        except: pass
+        # #endregion
+        
         # Only check simple questions if NO action verbs present
         if not has_action_verb:
             simple_keywords = ["who are you", "what are you", "what is snode", "what can you do", 
@@ -227,32 +232,17 @@ JSON only, no explanation:"""
                     "context": context
                 }
         
-        # Detect simple question using prompt file (for other simple questions)
+        # REMOVED: Simple question detector with LLM (duplicate functionality)
+        # Reason: This was using planner model (small, unreliable) and running BEFORE intelligence layer
+        # Now: Let intelligence layer handle all intent classification with general model
+        # Fast path above (identity questions) is kept for performance on obvious cases
+        # #region agent log
         try:
-            simple_question_prompt = format_prompt(
-                "simple_question_detector",
-                query=query,
-                context_summary=context_summary if context_summary else "No prior context",
-                domain_note=domain_note
-            )
-            
-            simple_question_response = detector_llm.generate(
-                simple_question_prompt,
-                timeout=8,
-                stream=False
-            )
-            
-            response_upper = simple_question_response.strip().upper()
-            is_simple_question = "SIMPLE_QUESTION" in response_upper
-            
-            if is_simple_question:
-                logger.info("Simple question detected via LLM, routing to question node")
-                return {
-                    "intent": "question",
-                    "context": context
-                }
-        except Exception as e:
-            logger.warning(f"Simple question detection failed: {e}, continuing with full classification")
+            import json
+            with open("snode_debug.log", "a") as f:
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"intent_classifier_tool.py:238","message":"Skipped simple question detector - using intelligence layer instead","data":{"query":query,"has_action_verb":has_action_verb},"timestamp":int(__import__("time").time()*1000)})+"\n")
+        except: pass
+        # #endregion
         
         # Detect suggestion command using prompt file
         suggested_tools_str = ', '.join(suggested_tools) if suggested_tools else "None"
@@ -342,32 +332,15 @@ JSON only, no explanation:"""
             logger.warning(f"Confirmation detection failed: {e}, continuing with full classification")
         
         # ============================================================
-        # LLM-BASED INTENT CLASSIFICATION (Full classification)
-        # ============================================================
-        llm = OllamaClient()
-        
-        # Add subdomains to context summary if available
-        if context.get("subdomains"):
-            context_summary += f"Subdomains stored in memory: {len(context.get('subdomains', []))}\n"
-        
-        # Load intent prompt
-        prompt = format_prompt("intent_classifier",
-            query=query,
-            context_summary=context_summary if context_summary else "No prior context",
-            domain_note=domain_note
-        )
-
-        # ─────────────────────────────────────────────────────────
         # INTELLIGENT INTENT CLASSIFICATION
-        # Uses: Semantic understanding, Context retrieval, Rich prompts
-        # ─────────────────────────────────────────────────────────
+        # Uses intelligence layer (no duplicate LLM calls)
+        # ============================================================
         
         print("  🧠 Intelligence layer analyzing...")
         
         try:
-            # Use intelligence layer for semantic understanding
-            from app.agent.intelligence import get_intelligence
-            intel = get_intelligence()
+            # Use intelligence layer for semantic understanding and intent classification
+            # (intel already initialized above for context summary)
             
             # #region agent log
             try:
@@ -431,18 +404,6 @@ JSON only, no explanation:"""
             }
             
         except Exception as e:
-            logger.warning(f"Intelligence layer: {e}, using fallback")
-            
-            # Fallback to simple LLM classification
-            try:
-                response = llm.generate(prompt, timeout=30)
-                response_clean = response.strip().upper()
-                
-                if "MEMORY" in response_clean:
-                    return {"intent": "memory_query", "context": context}
-                elif "QUESTION" in response_clean:
-                    return {"intent": "question", "context": context}
-                else:
-                    return {"intent": "security_task", "context": context}
-            except Exception:
-                return {"intent": "security_task", "context": context}
+            logger.warning(f"Intelligence layer failed: {e}, defaulting to security_task")
+            # Default to security_task on error (safer than question for action verbs)
+            return {"intent": "security_task", "context": context}
