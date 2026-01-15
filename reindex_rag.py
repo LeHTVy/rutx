@@ -18,6 +18,7 @@ Options:
 """
 
 import sys
+import os
 import argparse
 from pathlib import Path
 
@@ -190,9 +191,75 @@ Examples:
             print("Cancelled.")
             return
     
+    # Check ChromaDB directory permissions first
+    print("\n🔧 Checking ChromaDB directory permissions...")
+    try:
+        from app.core.config import get_config
+        config = get_config()
+        chroma_dir = config.chroma_persist_dir / "unified_rag"
+        
+        # Check if directory exists and is writable
+        if chroma_dir.exists():
+            if not os.access(chroma_dir, os.W_OK):
+                print(f"\n❌ ERROR: ChromaDB directory is not writable: {chroma_dir}")
+                print(f"\n💡 Fix permissions with:")
+                print(f"   sudo chown -R $USER:$USER {chroma_dir}")
+                print(f"   chmod -R u+w {chroma_dir}")
+                print(f"\n   Or check if another process is using the database.")
+                sys.exit(1)
+        else:
+            # Try to create directory to test permissions
+            try:
+                chroma_dir.parent.mkdir(parents=True, exist_ok=True)
+                if not os.access(chroma_dir.parent, os.W_OK):
+                    print(f"\n❌ ERROR: Cannot create ChromaDB directory: {chroma_dir}")
+                    print(f"\n💡 Fix permissions with:")
+                    print(f"   sudo chown -R $USER:$USER {chroma_dir.parent}")
+                    print(f"   chmod -R u+w {chroma_dir.parent}")
+                    sys.exit(1)
+            except PermissionError:
+                print(f"\n❌ ERROR: Permission denied creating ChromaDB directory: {chroma_dir}")
+                print(f"\n💡 Fix permissions with:")
+                print(f"   sudo chown -R $USER:$USER {chroma_dir.parent}")
+                print(f"   chmod -R u+w {chroma_dir.parent}")
+                sys.exit(1)
+        
+        print(f"  ✓ ChromaDB directory: {chroma_dir}")
+        print(f"  ✓ Permissions OK")
+        
+    except Exception as e:
+        print(f"  ⚠️  Could not check permissions: {e}")
+        print("  Continuing anyway...")
+    
     # Get UnifiedRAG instance
     print("\n🔧 Initializing UnifiedRAG...")
-    rag = get_unified_rag()
+    try:
+        rag = get_unified_rag()
+    except Exception as e:
+        error_msg = str(e)
+        if "readonly database" in error_msg.lower() or "code: 8" in error_msg:
+            print(f"\n❌ ERROR: ChromaDB database is read-only")
+            print(f"\n💡 This usually means:")
+            print(f"   1. Database file permissions are incorrect")
+            print(f"   2. Another process is using the database")
+            print(f"   3. Database files are owned by root")
+            print(f"\n💡 Fix with:")
+            try:
+                from app.core.config import get_config
+                config = get_config()
+                chroma_dir = config.chroma_persist_dir / "unified_rag"
+                print(f"   sudo chown -R $USER:$USER {chroma_dir}")
+                print(f"   chmod -R u+w {chroma_dir}")
+                print(f"\n   Or stop any running SNODE processes first.")
+            except:
+                print(f"   sudo chown -R $USER:$USER <chroma_db_directory>")
+                print(f"   chmod -R u+w <chroma_db_directory>")
+            sys.exit(1)
+        else:
+            print(f"\n❌ ERROR: Failed to initialize UnifiedRAG: {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
     
     # Determine which collections to re-index
     collections_to_index = []
