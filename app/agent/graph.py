@@ -179,12 +179,23 @@ def prompt_analysis_node(state: AgentState) -> AgentState:
                 response_text += "Next step: Verify target domain, then proceed with execution.\n"
                 response_text += "Type 'yes' to continue to target verification."
     
+    # Determine next action
+    next_action = "target_verification" if analysis.get("needs_checklist", True) else "planner"
+    
+    # #region agent log
+    try:
+        import json
+        with open("snode_debug.log", "a") as f:
+            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H5","location":"graph.py:182","message":"Prompt analysis complete","data":{"needs_checklist":analysis.get("needs_checklist",True),"next_action":next_action,"has_checklist":bool(context.get("checklist"))},"timestamp":int(__import__("time").time()*1000)})+"\n")
+    except: pass
+    # #endregion
+    
     return {
         **state,
         "context": context,
         "prompt_analysis": analysis,
         "response": response_text if response_text else "Prompt analyzed. Proceeding to target verification...",
-        "next_action": "target_verification" if analysis.get("needs_checklist", True) else "planner"
+        "next_action": next_action
     }
 
 
@@ -200,6 +211,14 @@ def target_verification_node(state: AgentState) -> AgentState:
     3. Web search using LLM-generated query.
     4. LLM analyzes results with user context to resolve or ask.
     """
+    # #region agent log
+    try:
+        import json
+        with open("snode_debug.log", "a") as f:
+            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H5","location":"graph.py:202","message":"Target verification node entry","data":{"query":state.get("query",""),"has_context":bool(state.get("context"))},"timestamp":int(__import__("time").time()*1000)})+"\n")
+    except: pass
+    # #endregion
+    
     from app.agent.analyzer import TargetVerificationTool
     
     tool = TargetVerificationTool(state)
@@ -208,6 +227,14 @@ def target_verification_node(state: AgentState) -> AgentState:
         context=state.get("context", {}),
         intent=state.get("intent", "")
     )
+    
+    # #region agent log
+    try:
+        import json
+        with open("snode_debug.log", "a") as f:
+            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H5","location":"graph.py:228","message":"Target verification node exit","data":{"next_action":result.get("next_action",""),"has_response":bool(result.get("response"))},"timestamp":int(__import__("time").time()*1000)})+"\n")
+    except: pass
+    # #endregion
     
     # Merge result into state
     return {**state, **result}
@@ -824,6 +851,14 @@ def route_after_action(state: AgentState) -> str:
     """Route based on next_action field."""
     action = state.get("next_action", "end")
     
+    # #region agent log
+    try:
+        import json
+        with open("snode_debug.log", "a") as f:
+            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H5","location":"graph.py:823","message":"Route after action","data":{"next_action":action,"state_keys":list(state.keys())},"timestamp":int(__import__("time").time()*1000)})+"\n")
+    except: pass
+    # #endregion
+    
     # Map actions to node names
     routes = {
         "plan": "planner",
@@ -838,7 +873,17 @@ def route_after_action(state: AgentState) -> str:
         "auto_chain": "auto_chain"  # NEW: Auto-chain for autonomous mode
     }
     
-    return routes.get(action, END)
+    route_result = routes.get(action, END)
+    
+    # #region agent log
+    try:
+        import json
+        with open("snode_debug.log", "a") as f:
+            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H5","location":"graph.py:850","message":"Route result","data":{"action":action,"route_result":route_result},"timestamp":int(__import__("time").time()*1000)})+"\n")
+    except: pass
+    # #endregion
+    
+    return route_result
 
 
 # ============================================================
