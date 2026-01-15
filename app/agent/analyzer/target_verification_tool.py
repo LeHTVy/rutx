@@ -176,6 +176,12 @@ class TargetVerificationTool(AgentTool):
                     print(f"  🔄 LLM detected correction: clearing '{old_target}'")
                     context.pop("target_domain", None)
                     context["last_candidate"] = old_target.split(".")[0] if "." in old_target else old_target
+                # IMPORTANT: When user corrects/clarifies, DO NOT auto-resolve domain
+                # Must re-search web and ask user to confirm again
+                # Clear resolved_domain to force re-verification
+                if resolved_domain:
+                    logger.info(f"Correction detected: ignoring auto-resolved domain '{resolved_domain}', will re-search and ask user")
+                    resolved_domain = ""  # Force re-verification
             
             # Handle follow-up references (pronouns, "assess them", etc.)
             if is_followup and not is_correction:
@@ -186,7 +192,9 @@ class TargetVerificationTool(AgentTool):
                     resolved_domain = context.get("target_domain")
             
             # If LLM extracted a domain directly (e.g., "no, its hellogroup.co.za" or corrected typo)
-            if resolved_domain and "." in resolved_domain:
+            # BUT: Only auto-resolve if NOT a correction/clarification
+            # When user clarifies (e.g., "its hellogroup from South Africa"), we must re-search and ask
+            if resolved_domain and "." in resolved_domain and not is_correction:
                 logger.success(f"Direct domain resolved: {resolved_domain}")
                 context["target_domain"] = resolved_domain
                 context["last_candidate"] = entity_name or resolved_domain.split(".")[0]
@@ -356,6 +364,23 @@ If information is not available, use "N/A" for that field. Return ONLY the JSON 
             
             # Store candidate for follow-up queries
             context["last_candidate"] = entity_name
+            
+            # IMPORTANT: When user corrects/clarifies, ALWAYS ask for confirmation
+            # Even if verification prompt returns "clear", we must ask user to confirm
+            # because user just corrected us, so we need to verify the new target
+            if is_correction and status == "clear" and analysis.get("primary_domain"):
+                # User corrected us, so treat as ambiguous to force confirmation
+                logger.info(f"Correction detected: treating 'clear' status as 'ambiguous' to force user confirmation")
+                status = "ambiguous"
+                # Add the resolved domain as a candidate
+                primary_domain = analysis.get("primary_domain").strip().rstrip(".")
+                analysis["candidates"] = [{
+                    "name": entity_name or primary_domain.split(".")[0],
+                    "domain": primary_domain,
+                    "location": user_context or "Unknown",
+                    "desc": f"Found based on your clarification: {user_context or 'no additional context'}"
+                }]
+                analysis["clarification_question"] = f"Did you mean **{primary_domain}**? I found this based on your clarification: '{user_context or 'no additional context'}'. Please confirm."
             
             if status == "clear" and analysis.get("primary_domain"):
                 real_domain = analysis.get("primary_domain").strip().rstrip(".")  # Remove trailing dot

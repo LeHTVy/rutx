@@ -445,7 +445,7 @@ def handle_amass(action_input: Dict[str, Any], state: Any) -> str:
                 try:
                     import json
                     with open("snode_debug.log", "a") as f:
-                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"recon.py:415","message":"Cannot update state.context - is None","data":{}},"timestamp":int(__import__("time").time()*1000)})+"\n")
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"recon.py:415","message":"Cannot update state.context - is None","data":{},"timestamp":int(__import__("time").time()*1000)})+"\n")
                 except: pass
                 # #endregion
             
