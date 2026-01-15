@@ -142,6 +142,43 @@ from app.agent.intelligence import infer_phase
 
 
 
+def prompt_analysis_node(state: AgentState) -> AgentState:
+    """
+    Analyze user prompt with General Model.
+    
+    Flow:
+    1. Analyze prompt → extract requirements
+    2. Extract target (with typo handling)
+    3. Create checklist from analyzed prompt
+    """
+    from app.agent.analyzer import get_user_prompt_analyzer
+    
+    analyzer = get_user_prompt_analyzer()
+    query = state.get("query", "")
+    context = state.get("context", {})
+    
+    # Analyze prompt
+    analysis = analyzer.analyze_prompt(query, context)
+    
+    # Extract target
+    target = analyzer.extract_target(query, context)
+    if target:
+        context["target_hint"] = target
+    
+    # Create checklist if needed
+    if analysis.get("needs_checklist", True):
+        checklist_result = analyzer.create_checklist(query, context)
+        context = checklist_result.get("context", context)
+        if checklist_result.get("checklist"):
+            context["checklist"] = checklist_result["checklist"]
+    
+    return {
+        **state,
+        "context": context,
+        "prompt_analysis": analysis
+    }
+
+
 def target_verification_node(state: AgentState) -> AgentState:
     """
     Verify and resolve target ambiguity using LLM intelligence.
@@ -154,7 +191,7 @@ def target_verification_node(state: AgentState) -> AgentState:
     3. Web search using LLM-generated query.
     4. LLM analyzes results with user context to resolve or ask.
     """
-    from app.agent.tools.target_verification_tool import TargetVerificationTool
+    from app.agent.analyzer import TargetVerificationTool
     
     tool = TargetVerificationTool(state)
     result = tool.execute(
@@ -715,7 +752,7 @@ def task_breakdown_node(state: AgentState) -> AgentState:
     Uses general model to analyze user prompt and create structured task checklist.
     Only runs for complex SECURITY_TASK requests (attack, assess, etc.).
     """
-    from app.agent.tools.task_breakdown_tool import TaskBreakdownTool
+    from app.agent.analyzer import TaskBreakdownTool
     
     tool = TaskBreakdownTool(state)
     result = tool.execute(
@@ -763,7 +800,7 @@ def route_after_intent(state: AgentState) -> str:
     # #endregion
     
     if intent == "security_task":
-        return "target_verification"  # New step: verify target first
+        return "prompt_analysis"  # New: analyze prompt first, then verify target
     elif intent == "confirm":
         return "confirm"
     elif intent == "memory_query":
@@ -806,7 +843,8 @@ def build_graph():
     
     # Add nodes
     graph.add_node("intent", intent_node)
-    graph.add_node("task_breakdown", task_breakdown_node)  # NEW: Task breakdown for complex requests
+    graph.add_node("prompt_analysis", prompt_analysis_node)  # NEW: Prompt analysis with General Model
+    graph.add_node("task_breakdown", task_breakdown_node)  # Task breakdown for complex requests
     graph.add_node("target_verification", target_verification_node)
     graph.add_node("planner", planner_node)
     graph.add_node("confirm", confirm_node)
@@ -826,12 +864,25 @@ def build_graph():
         "intent",
         route_after_intent,
         {
+            "prompt_analysis": "prompt_analysis",
             "task_breakdown": "task_breakdown",
             "target_verification": "target_verification",
             "planner": "planner",
             "confirm": "confirm",
             "memory_query": "memory_query",
             "question": "question"
+        }
+    )
+    
+    # Prompt analysis routes to target verification
+    graph.add_conditional_edges(
+        "prompt_analysis",
+        route_after_action,
+        {
+            "target_verification": "target_verification",
+            "planner": "planner",
+            "respond": "respond",
+            END: END
         }
     )
     

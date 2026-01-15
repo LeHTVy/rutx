@@ -84,8 +84,24 @@ class AnalyzerTool(AgentTool):
         llm = OllamaClient(model="analyzer")
         
         # === CHECK IF ANY TOOLS SUCCEEDED ===
+        # #region agent log
+        try:
+            import json
+            with open("snode_debug.log", "a") as f:
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H2","location":"analyzer_tool.py:87","message":"Analyzer entry - check results","data":{"results_keys":list(results.keys()),"results_count":len(results)},"timestamp":int(__import__("time").time()*1000)})+"\n")
+        except: pass
+        # #endregion
+        
         successful_tools = [t for t, d in results.items() if d.get("success")]
         failed_tools = [t for t, d in results.items() if not d.get("success")]
+        
+        # #region agent log
+        try:
+            import json
+            with open("snode_debug.log", "a") as f:
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H2","location":"analyzer_tool.py:90","message":"Tools classification","data":{"successful_tools":successful_tools,"failed_tools":failed_tools,"all_tools":list(results.keys())},"timestamp":int(__import__("time").time()*1000)})+"\n")
+        except: pass
+        # #endregion
         
         if not successful_tools:
             # ALL tools failed - provide INTELLIGENT REASONING about why
@@ -345,8 +361,24 @@ Check tool installation with `/tools`
             security_tech_context=_get_security_tech_context(context)
         )
         
+        # #region agent log
+        try:
+            import json
+            with open("snode_debug.log", "a") as f:
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H3","location":"analyzer_tool.py:349","message":"Before LLM generate call","data":{"timeout":90,"prompt_length":len(prompt),"tools_in_results":len(successful_tools)},"timestamp":int(__import__("time").time()*1000)})+"\n")
+        except: pass
+        # #endregion
+        
         # Stream the analysis - user wants to see this thinking process
         response = llm.generate(prompt, timeout=90, stream=True, show_thinking=True, show_content=True)
+        
+        # #region agent log
+        try:
+            import json
+            with open("snode_debug.log", "a") as f:
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H3","location":"analyzer_tool.py:355","message":"After LLM generate call","data":{"response_length":len(response) if response else 0,"response_preview":response[:200] if response else ""},"timestamp":int(__import__("time").time()*1000)})+"\n")
+        except: pass
+        # #endregion
         
         try:
             # Robust JSON extraction with multiple repair strategies
@@ -396,6 +428,14 @@ Check tool installation with `/tools`
                     summary_match = re.search(r'"summary"\s*:\s*"([^"]+)"', clean_response)
                     if summary_match:
                         data["summary"] = summary_match.group(1)
+            
+            # #region agent log
+            try:
+                import json
+                with open("snode_debug.log", "a") as f:
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H4","location":"analyzer_tool.py:400","message":"JSON parsing result","data":{"data_is_none":data is None,"has_findings":bool(data.get("findings")) if data else False,"has_next_tool":bool(data.get("next_tool")) if data else False},"timestamp":int(__import__("time").time()*1000)})+"\n")
+            except: pass
+            # #endregion
             
             if data:
                 findings = data.get("findings", [])
@@ -653,7 +693,7 @@ Check tool installation with `/tools`
                 current_task_id = context.get("current_task_id")
                 
                 if checklist and current_task_id:
-                    from app.agent.core import get_checklist_manager
+                    from app.agent.analyzer import get_checklist_manager
                     checklist_manager = get_checklist_manager()
                     session_id = context.get("session_id", "default")
                     
@@ -712,6 +752,13 @@ Check tool installation with `/tools`
                 return result
             else:
                 # No JSON data extracted - fallback to raw response
+                # #region agent log
+                try:
+                    import json
+                    with open("snode_debug.log", "a") as f:
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H4","location":"analyzer_tool.py:738","message":"No structured data extracted","data":{"clean_response_length":len(clean_response),"clean_response_preview":clean_response[:500],"json_match_found":bool(json_match)},"timestamp":int(__import__("time").time()*1000)})+"\n")
+                except: pass
+                # #endregion
                 logger.warning("Analyzer: No structured data extracted, using raw response")
                 return {
                     "response": clean_response[:2000] if len(clean_response) > 2000 else clean_response,

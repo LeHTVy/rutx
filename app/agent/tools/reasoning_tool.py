@@ -7,7 +7,7 @@ Uses reasoning model to analyze all findings and provide final assessment.
 from typing import Dict, Any, Optional
 from app.agent.tools.base import AgentTool
 from app.llm.client import OllamaClient
-from app.agent.core import get_checklist_manager
+from app.agent.analyzer import get_checklist_manager
 from app.ui import get_logger
 
 logger = get_logger()

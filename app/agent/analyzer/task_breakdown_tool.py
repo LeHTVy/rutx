@@ -9,7 +9,7 @@ import re
 from typing import Dict, Any, Optional, List
 from app.agent.tools.base import AgentTool
 from app.llm.client import OllamaClient
-from app.agent.core import get_checklist_manager, Task, TaskStatus
+from app.agent.analyzer.checklist_manager import get_checklist_manager, Task, TaskStatus
 from app.ui import get_logger
 
 logger = get_logger()

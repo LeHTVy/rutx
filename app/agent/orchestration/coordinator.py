@@ -219,13 +219,13 @@ class AgentCoordinator:
 TASK: {query}
 CONTEXT: {context_summary}{analyzer_note}
 
-AVAILABLE AGENTS:
+AVAILABLE AGENTS (FunctionGemma manages 7 agents, excluding report):
 - recon: Subdomain enumeration, OSINT, DNS lookup, WHOIS (tools: amass, subfinder, whois, clatscope, bbot)
 - scan: Port scanning, service detection, web discovery (tools: nmap, masscan, httpx, gobuster, ffuf)
 - vuln: Vulnerability scanning, CVE detection (tools: nuclei, nikto, wpscan, testssl)
 - exploit: Exploitation, SQL injection, brute force (tools: sqlmap, hydra, metasploit, searchsploit)
 - postexploit: Post-exploitation, privilege escalation (tools: linpeas, mimikatz, bloodhound)
-- report: Generate reports and summaries
+- system: System utilities and helpers
 
 ROUTING LOGIC:
 - If no data gathered yet → recon
@@ -233,7 +233,7 @@ ROUTING LOGIC:
 - If ports found but no vulnerabilities → vuln
 - If vulnerabilities found → exploit
 - If shell obtained → postexploit
-- If asked for summary/report → report
+- Report agent is called separately after 6 agents complete
 
 Which agent should handle this task? Return ONLY the agent name (one word)."""
 
@@ -243,7 +243,9 @@ Which agent should handle this task? Return ONLY the agent name (one word)."""
             response = llm.generate(prompt, timeout=15, stream=False).strip().lower()
             
             # Extract agent name - find first valid agent in response
-            valid_agents = ["recon", "scan", "vuln", "exploit", "postexploit", "report", "system"]
+            # FunctionGemma manages 7 agents (excluding report agent)
+            # Report agent is only called after 6 agents complete
+            valid_agents = ["recon", "scan", "vuln", "exploit", "postexploit", "system"]
             
             for agent in valid_agents:
                 if agent in response:
@@ -297,8 +299,17 @@ Which agent should handle this task? Return ONLY the agent name (one word)."""
         """
         analyzer_next_tool = context.get("analyzer_next_tool")
         
-        # Select agent using LLM
+        # Check if planner model is FunctionGemma - use function calling
+        from app.llm.config import get_planner_model
+        planner_model = get_planner_model()
+        
+        # Select agent using LLM (exclude report agent for FunctionGemma)
         agent = self.route(query, context)
+        
+        # Ensure report agent is not selected when using FunctionGemma
+        if "functiongemma" in planner_model.lower() and agent.AGENT_NAME == "report":
+            # Fallback to recon if report was selected (shouldn't happen with updated valid_agents)
+            agent = self.agents["recon"]
         
         # If "do the next step" and analyzer has recommendation, pass it to agent
         query_lower = query.lower()
@@ -306,12 +317,8 @@ Which agent should handle this task? Return ONLY the agent name (one word)."""
             context["user_requested_tool"] = analyzer_next_tool
             context["user_requested_target"] = context.get("analyzer_next_target")
         
-        # Check if planner model is FunctionGemma - use function calling
-        from app.llm.config import get_planner_model
-        planner_model = get_planner_model()
-        
         if "functiongemma" in planner_model.lower():
-            # Use FunctionGemma with function calling
+            # Use FunctionGemma with function calling (7 agents, excluding report)
             return self._plan_with_functiongemma(query, context, agent)
         
         # Get agent's plan - with user tool priority (regular method)

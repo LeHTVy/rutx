@@ -13,8 +13,8 @@ logger = get_logger()
 from app.agent.core import (
     get_context_manager, get_context_aggregator,
     get_phase_manager, PHASE_NAMES, PhaseGateAction,
-    get_checklist_manager,
 )
+from app.agent.analyzer import get_checklist_manager, Task
 from app.agent.utils import (
     get_plan_validator, get_fallback_manager,
 )
@@ -81,7 +81,7 @@ class PlannerTool(AgentTool):
         if checklist:
             # Load checklist into manager if not already loaded
             if not checklist_manager.get_checklist(session_id):
-                from app.agent.core import Task
+                from app.agent.analyzer import Task
                 for task_data in checklist:
                     task = Task.from_dict(task_data)
                     checklist_manager.add_task(task, session_id)

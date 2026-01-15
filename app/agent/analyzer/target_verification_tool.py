@@ -285,29 +285,48 @@ If information is not available, use "N/A" for that field. Return ONLY the JSON 
                 logger.warning(f"Failed to extract company info: {e}")
             
             # 5. LLM Analysis with Full Context
-            verification_prompt = format_prompt(
-                "target_verification",
-                entity_name=entity_name,
-                original_query=query,
-                user_context=user_context or "None provided",
-                research_str=research_str
-            )
+            # OPTIMIZATION: If we already have company_info with website domain, we can extract domain directly
+            # and skip the expensive verification prompt (saves ~45s)
+            extracted_domain_from_company = None
+            if company_info and company_info.get("website") and company_info.get("website") != "N/A":
+                website = company_info.get("website", "").strip()
+                # Extract domain from website URL if it's a full URL
+                domain_match = re.search(r'(?:https?://)?([a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}', website)
+                if domain_match:
+                    extracted_domain_from_company = domain_match.group(1) if domain_match.lastindex else domain_match.group(0)
             
-            response = llm.generate(verification_prompt, timeout=45, stream=False, show_content=False).strip()
-            
-            # Parse verification JSON (with strict=False for control chars)
-            analysis = {}
-            try:
-                clean_response = re.sub(r'^```json\s*', '', response, flags=re.MULTILINE)
-                clean_response = re.sub(r'^```\s*', '', clean_response, flags=re.MULTILINE)
-                clean_response = re.sub(r'\s*```$', '', clean_response)
-                clean_response = re.sub(r'//.*$', '', clean_response, flags=re.MULTILINE)  # Remove comments
+            # If we have a clear domain from company_info, skip expensive verification prompt
+            if extracted_domain_from_company and "." in extracted_domain_from_company:
+                logger.info(f"Found domain from company info: {extracted_domain_from_company}, skipping verification prompt")
+                analysis = {
+                    "status": "clear",
+                    "primary_domain": extracted_domain_from_company
+                }
+            else:
+                # Fallback to verification prompt if no clear domain from company_info
+                verification_prompt = format_prompt(
+                    "target_verification",
+                    entity_name=entity_name,
+                    original_query=query,
+                    user_context=user_context or "None provided",
+                    research_str=research_str
+                )
                 
-                json_match = re.search(r'\{.*\}', clean_response, re.DOTALL)
-                if json_match:
-                    analysis = json.loads(json_match.group(), strict=False)
-            except Exception as e:
-                logger.warning(f"Verification parse error: {e}")
+                response = llm.generate(verification_prompt, timeout=45, stream=False, show_content=False).strip()
+                
+                # Parse verification JSON (with strict=False for control chars)
+                analysis = {}
+                try:
+                    clean_response = re.sub(r'^```json\s*', '', response, flags=re.MULTILINE)
+                    clean_response = re.sub(r'^```\s*', '', clean_response, flags=re.MULTILINE)
+                    clean_response = re.sub(r'\s*```$', '', clean_response)
+                    clean_response = re.sub(r'//.*$', '', clean_response, flags=re.MULTILINE)  # Remove comments
+                    
+                    json_match = re.search(r'\{.*\}', clean_response, re.DOTALL)
+                    if json_match:
+                        analysis = json.loads(json_match.group(), strict=False)
+                except Exception as e:
+                    logger.warning(f"Verification parse error: {e}")
             
             status = analysis.get("status", "unknown")
             

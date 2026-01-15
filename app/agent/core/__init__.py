@@ -37,7 +37,9 @@ from .target_collector import (
     TargetCollector,
     get_target_collector,
 )
-from .checklist_manager import (
+# Checklist moved to app.agent.analyzer
+# Import from analyzer for backward compatibility
+from app.agent.analyzer import (
     ChecklistManager,
     get_checklist_manager,
     Task,
@@ -76,7 +78,7 @@ __all__ = [
     "TargetCollector",
     "get_target_collector",
     
-    # Checklist Management
+    # Checklist Management (moved to analyzer, re-exported for backward compatibility)
     "ChecklistManager",
     "get_checklist_manager",
     "Task",

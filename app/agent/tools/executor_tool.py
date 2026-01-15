@@ -338,6 +338,14 @@ class ExecutorTool(AgentTool):
             
             results[tool_name] = execution_result
             
+            # #region agent log
+            try:
+                import json
+                with open("snode_debug.log", "a") as f:
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H2","location":"executor_tool.py:339","message":"Tool execution result","data":{"tool_name":tool_name,"success":execution_result.get("success"),"has_output":bool(execution_result.get("output")),"output_length":len(str(execution_result.get("output",""))) if execution_result.get("output") else 0},"timestamp":int(__import__("time").time()*1000)})+"\n")
+            except: pass
+            # #endregion
+            
             # Update context
             if execution_result.get("success"):
                 output = execution_result.get("output", "")
@@ -488,6 +496,14 @@ class ExecutorTool(AgentTool):
                 session.agent_context.add_tool_run(tool)
         except Exception:
             pass  # Shared memory is optional enhancement
+        
+        # #region agent log
+        try:
+            import json
+            with open("snode_debug.log", "a") as f:
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H2","location":"executor_tool.py:501","message":"Executor final results","data":{"tools_executed":list(results.keys()),"successful_tools":[t for t,r in results.items() if r.get("success")],"failed_tools":[t for t,r in results.items() if not r.get("success")]},"timestamp":int(__import__("time").time()*1000)})+"\n")
+        except: pass
+        # #endregion
         
         return {
             "execution_results": results,
