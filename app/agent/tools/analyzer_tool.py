@@ -350,6 +350,14 @@ Check tool installation with `/tools`
         tools_run_list = context.get('tools_run', [])
         tools_run_str = ", ".join(tools_run_list) if tools_run_list else "none"
         
+        # #region agent log
+        try:
+            import json
+            with open("snode_debug.log", "a") as f:
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H3","location":"analyzer_tool.py:354","message":"Before building analyzer prompt","data":{"subdomain_count":context.get('subdomain_count',0),"has_subdomains":context.get('has_subdomains',False),"results_keys":list(results.keys()),"amass_in_results":'amass' in results,"amass_success":results.get('amass',{}).get('success',False) if 'amass' in results else False},"timestamp":int(__import__("time").time()*1000)})+"\n")
+        except: pass
+        # #endregion
+        
         prompt = format_prompt("analyzer",
             results_str=results_str,
             cve_context=cve_context,
@@ -698,7 +706,7 @@ Check tool installation with `/tools`
                     session_id = context.get("session_id", "default")
                     
                     # Mark current task as completed with results
-                    checklist_manager.mark_completed(current_task_id, execution_results, session_id)
+                    checklist_manager.mark_completed(current_task_id, results, session_id)
                     
                     # Check if checklist is complete
                     if checklist_manager.is_complete(session_id):

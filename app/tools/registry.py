@@ -315,7 +315,12 @@ class ToolRegistry:
         handler_params = params.copy()
         handler_params["command"] = command
         
-        handler_result = handler_execute(tool, handler_params, None)
+        # Try handler with pattern: tool_command (e.g., "httpx_probe")
+        handler_result = handler_execute(f"{tool}_{command}", handler_params, None)
+        # If not found, try just tool name (e.g., "httpx")
+        if handler_result is None:
+            handler_result = handler_execute(tool, handler_params, None)
+        
         if handler_result is not None:
             # Handler found and executed
             start_time = time.time()
