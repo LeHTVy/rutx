@@ -252,42 +252,19 @@ Return ONLY the phase number (1-6):"""
             response = self.llm.generate(prompt, timeout=15, stream=False)
             response_clean = response.strip().upper()
             
-            # #region agent log
-            import json
-            with open('/home/hellrazor/rutx/.cursor/debug.log', 'a') as f:
-                f.write(json.dumps({"id":f"log_llm_response_{id(response)}","timestamp":int(__import__('time').time()*1000),"location":"intelligence.py:253","message":"LLM response for intent classification","data":{"query":query,"response":response,"response_clean":response_clean},"sessionId":"debug-session","runId":"run1","hypothesisId":"A"})+"\n")
-            # #endregion
-            
             # Extract intent from response - check QUESTION first (more specific)
             if "QUESTION" in response_clean:
-                # #region agent log
-                with open('/home/hellrazor/rutx/.cursor/debug.log', 'a') as f:
-                    f.write(json.dumps({"id":f"log_intent_question_{id(response)}","timestamp":int(__import__('time').time()*1000),"location":"intelligence.py:257","message":"Intent classified as QUESTION","data":{"query":query,"response_clean":response_clean},"sessionId":"debug-session","runId":"run1","hypothesisId":"A"})+"\n")
-                # #endregion
                 return "QUESTION"
             if "MEMORY" in response_clean:
                 return "MEMORY_QUERY"
             if "SECURITY" in response_clean or "TASK" in response_clean:
-                # #region agent log
-                with open('/home/hellrazor/rutx/.cursor/debug.log', 'a') as f:
-                    f.write(json.dumps({"id":f"log_intent_security_{id(response)}","timestamp":int(__import__('time').time()*1000),"location":"intelligence.py:261","message":"Intent classified as SECURITY_TASK","data":{"query":query,"response_clean":response_clean},"sessionId":"debug-session","runId":"run1","hypothesisId":"A"})+"\n")
-                # #endregion
                 return "SECURITY_TASK"
             
             # Default to QUESTION for unclear cases (safer than assuming SECURITY_TASK)
-            # #region agent log
-            with open('/home/hellrazor/rutx/.cursor/debug.log', 'a') as f:
-                f.write(json.dumps({"id":f"log_intent_default_{id(response)}","timestamp":int(__import__('time').time()*1000),"location":"intelligence.py:264","message":"Intent defaulted to QUESTION","data":{"query":query,"response_clean":response_clean},"sessionId":"debug-session","runId":"run1","hypothesisId":"A"})+"\n")
-            # #endregion
             return "QUESTION"
             
-        except Exception as e:
+        except Exception:
             # On timeout/error, default to QUESTION (safer than SECURITY_TASK)
-            # #region agent log
-            import json
-            with open('/home/hellrazor/rutx/.cursor/debug.log', 'a') as f:
-                f.write(json.dumps({"id":f"log_intent_error_{id(str(e))}","timestamp":int(__import__('time').time()*1000),"location":"intelligence.py:268","message":"Intent classification error","data":{"query":query,"error":str(e)},"sessionId":"debug-session","runId":"run1","hypothesisId":"A"})+"\n")
-            # #endregion
             return "QUESTION"
     
     def get_relevant_cves(self, technologies: List[str]) -> List[Dict]:

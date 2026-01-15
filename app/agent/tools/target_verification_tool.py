@@ -37,17 +37,7 @@ class TargetVerificationTool(AgentTool):
             intent = self.state.get("intent", "") if self.state else ""
         
         # Only verify for security tasks
-        # #region agent log
-        import json
-        with open('/home/hellrazor/rutx/.cursor/debug.log', 'a') as f:
-            f.write(json.dumps({"id":f"log_intent_check_{id(intent)}","timestamp":int(__import__('time').time()*1000),"location":"target_verification_tool.py:40","message":"Intent check before verification","data":{"intent":intent,"query":query,"will_proceed":intent=="security_task"},"sessionId":"debug-session","runId":"run1","hypothesisId":"C"})+"\n")
-        # #endregion
-        
         if intent != "security_task":
-            # #region agent log
-            with open('/home/hellrazor/rutx/.cursor/debug.log', 'a') as f:
-                f.write(json.dumps({"id":f"log_early_return_{id(intent)}","timestamp":int(__import__('time').time()*1000),"location":"target_verification_tool.py:41","message":"Early return - intent not security_task","data":{"intent":intent,"query":query},"sessionId":"debug-session","runId":"run1","hypothesisId":"C"})+"\n")
-            # #endregion
             return {}
         
         # helper to proceed to planner
@@ -138,12 +128,6 @@ class TargetVerificationTool(AgentTool):
             confidence = extraction.get("confidence", "medium")
             interpretation = extraction.get("interpretation", "")
             
-            # #region agent log
-            import json
-            with open('/home/hellrazor/rutx/.cursor/debug.log', 'a') as f:
-                f.write(json.dumps({"id":f"log_extraction_{id(entity_name)}","timestamp":int(__import__('time').time()*1000),"location":"target_verification_tool.py:131","message":"LLM extraction result","data":{"entity_name":entity_name,"search_query":search_query,"resolved_domain":resolved_domain,"has_entity":bool(entity_name and len(entity_name)>=2)},"sessionId":"debug-session","runId":"run1","hypothesisId":"E"})+"\n")
-            # #endregion
-            
             # Log typo corrections
             if corrected_from:
                 logger.info(f"Corrected typo: '{corrected_from}' → '{entity_name or resolved_domain}'")
@@ -199,19 +183,7 @@ class TargetVerificationTool(AgentTool):
                 search_query = f"{entity_name} {user_context} official website".strip()
             
             logger.info(f"Researching: {search_query}...")
-            
-            # #region agent log
-            import json
-            with open('/home/hellrazor/rutx/.cursor/debug.log', 'a') as f:
-                f.write(json.dumps({"id":f"log_before_search_{id(search_query)}","timestamp":int(__import__('time').time()*1000),"location":"target_verification_tool.py:186","message":"Before web_search call","data":{"search_query":search_query,"entity_name":entity_name,"user_context":user_context},"sessionId":"debug-session","runId":"run1","hypothesisId":"D"})+"\n")
-            # #endregion
-            
             research = web_search(search_query, max_results=5)
-            
-            # #region agent log
-            with open('/home/hellrazor/rutx/.cursor/debug.log', 'a') as f:
-                f.write(json.dumps({"id":f"log_after_search_{id(research)}","timestamp":int(__import__('time').time()*1000),"location":"target_verification_tool.py:188","message":"After web_search call","data":{"search_query":search_query,"success":research.get("success") if research else False,"result_count":len(research.get("snippets",[])) if research else 0,"error":research.get("error") if research else None},"sessionId":"debug-session","runId":"run1","hypothesisId":"D"})+"\n")
-            # #endregion
             
             if not research or not research.get("success"):
                 logger.warning("No search results. Proceeding to planner.")
