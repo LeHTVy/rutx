@@ -55,6 +55,10 @@ class CommandTemplate:
     requires_sudo: bool = False
     output_format: str = "text"      # text, json, xml
     success_codes: List[int] = field(default_factory=lambda: [0])
+    phase: Optional[int] = None       # PTES phase (1-6) - None = use tool category default
+    phase_reason: Optional[str] = None  # Explanation why this command is in this phase
+    description: Optional[str] = None  # Human-readable description of what this command does
+    use_cases: Optional[List[str]] = None  # List of use cases for this command (e.g., ["quick port check", "initial reconnaissance"])
 
 
 @dataclass

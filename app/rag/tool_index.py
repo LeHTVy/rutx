@@ -1,7 +1,6 @@
 """
 Tool Index - ChromaDB-based Tool Registry
 
-Stores tool metadata for retrieval-based selection.
 """
 import chromadb
 from chromadb.config import Settings
@@ -362,11 +361,20 @@ TOOL_DEFINITIONS = [
 
 
 class ToolIndex:
-    """ChromaDB-based tool index for retrieval.
+    """
+    ChromaDB-based tool index for retrieval.
+    
+    ⚠️ DEPRECATED: Use UnifiedRAG instead.
     
     Can operate in two modes:
     - Legacy: Uses TOOL_DEFINITIONS (tool-level indexing)
-    - Unified: Delegates to UnifiedRAG (command-level indexing)
+    - Unified: Delegates to UnifiedRAG (command-level indexing) - RECOMMENDED
+    
+    Migration guide:
+        Old: tool_index = ToolIndex()
+        New: from app.rag.unified_memory import get_unified_rag
+              rag = get_unified_rag()
+              results = rag.search_tools(query)
     """
     
     def __init__(self, use_unified: bool = True):

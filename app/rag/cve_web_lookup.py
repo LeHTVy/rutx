@@ -12,6 +12,9 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 from app.tools.custom.web_research import web_search, search_and_format
 from app.llm.client import OllamaClient
+from app.ui import get_logger
+
+logger = get_logger()
 
 
 class CVEWebLookup:

@@ -92,82 +92,7 @@ class ValidationResult:
         return self
 
 
-# Tool capability mappings
-TOOL_CAPABILITIES = {
-    # Reconnaissance
-    "amass": ["subdomain", "passive_recon", "dns"],
-    "subfinder": ["subdomain", "passive_recon"],
-    "assetfinder": ["subdomain", "passive_recon"],
-    "bbot": ["subdomain", "passive_recon", "osint"],
-    "recon-ng": ["subdomain", "passive_recon", "osint"],
-    "theharvester": ["subdomain", "passive_recon", "osint", "email"],
-    "clatscope": ["osint", "whois", "ip_lookup", "phone", "email", "tech_detection"],
-    "securitytrails": ["osint", "subdomain", "dns"],
-    "shodan": ["osint", "device_search", "ip_lookup"],
-    "whois": ["osint", "dns"],
-    "dig": ["dns"],
-    "dnsrecon": ["dns", "subdomain"],
-    
-    # Scanning
-    "nmap": ["port_scan", "service_detection", "os_detection", "vuln_scan"],
-    "masscan": ["port_scan", "fast_scan"],
-    "rustscan": ["port_scan", "fast_scan"],
-    "httpx": ["http_probe", "tech_detection"],
-    "gobuster": ["directory_bruteforce", "dns_bruteforce", "vhost"],
-    
-    # Directory/Content Discovery
-    "ffuf": ["directory_bruteforce", "fuzzing", "parameter"],
-    "dirsearch": ["directory_bruteforce"],
-    "feroxbuster": ["directory_bruteforce"],
-    "katana": ["directory_bruteforce", "web_discovery"],
-    
-    # Vulnerability Scanning
-    "nuclei": ["vuln_scan", "cve_detection", "template_scan"],
-    "nikto": ["vuln_scan", "web_server"],
-    "wpscan": ["wordpress", "cms_scan"],
-    
-    # Exploitation
-    "sqlmap": ["sqli", "database"],
-    "hydra": ["brute_force", "password"],
-    "medusa": ["brute_force", "password"],
-    "searchsploit": ["exploit_search"],
-    "metasploit": ["exploit_execution", "payload_generation"],
-    
-    # Post-Exploitation
-    "linpeas": ["privesc", "linux"],
-    "winpeas": ["privesc", "windows"],
-    "crackmapexec": ["lateral_movement", "smb", "password_spray"],
-    
-    # Security Tech Detection
-    "wafw00f": ["tech_detection", "waf_detection"],
-    "whatweb": ["tech_detection", "web_server"],
-}
-
-# Required parameters for common tools
-TOOL_REQUIRED_PARAMS = {
-    "nmap": ["target"],
-    "masscan": ["target", "ports"],
-    "nuclei": ["target"],
-    "gobuster": ["url", "wordlist"],
-    "ffuf": ["url"],
-    "sqlmap": ["url"],
-    "hydra": ["target", "user"],
-    "wpscan": ["url"],
-    "nikto": ["host"],
-}
-
-# Tool fallbacks
-TOOL_FALLBACKS = {
-    "nmap": ["masscan", "rustscan"],
-    "masscan": ["nmap", "rustscan"],
-    "gobuster": ["ffuf", "dirsearch", "feroxbuster"],
-    "ffuf": ["gobuster", "dirsearch"],
-    "nuclei": ["nikto"],
-    "amass": ["subfinder", "assetfinder"],
-    "subfinder": ["amass", "assetfinder"],
-    "sqlmap": ["ghauri"],
-    "hydra": ["medusa"],
-}
+# No hardcoded mappings - use tool registry and other services instead
 
 
 class ToolValidator:
@@ -205,27 +130,50 @@ class ToolValidator:
         
         # Check if tool exists in registry
         if tool not in self.registry.tools:
+            # Try to get fallback from fallback_manager
+            fallback_suggestion = ""
+            try:
+                from app.agent.utils.fallback_manager import get_fallback_manager
+                fallback_mgr = get_fallback_manager()
+                fallback_tool = fallback_mgr.get_fallback(tool)
+                if fallback_tool:
+                    fallback_suggestion = f" or use alternative: {fallback_tool}"
+            except Exception:
+                pass
+            
             result.add_error(
                 code="TOOL_NOT_REGISTERED",
                 message=f"Tool '{tool}' is not registered",
                 field="tool",
-                suggestion=f"Check tool name or use alternative: {', '.join(TOOL_FALLBACKS.get(tool, [])[:2])}"
+                suggestion=f"Check tool name{fallback_suggestion}"
             )
             return result
         
         # Check if tool is available (installed)
         if not self.registry.is_available(tool):
-            fallbacks = TOOL_FALLBACKS.get(tool, [])
-            available_fallbacks = [t for t in fallbacks if self.registry.is_available(t)]
-            
-            if available_fallbacks:
-                result.add_warning(
-                    code="TOOL_NOT_INSTALLED",
-                    message=f"Tool '{tool}' is not installed",
-                    field="tool",
-                    suggestion=f"Use alternative: {available_fallbacks[0]}"
-                )
-            else:
+            # Use fallback_manager instead of hardcoded TOOL_FALLBACKS
+            try:
+                from app.agent.utils.fallback_manager import get_fallback_manager
+                fallback_mgr = get_fallback_manager()
+                fallback_tool = fallback_mgr.get_fallback(tool)
+                
+                if fallback_tool:
+                    result.add_warning(
+                        code="TOOL_NOT_INSTALLED",
+                        message=f"Tool '{tool}' is not installed",
+                        field="tool",
+                        suggestion=f"Use alternative: {fallback_tool}"
+                    )
+                else:
+                    hint = self.registry.get_install_hint(tool)
+                    result.add_error(
+                        code="TOOL_NOT_INSTALLED",
+                        message=f"Tool '{tool}' is not installed",
+                        field="tool",
+                        suggestion=f"Install with: {hint}" if hint else "Install the tool first"
+                    )
+            except Exception:
+                # Fallback if fallback_manager unavailable
                 hint = self.registry.get_install_hint(tool)
                 result.add_error(
                     code="TOOL_NOT_INSTALLED",
@@ -240,6 +188,9 @@ class ToolValidator:
         """
         Check if all required parameters are present.
         
+        Extracts required params from tool registry CommandTemplate.args.
+        No hardcode - uses tool registry metadata.
+        
         Args:
             tool: Tool name
             command: Command name
@@ -250,8 +201,30 @@ class ToolValidator:
         """
         result = ValidationResult(is_valid=True)
         
-        # Get required params from our mapping
-        required = TOOL_REQUIRED_PARAMS.get(tool, [])
+        # Get tool spec from registry
+        spec = self.registry.tools.get(tool.lower())
+        if not spec:
+            return result  # Unknown tool, skip validation
+        
+        # Get command template
+        template = spec.commands.get(command)
+        if not template:
+            # Try default command
+            template = spec.commands.get("default") or (list(spec.commands.values())[0] if spec.commands else None)
+        
+        if not template:
+            return result  # No template, skip validation
+        
+        # Extract required params from template args (e.g., "{target}", "{domain}")
+        import re
+        required = []
+        for arg in template.args:
+            # Find {param} placeholders
+            matches = re.findall(r'\{(\w+)\}', arg)
+            required.extend(matches)
+        
+        # Remove duplicates
+        required = list(set(required))
         
         # Check each required param
         missing = []
@@ -277,6 +250,8 @@ class ToolValidator:
         """
         Check if tool can actually do what we're asking.
         
+        Uses tool_capability_service instead of hardcoded TOOL_CAPABILITIES.
+        
         Args:
             tool: Tool name
             task_type: What we want to do (e.g., "subdomain", "port_scan")
@@ -286,39 +261,56 @@ class ToolValidator:
         """
         result = ValidationResult(is_valid=True)
         
-        capabilities = TOOL_CAPABILITIES.get(tool, [])
-        
-        if not capabilities:
-            # Unknown tool - can't validate
-            result.add_info(
-                code="UNKNOWN_CAPABILITIES",
-                message=f"Unknown capabilities for '{tool}'"
-            )
-            return result
-        
-        # Check if task matches capabilities
-        task_lower = task_type.lower().replace(" ", "_")
-        
-        # Fuzzy match
-        matches = any(
-            task_lower in cap or cap in task_lower
-            for cap in capabilities
-        )
-        
-        if not matches:
-            # Find better tool
-            better_tools = []
-            for t, caps in TOOL_CAPABILITIES.items():
-                if task_lower in caps or any(task_lower in c for c in caps):
-                    if self.registry.is_available(t):
-                        better_tools.append(t)
+        # Use tool_capability_service instead of hardcode
+        try:
+            from app.agent.utils.tool_capability_service import get_tool_capability_service
+            capability_service = get_tool_capability_service()
             
-            result.add_warning(
-                code="CAPABILITY_MISMATCH",
-                message=f"Tool '{tool}' may not be ideal for '{task_type}'",
-                field="tool",
-                suggestion=f"Consider: {', '.join(better_tools[:2])}" if better_tools else None
-            )
+            # Get tool category from registry
+            spec = self.registry.tools.get(tool.lower())
+            if not spec:
+                result.add_info(
+                    code="UNKNOWN_TOOL",
+                    message=f"Unknown tool '{tool}'"
+                )
+                return result
+            
+            # Check if task matches category (simplified validation)
+            task_lower = task_type.lower().replace(" ", "_")
+            category = spec.category.value if spec.category else ""
+            
+            # Basic category matching
+            category_matches = {
+                "recon": ["subdomain", "dns", "osint", "recon"],
+                "scanning": ["port", "scan", "service"],
+                "vulnerability": ["vuln", "cve", "security"],
+                "enumeration": ["enum", "directory", "fuzz"],
+            }
+            
+            matches = False
+            for cat_key, keywords in category_matches.items():
+                if cat_key in category.lower():
+                    matches = any(kw in task_lower for kw in keywords)
+                    if matches:
+                        break
+            
+            if not matches:
+                # Find better tools from same category
+                better_tools = []
+                for t_name, t_spec in self.registry.tools.items():
+                    if t_spec.category == spec.category and t_spec.is_available:
+                        if t_name != tool:
+                            better_tools.append(t_name)
+                
+                result.add_warning(
+                    code="CAPABILITY_MISMATCH",
+                    message=f"Tool '{tool}' may not be ideal for '{task_type}'",
+                    field="tool",
+                    suggestion=f"Consider: {', '.join(better_tools[:2])}" if better_tools else None
+                )
+        except Exception:
+            # Fallback: skip validation if service unavailable
+            pass
         
         return result
     
@@ -398,8 +390,19 @@ class PlanValidator:
                  context.get("target_ip"))
         
         if not target and tools:
-            # Check if any tool needs a target
-            target_required_tools = [t for t in tools if t in TOOL_REQUIRED_PARAMS]
+            # Check if any tool needs a target (extract from registry)
+            target_required_tools = []
+            for t in tools:
+                spec = self._tool_validator.registry.tools.get(t.lower())
+                if spec:
+                    # Check if any command template has {target}, {domain}, or {host}
+                    for cmd_template in spec.commands.values():
+                        import re
+                        args_str = " ".join(cmd_template.args)
+                        if re.search(r'\{target\}|\{domain\}|\{host\}', args_str):
+                            target_required_tools.append(t)
+                            break
+            
             if target_required_tools:
                 result.add_error(
                     code="NO_TARGET",
@@ -430,50 +433,82 @@ class PlanValidator:
     
     def _validate_phase_progression(self, tools: List[str], current_phase: int, 
                                     context: Dict[str, Any]) -> ValidationResult:
-        """Check if tools match expected phase progression."""
+        """
+        Check if tools match expected phase progression.
+        
+        Uses phase metadata from CommandTemplate if available, otherwise falls back to tool category.
+        No hardcode - uses tool registry metadata.
+        """
         result = ValidationResult(is_valid=True)
         
-        # Phase tool mappings
-        phase_tools = {
-            1: {"amass", "subfinder", "assetfinder", "clatscope", "whois"},
-            2: {"nmap", "masscan", "httpx", "gobuster", "ffuf", "dirsearch"},
-            3: {"nuclei", "nikto", "wpscan", "wafw00f"},
-            4: {"sqlmap", "hydra", "searchsploit", "metasploit"},
-            5: {"linpeas", "winpeas", "mimikatz", "crackmapexec", "bloodhound"},
-            6: set(),  # Reporting - no tools
-        }
+        registry = self._tool_validator.registry
         
-        # Check for phase skipping
-        expected_phase_tools = phase_tools.get(current_phase, set())
-        
+        # Check for phase skipping using command phase metadata
         for tool in tools:
-            # Find which phase this tool belongs to
-            tool_phase = None
-            for phase, phase_tool_set in phase_tools.items():
-                if tool in phase_tool_set:
-                    tool_phase = phase
-                    break
+            spec = registry.tools.get(tool.lower())
+            if not spec:
+                continue
             
-            if tool_phase and tool_phase > current_phase + 1:
+            # Get command from plan (if specified)
+            # For now, use first command or default
+            command_name = "default"  # Could be extracted from plan if available
+            template = spec.commands.get(command_name) or (list(spec.commands.values())[0] if spec.commands else None)
+            
+            if template and template.phase:
+                # Use phase from command template metadata
+                tool_phase = template.phase
+                phase_reason = template.phase_reason or f"Command '{command_name}' is designed for phase {tool_phase}"
+            else:
+                # Fallback to tool category-based phase
+                try:
+                    from app.agent.core.phase_manager import get_tool_phase
+                    tool_phase = get_tool_phase(tool)
+                    phase_reason = f"Tool category suggests phase {tool_phase}"
+                except ImportError:
+                    continue
+            
+            if tool_phase > current_phase + 1:
                 result.add_warning(
                     code="PHASE_SKIP",
-                    message=f"Tool '{tool}' is for phase {tool_phase}, but current phase is {current_phase}",
-                    suggestion=f"Complete phase {current_phase} first, or confirm phase skip"
+                    message=f"Tool '{tool}' command is for phase {tool_phase}, but current phase is {current_phase}",
+                    suggestion=f"Complete phase {current_phase} first, or confirm phase skip. {phase_reason}"
                 )
         
-        # Check prerequisites
+        # Check prerequisites using tool categories instead of hardcoded lists
+        registry = self._tool_validator.registry
+        
+        # Check if we have scanning tools but no recon data
         if current_phase >= 2 and not context.get("subdomains"):
-            recon_tools = {"amass", "subfinder", "assetfinder"}
-            scan_tools = set(tools) & {"nmap", "masscan", "nuclei", "nikto"}
-            if scan_tools and not (set(tools) & recon_tools):
+            from app.tools.registry import ToolCategory
+            
+            # Find scanning tools (category SCANNING or VULN)
+            scan_tools = []
+            recon_tools = []
+            for tool in tools:
+                spec = registry.tools.get(tool.lower())
+                if spec and spec.category:
+                    if spec.category in [ToolCategory.SCANNING, ToolCategory.VULN]:
+                        scan_tools.append(tool)
+                    elif spec.category in [ToolCategory.RECON, ToolCategory.OSINT]:
+                        recon_tools.append(tool)
+            
+            if scan_tools and not recon_tools:
                 result.add_info(
                     code="NO_RECON_DATA",
                     message="No subdomains discovered yet - scanning main domain only",
                     suggestion="Run subdomain enumeration first for broader coverage"
                 )
         
+        # Check if we have vuln tools but no port data
         if current_phase >= 3 and not context.get("open_ports"):
-            vuln_tools = set(tools) & {"nuclei", "nikto", "wpscan"}
+            from app.tools.registry import ToolCategory
+            
+            vuln_tools = []
+            for tool in tools:
+                spec = registry.tools.get(tool.lower())
+                if spec and spec.category == ToolCategory.VULN:
+                    vuln_tools.append(tool)
+            
             if vuln_tools:
                 result.add_info(
                     code="NO_PORT_DATA",

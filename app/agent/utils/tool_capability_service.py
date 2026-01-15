@@ -1,71 +1,71 @@
 """
-Tool Capability Service
-=======================
+Tool Capability Service - Simplified Version
 
-Centralized service for tool capability detection and phase flag management.
-Replaces hardcoded tool lists in graph.py with metadata-driven logic.
+Uses tool registry category instead of hardcoded capabilities.
+Main purpose: Update context flags based on tool category from registry.
+
+Focus: No hardcode - uses tool registry metadata.
 """
-from typing import Dict, Any, List, Set, Optional
-from app.agent.utils.validators import TOOL_CAPABILITIES
+from typing import Dict, Any
+from app.tools.registry import get_registry, ToolCategory
+
+
+# Map tool category to context flags (no hardcode - uses registry)
+CATEGORY_TO_FLAGS = {
+    ToolCategory.RECON: ["has_subdomains"],  # Recon tools typically find subdomains
+    ToolCategory.OSINT: ["has_subdomains"],  # OSINT tools also find subdomains
+    ToolCategory.SCANNING: ["has_ports"],  # Scanning tools find ports
+    ToolCategory.VULN: ["vuln_scan_done"],  # Vuln tools complete vuln scanning
+    ToolCategory.ENUM: ["has_web_discovery"],  # Enum tools discover web content
+}
+
+# Tools that can detect security tech (WAF/CDN) - minimal hardcode for special cases
+SECURITY_TECH_DETECTION_TOOLS = {
+    "httpx", "wafw00f", "whatweb", "clatscope"
+}
 
 
 class ToolCapabilityService:
     """
     Service for detecting tool capabilities and setting phase flags.
     
-    Uses TOOL_CAPABILITIES metadata instead of hardcoded lists.
+    Uses tool registry category instead of hardcoded capabilities.
     """
     
-    # Capability to flag mappings
-    CAPABILITY_FLAGS = {
-        "subdomain": "has_subdomains",
-        "passive_recon": "has_subdomains",  # Also sets has_subdomains
-        "port_scan": "has_ports",
-        "fast_scan": "has_ports",  # Also sets has_ports
-        "vuln_scan": "vuln_scan_done",
-        "cve_detection": "vuln_scan_done",  # Also sets vuln_scan_done
-        "directory_bruteforce": "has_web_discovery",
-        "fuzzing": "has_web_discovery",
-        "http_probe": "has_web_discovery",
-    }
-    
-    # Tools that can detect security tech (WAF/CDN)
-    SECURITY_TECH_DETECTION_TOOLS = {
-        "httpx", "wafw00f", "whatweb", "clatscope"
-    }
-    
     @staticmethod
-    def get_tool_capabilities(tool_name: str) -> List[str]:
-        """Get capabilities for a tool from metadata."""
-        return TOOL_CAPABILITIES.get(tool_name.lower(), [])
+    def _get_tool_category(tool_name: str) -> ToolCategory:
+        """Get tool category from registry."""
+        registry = get_registry()
+        spec = registry.tools.get(tool_name.lower())
+        if spec and spec.category:
+            return spec.category
+        return None
     
     @staticmethod
     def should_set_flag(tool_name: str, flag_name: str) -> bool:
         """
-        Check if tool should set a specific flag based on capabilities.
+        Check if tool should set a specific flag based on category.
         
         Args:
             tool_name: Name of the tool
             flag_name: Name of flag to check (has_subdomains, has_ports, etc.)
             
         Returns:
-            True if tool has capability that maps to this flag
+            True if tool category maps to this flag
         """
-        capabilities = ToolCapabilityService.get_tool_capabilities(tool_name)
+        category = ToolCapabilityService._get_tool_category(tool_name)
+        if not category:
+            return False
         
-        for capability in capabilities:
-            mapped_flag = ToolCapabilityService.CAPABILITY_FLAGS.get(capability)
-            if mapped_flag == flag_name:
-                return True
-        
-        return False
+        flags = CATEGORY_TO_FLAGS.get(category, [])
+        return flag_name in flags
     
     @staticmethod
     def update_context_flags(tool_name: str, context: Dict[str, Any], params: Dict[str, Any] = None) -> None:
         """
-        Update context flags based on tool capabilities.
+        Update context flags based on tool category from registry.
         
-        Replaces hardcoded tool lists with capability-based detection.
+        No hardcode - uses tool registry metadata.
         
         Args:
             tool_name: Name of the tool that was executed
@@ -73,22 +73,28 @@ class ToolCapabilityService:
             params: Tool parameters (optional, for setting last_domain/target)
         """
         params = params or {}
+        category = ToolCapabilityService._get_tool_category(tool_name)
         
-        # Check each flag type
-        if ToolCapabilityService.should_set_flag(tool_name, "has_subdomains"):
+        if not category:
+            return  # Unknown tool, skip
+        
+        # Update flags based on category
+        flags = CATEGORY_TO_FLAGS.get(category, [])
+        
+        if "has_subdomains" in flags:
             context["has_subdomains"] = True
             if params.get("domain"):
                 context["last_domain"] = params.get("domain")
         
-        if ToolCapabilityService.should_set_flag(tool_name, "has_ports"):
+        if "has_ports" in flags:
             context["has_ports"] = True
             if params.get("target"):
                 context["last_target"] = params.get("target")
         
-        if ToolCapabilityService.should_set_flag(tool_name, "vuln_scan_done"):
+        if "vuln_scan_done" in flags:
             context["vuln_scan_done"] = True
         
-        if ToolCapabilityService.should_set_flag(tool_name, "has_web_discovery"):
+        if "has_web_discovery" in flags:
             context["has_web_discovery"] = True
     
     @staticmethod
@@ -96,24 +102,20 @@ class ToolCapabilityService:
         """
         Check if tool can detect security tech (WAF/CDN).
         
-        Uses metadata + known security detection tools.
+        Uses explicit list for known security detection tools.
         """
         tool_lower = tool_name.lower()
         
-        # Check explicit list
-        if tool_lower in ToolCapabilityService.SECURITY_TECH_DETECTION_TOOLS:
+        # Check explicit list (minimal hardcode for special cases)
+        if tool_lower in SECURITY_TECH_DETECTION_TOOLS:
             return True
         
-        # Check capabilities
-        capabilities = ToolCapabilityService.get_tool_capabilities(tool_name)
-        if "tech_detection" in capabilities:
-            return True
-        
+        # Could also check category if we add tech_detection category in future
         return False
 
 
 # Singleton instance
-_tool_capability_service: Optional[ToolCapabilityService] = None
+_tool_capability_service: ToolCapabilityService = None
 
 
 def get_tool_capability_service() -> ToolCapabilityService:

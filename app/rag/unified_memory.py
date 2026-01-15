@@ -65,16 +65,35 @@ class UnifiedRAG:
             metadata={"description": "Cloud service provider metadata (CDN, hosting, etc.)"}
         )
         
+        # Port metadata collection (for LLM to query port/service info)
+        self.ports_collection = self.client.get_or_create_collection(
+            name="port_metadata",
+            metadata={"description": "TCP/UDP port and service metadata for network scanning"}
+        )
+        
+        # Security technology collection (WAF, CDN, firewall bypass methods)
+        self.security_tech_collection = self.client.get_or_create_collection(
+            name="security_tech",
+            metadata={"description": "Security technology detection and bypass methods (WAF, CDN, firewall)"}
+        )
+        
         # Lazy-loaded components
         self._tool_index_populated = False
         self._cloud_services_indexed = False
+        self._ports_indexed = False
+        self._security_tech_indexed = False
         self._cve_db = None
         self._embedding_model = None
         
         # Populate tools on first use
         self._ensure_tools_indexed()
+        self._ensure_security_tech_indexed()
         # Populate cloud services on first use
         self._ensure_cloud_services_indexed()
+        # Populate port metadata on first use
+        self._ensure_ports_indexed()
+        # Populate port metadata on first use
+        self._ensure_ports_indexed()
     
     @classmethod
     def get_instance(cls) -> "UnifiedRAG":
@@ -119,7 +138,12 @@ class UnifiedRAG:
         return embedding
     
     def _ensure_tools_indexed(self):
-        """Ensure tool metadata is indexed in ChromaDB."""
+        """
+        Ensure tool metadata is indexed in ChromaDB.
+        
+        Syncs with tool registry specs and merges metadata from tool_metadata.py
+        to get complete information: phase, description, use_cases per command.
+        """
         if self._tool_index_populated:
             return
         
@@ -128,54 +152,150 @@ class UnifiedRAG:
             self._tool_index_populated = True
             return
         
-        # Populate from tool_metadata
-        from .tool_metadata import TOOL_METADATA
+        # Load tool_metadata.py for merging (if available)
+        tool_metadata_fallback = {}
+        try:
+            from .tool_metadata import TOOL_METADATA
+            tool_metadata_fallback = TOOL_METADATA
+        except Exception:
+            pass
         
-        ids = []
-        documents = []
-        metadatas = []
-        
-        for tool_name, tool_data in TOOL_METADATA.items():
-            for cmd_name, cmd_data in tool_data.get("commands", {}).items():
-                # Create searchable document combining all relevant text
-                doc_parts = [
-                    tool_name,
-                    cmd_name,
-                    tool_data.get("description", ""),
-                    cmd_data.get("description", ""),
-                    " ".join(cmd_data.get("use_cases", [])),
-                    " ".join(tool_data.get("tags", [])),
-                ]
-                doc = " ".join(doc_parts)
-                
-                doc_id = f"{tool_name}:{cmd_name}"
-                ids.append(doc_id)
-                documents.append(doc)
-                metadatas.append({
-                    "tool": tool_name,
-                    "command": cmd_name,
-                    "category": tool_data.get("category", ""),
-                    "description": cmd_data.get("description", ""),
-                    "params": ",".join(cmd_data.get("params", [])),
-                })
-        
-        if ids:
-            # Add in batches to avoid memory issues
-            batch_size = 100
-            for i in range(0, len(ids), batch_size):
-                batch_ids = ids[i:i+batch_size]
-                batch_docs = documents[i:i+batch_size]
-                batch_meta = metadatas[i:i+batch_size]
-                
-                self.tools_collection.add(
-                    ids=batch_ids,
-                    documents=batch_docs,
-                    metadatas=batch_meta,
-                )
+        # Populate from tool registry specs (primary source) + merge with tool_metadata.py
+        try:
+            from app.tools.registry import get_registry
+            from app.agent.core.phase_manager import get_tool_phase
             
-            print(f"  📚 Indexed {len(ids)} tool commands in UnifiedRAG")
-        
-        self._tool_index_populated = True
+            registry = get_registry()
+            
+            ids = []
+            documents = []
+            metadatas = []
+            
+            for tool_name, spec in registry.tools.items():
+                # Get default phase from tool category
+                default_phase = get_tool_phase(tool_name)
+                
+                # Get metadata from tool_metadata.py if available (for use_cases, descriptions)
+                tool_meta = tool_metadata_fallback.get(tool_name, {})
+                
+                for cmd_name, cmd_template in spec.commands.items():
+                    # Get phase from command template (if specified) or use default
+                    phase = cmd_template.phase if cmd_template.phase else default_phase
+                    phase_reason = cmd_template.phase_reason or f"Tool category: {spec.category.value}"
+                    
+                    # Extract params from command args
+                    import re
+                    params = re.findall(r'\{(\w+)\}', " ".join(cmd_template.args))
+                    
+                    # Merge metadata: prefer CommandTemplate, fallback to tool_metadata.py
+                    cmd_meta = tool_meta.get("commands", {}).get(cmd_name, {})
+                    cmd_description = (
+                        cmd_template.description or 
+                        cmd_meta.get("description", "") or 
+                        f"{cmd_name} command for {tool_name}"
+                    )
+                    cmd_use_cases = (
+                        cmd_template.use_cases or 
+                        cmd_meta.get("use_cases", []) or 
+                        []
+                    )
+                    
+                    # Create searchable document with complete metadata
+                    doc_parts = [
+                        tool_name,
+                        cmd_name,
+                        spec.description,
+                        cmd_description,
+                        f"Phase {phase}: {phase_reason}",
+                        f"Category: {spec.category.value}",
+                        " ".join(params),
+                        " ".join(cmd_use_cases),  # Include use cases for semantic search
+                    ]
+                    doc = " ".join(filter(None, doc_parts))  # Remove empty strings
+                    
+                    doc_id = f"{tool_name}:{cmd_name}"
+                    ids.append(doc_id)
+                    documents.append(doc)
+                    metadatas.append({
+                        "tool": tool_name,
+                        "command": cmd_name,
+                        "category": spec.category.value,
+                        "phase": str(phase),  # ChromaDB metadata must be string
+                        "phase_reason": phase_reason[:200],  # Truncate for metadata
+                        "tool_description": spec.description[:200],
+                        "command_description": cmd_description[:200],
+                        "params": ",".join(params),
+                        "use_cases": "|".join(cmd_use_cases[:5]),  # Join use cases with | for metadata
+                    })
+            
+            if ids:
+                # Add in batches to avoid memory issues
+                batch_size = 100
+                for i in range(0, len(ids), batch_size):
+                    batch_ids = ids[i:i+batch_size]
+                    batch_docs = documents[i:i+batch_size]
+                    batch_meta = metadatas[i:i+batch_size]
+                    
+                    self.tools_collection.add(
+                        ids=batch_ids,
+                        documents=batch_docs,
+                        metadatas=batch_meta,
+                    )
+                
+                print(f"  📚 Indexed {len(ids)} tool commands from registry (merged with tool_metadata) in UnifiedRAG")
+            
+            self._tool_index_populated = True
+            
+        except Exception as e:
+            # Fallback to old TOOL_METADATA if registry unavailable
+            print(f"  ⚠️ Could not sync with tool registry: {e}, using fallback")
+            if not tool_metadata_fallback:
+                from .tool_metadata import TOOL_METADATA
+                tool_metadata_fallback = TOOL_METADATA
+            
+            ids = []
+            documents = []
+            metadatas = []
+            
+            for tool_name, tool_data in tool_metadata_fallback.items():
+                for cmd_name, cmd_data in tool_data.get("commands", {}).items():
+                    doc_parts = [
+                        tool_name,
+                        cmd_name,
+                        tool_data.get("description", ""),
+                        cmd_data.get("description", ""),
+                        " ".join(cmd_data.get("use_cases", [])),
+                        " ".join(tool_data.get("tags", [])),
+                    ]
+                    doc = " ".join(doc_parts)
+                    
+                    doc_id = f"{tool_name}:{cmd_name}"
+                    ids.append(doc_id)
+                    documents.append(doc)
+                    metadatas.append({
+                        "tool": tool_name,
+                        "command": cmd_name,
+                        "category": tool_data.get("category", ""),
+                        "description": cmd_data.get("description", ""),
+                        "params": ",".join(cmd_data.get("params", [])),
+                    })
+            
+            if ids:
+                batch_size = 100
+                for i in range(0, len(ids), batch_size):
+                    batch_ids = ids[i:i+batch_size]
+                    batch_docs = documents[i:i+batch_size]
+                    batch_meta = metadatas[i:i+batch_size]
+                    
+                    self.tools_collection.add(
+                        ids=batch_ids,
+                        documents=batch_docs,
+                        metadatas=batch_meta,
+                    )
+                
+                print(f"  📚 Indexed {len(ids)} tool commands (fallback) in UnifiedRAG")
+            
+            self._tool_index_populated = True
     
     def _ensure_cloud_services_indexed(self):
         """Ensure cloud service metadata is indexed in ChromaDB."""
@@ -229,6 +349,213 @@ class UnifiedRAG:
         
         self._cloud_services_indexed = True
     
+    def _ensure_ports_indexed(self):
+        """Ensure port metadata is indexed in ChromaDB for LLM query."""
+        if self._ports_indexed:
+            return
+        
+        # Check if already populated
+        if self.ports_collection.count() > 0:
+            self._ports_indexed = True
+            return
+        
+        # Populate from port_metadata
+        from .port_metadata import PORT_INFO, PORT_PROFILES
+        
+        ids = []
+        documents = []
+        metadatas = []
+        
+        # Index individual ports
+        for port, info in PORT_INFO.items():
+            doc = f"Port {port} service {info['service']} {info['description']}"
+            doc_id = f"port_{port}"
+            ids.append(doc_id)
+            documents.append(doc)
+            metadatas.append({
+                "type": "port",
+                "port": str(port),
+                "service": info["service"],
+                "description": info["description"],
+            })
+        
+        # Index port profiles
+        for profile_name, ports_str in PORT_PROFILES.items():
+            ports_list = ports_str.split(",") if isinstance(ports_str, str) else []
+            doc = f"Port profile {profile_name} includes ports {ports_str} for {profile_name} scanning"
+            doc_id = f"profile_{profile_name}"
+            ids.append(doc_id)
+            documents.append(doc)
+            metadatas.append({
+                "type": "profile",
+                "profile": profile_name,
+                "ports": ports_str,
+                "port_count": str(len(ports_list)),
+            })
+        
+        if ids:
+            self.ports_collection.add(
+                ids=ids,
+                documents=documents,
+                metadatas=metadatas,
+            )
+            print(f"  📚 Indexed {len(ids)} port metadata entries in UnifiedRAG")
+        
+        self._ports_indexed = True
+    
+    def search_ports(self, query: str, n_results: int = 5) -> List[Dict[str, Any]]:
+        """
+        Search port metadata using semantic search.
+        
+        Args:
+            query: Natural language query (e.g., "web ports", "database services", "port 3306")
+            n_results: Number of results to return
+            
+        Returns:
+            List of matching port/service entries
+        """
+        self._ensure_ports_indexed()
+        
+        results = self.ports_collection.query(
+            query_texts=[query],
+            n_results=n_results,
+            include=["metadatas", "documents", "distances"]
+        )
+        
+        matches = []
+        if results and results.get("ids") and results["ids"][0]:
+            for i, doc_id in enumerate(results["ids"][0]):
+                meta = results["metadatas"][0][i] if results.get("metadatas") else {}
+                distance = results["distances"][0][i] if results.get("distances") else 0
+                score = max(0, 1 - distance)
+                
+                matches.append({
+                    "id": doc_id,
+                    "type": meta.get("type", ""),
+                    "port": meta.get("port", ""),
+                    "service": meta.get("service", ""),
+                    "description": meta.get("description", ""),
+                    "profile": meta.get("profile", ""),
+                    "ports": meta.get("ports", ""),
+                    "score": score,
+                })
+        
+        return matches
+    
+    def _ensure_security_tech_indexed(self):
+        """Ensure security technology metadata is indexed in ChromaDB for LLM query."""
+        if self._security_tech_indexed:
+            return
+        
+        # Check if already populated
+        if self.security_tech_collection.count() > 0:
+            self._security_tech_indexed = True
+            return
+        
+        # Populate from security_tech.py
+        try:
+            from .security_tech import SECURITY_TECH_DB
+            
+            ids = []
+            documents = []
+            metadatas = []
+            
+            for tech_id, tech in SECURITY_TECH_DB.items():
+                # Create searchable document with bypass methods
+                bypass_tools = [m.get("tool", "") for m in tech.bypass_methods if m.get("tool")]
+                bypass_descriptions = [m.get("description", "") for m in tech.bypass_methods]
+                
+                doc_parts = [
+                    tech.name,
+                    tech_id,
+                    tech.category,
+                    tech.description,
+                    " ".join(tech.detection_headers),
+                    " ".join(tech.detection_patterns),
+                    " ".join(bypass_tools),
+                    " ".join(bypass_descriptions),
+                    " ".join(tech.origin_discovery),
+                ]
+                doc = " ".join(filter(None, doc_parts))
+                
+                doc_id = f"security_tech_{tech_id}"
+                ids.append(doc_id)
+                documents.append(doc)
+                metadatas.append({
+                    "tech_id": tech_id,
+                    "name": tech.name,
+                    "category": tech.category,
+                    "description": tech.description[:200],
+                    "detection_headers": "|".join(tech.detection_headers[:10]),
+                    "bypass_tools": "|".join(bypass_tools),
+                })
+            
+            if ids:
+                self.security_tech_collection.add(
+                    ids=ids,
+                    documents=documents,
+                    metadatas=metadatas,
+                )
+                print(f"  📚 Indexed {len(ids)} security technologies in UnifiedRAG")
+            
+            self._security_tech_indexed = True
+            
+        except Exception as e:
+            print(f"  ⚠️ Could not index security technologies: {e}")
+            self._security_tech_indexed = True  # Mark as done to avoid retry
+    
+    def search_security_tech(self, query: str, n_results: int = 5) -> List[Dict[str, Any]]:
+        """
+        Search security technology metadata using semantic search.
+        
+        Args:
+            query: Natural language query (e.g., "cloudflare bypass", "WAF detection", "CDN origin discovery")
+            n_results: Number of results to return
+            
+        Returns:
+            List of matching security technology entries with bypass methods
+        """
+        self._ensure_security_tech_indexed()
+        
+        results = self.security_tech_collection.query(
+            query_texts=[query],
+            n_results=n_results,
+            include=["metadatas", "documents", "distances"]
+        )
+        
+        matches = []
+        if results and results.get("ids") and results["ids"][0]:
+            for i, doc_id in enumerate(results["ids"][0]):
+                meta = results["metadatas"][0][i] if results.get("metadatas") else {}
+                distance = results["distances"][0][i] if results.get("distances") else 0
+                score = max(0, 1 - distance)
+                
+                # Parse bypass tools from metadata
+                bypass_tools_str = meta.get("bypass_tools", "")
+                bypass_tools = bypass_tools_str.split("|") if bypass_tools_str else []
+                
+                # Get full tech data for bypass methods
+                try:
+                    from .security_tech import SECURITY_TECH_DB
+                    tech_id = meta.get("tech_id", "")
+                    tech = SECURITY_TECH_DB.get(tech_id)
+                    bypass_methods = tech.bypass_methods if tech else []
+                except Exception:
+                    bypass_methods = []
+                
+                matches.append({
+                    "id": doc_id,
+                    "tech_id": meta.get("tech_id", ""),
+                    "name": meta.get("name", ""),
+                    "category": meta.get("category", ""),
+                    "description": meta.get("description", ""),
+                    "bypass_tools": bypass_tools,
+                    "bypass_methods": bypass_methods,  # Full bypass method objects
+                    "score": score,
+                })
+        
+        return matches
+    
     def search_tools(self, query: str, n_results: int = 5, 
                      category: str = None) -> List[Dict[str, Any]]:
         """
@@ -258,12 +585,20 @@ class UnifiedRAG:
                 # Convert distance to similarity score (0-1, higher is better)
                 score = max(0, 1 - distance)
                 
+                # Parse use_cases from metadata (stored as pipe-separated string)
+                use_cases_str = meta.get("use_cases", "")
+                use_cases = use_cases_str.split("|") if use_cases_str else []
+                
                 matches.append({
                     "id": doc_id,
                     "tool": meta.get("tool", doc_id.split(":")[0]),
                     "command": meta.get("command", ""),
                     "category": meta.get("category", ""),
-                    "description": meta.get("description", ""),
+                    "phase": int(meta.get("phase", 1)) if meta.get("phase") else None,  # Phase metadata per command
+                    "phase_reason": meta.get("phase_reason", ""),  # Why this command is in this phase
+                    "tool_description": meta.get("tool_description", ""),  # Tool-level description
+                    "command_description": meta.get("command_description", ""),  # Command-level description
+                    "use_cases": use_cases,  # List of use cases for this command
                     "params": meta.get("params", "").split(",") if meta.get("params") else [],
                     "score": score,
                 })
@@ -281,11 +616,12 @@ class UnifiedRAG:
             filters: Optional filters dict with keys:
                 - category: Filter by tool category
                 - tool: Filter by specific tool name
+                - phase: Filter by PTES phase (1-6)
                 - min_score: Minimum similarity score (0-1)
                 - exclude_tools: List of tool names to exclude
         
         Returns:
-            List of tool:command pairs with metadata, sorted by relevance
+            List of tool:command pairs with metadata (including phase), sorted by relevance
         """
         self._ensure_tools_indexed()
         
@@ -296,6 +632,9 @@ class UnifiedRAG:
                 where_filter["category"] = filters["category"]
             if "tool" in filters:
                 where_filter["tool"] = filters["tool"]
+            if "phase" in filters:
+                # ChromaDB metadata must be string
+                where_filter["phase"] = str(filters["phase"])
         
         # Query ChromaDB
         results = self.tools_collection.query(
@@ -325,11 +664,19 @@ class UnifiedRAG:
                 if score < min_score:
                     continue
                 
+                # Parse use_cases from metadata (stored as pipe-separated string)
+                use_cases_str = meta.get("use_cases", "")
+                use_cases = use_cases_str.split("|") if use_cases_str else []
+                
                 matches.append({
                     "tool": tool_name,
                     "command": meta.get("command", ""),
                     "category": meta.get("category", ""),
-                    "description": meta.get("description", ""),
+                    "phase": int(meta.get("phase", 1)) if meta.get("phase") else None,  # Phase metadata per command
+                    "phase_reason": meta.get("phase_reason", ""),  # Why this command is in this phase
+                    "tool_description": meta.get("tool_description", ""),  # Tool-level description
+                    "command_description": meta.get("command_description", ""),  # Command-level description
+                    "use_cases": use_cases,  # List of use cases for this command
                     "params": meta.get("params", "").split(",") if meta.get("params") else [],
                     "score": score,
                     "id": doc_id,

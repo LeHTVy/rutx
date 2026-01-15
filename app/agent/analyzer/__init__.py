@@ -24,6 +24,11 @@ from .target_verification_tool import TargetVerificationTool
 
 # File mới
 from .user_prompt_analyzer import UserPromptAnalyzer, get_user_prompt_analyzer
+from .checklist_planning_service import (
+    get_next_task_from_checklist,
+    prepare_query_with_task,
+    get_task_required_tools,
+)
 
 __all__ = [
     # Checklist Management (tái sử dụng)
@@ -38,4 +43,8 @@ __all__ = [
     # User Prompt Analyzer (mới)
     "UserPromptAnalyzer",
     "get_user_prompt_analyzer",
+    # Checklist Planning Service (mới - extracted from planner)
+    "get_next_task_from_checklist",
+    "prepare_query_with_task",
+    "get_task_required_tools",
 ]
