@@ -130,14 +130,17 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Re-index all collections (force delete old data)
-  python reindex_rag.py --force
+  # Re-index all collections (force delete old data, skip confirmation)
+  python reindex_rag.py --force --yes
   
   # Re-index only tools and security_tech
-  python reindex_rag.py --force --collections tools,security_tech
+  python reindex_rag.py --force --yes --collections tools,security_tech
   
   # Re-index without deleting (may cause duplicates)
   python reindex_rag.py --collections tools
+  
+  # Re-index with confirmation prompt (may have encoding issues)
+  python reindex_rag.py --force
         """
     )
     parser.add_argument(
@@ -151,6 +154,11 @@ Examples:
         default="all",
         help="Comma-separated list of collections to re-index: tools,ports,security_tech,cloud (default: all)"
     )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip confirmation prompt (auto-confirm)"
+    )
     
     args = parser.parse_args()
     
@@ -158,9 +166,26 @@ Examples:
     print("ChromaDB RAG Re-indexing Script")
     print("=" * 60)
     
-    if args.force:
+    if args.force and not args.yes:
         print("\n⚠️  FORCE MODE: Existing collections will be deleted!")
-        response = input("Continue? (yes/no): ")
+        try:
+            # Try to read input with proper encoding handling
+            import sys
+            import io
+            # Set stdin encoding if possible
+            if sys.stdin.encoding:
+                response = input("Continue? (yes/no): ")
+            else:
+                # Fallback: read bytes and decode
+                sys.stdout.write("Continue? (yes/no): ")
+                sys.stdout.flush()
+                response_bytes = sys.stdin.buffer.readline()
+                response = response_bytes.decode('utf-8', errors='ignore').strip()
+        except (UnicodeDecodeError, KeyboardInterrupt, EOFError) as e:
+            print(f"\n⚠️  Could not read input: {e}")
+            print("Use --yes flag to skip confirmation: python reindex_rag.py --force --yes")
+            return
+        
         if response.lower() not in ["yes", "y"]:
             print("Cancelled.")
             return
