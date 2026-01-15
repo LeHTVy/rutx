@@ -369,14 +369,38 @@ JSON only, no explanation:"""
             from app.agent.intelligence import get_intelligence
             intel = get_intelligence()
             
+            # #region agent log
+            try:
+                import json
+                with open("snode_debug.log", "a") as f:
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"intent_classifier_tool.py:368","message":"Intent classification entry","data":{"query":query,"query_lower":query_lower,"has_action_verb":has_action_verb},"timestamp":int(__import__("time").time()*1000)})+"\n")
+            except: pass
+            # #endregion
+            
             # Get semantic understanding of query
             understanding = intel.understand_query(query, context)
+            
+            # #region agent log
+            try:
+                import json
+                with open("snode_debug.log", "a") as f:
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"intent_classifier_tool.py:375","message":"Understanding result","data":{"detected_target":understanding.get("detected_target"),"expanded_terms":understanding.get("expanded_terms",[])[:3]},"timestamp":int(__import__("time").time()*1000)})+"\n")
+            except: pass
+            # #endregion
             
             # Store understanding in state for later use (will be merged)
             understanding_dict = {"query_understanding": understanding}
             
             # Use intelligence layer for intent classification
             intent = intel.classify_intent(query, context)
+            
+            # #region agent log
+            try:
+                import json
+                with open("snode_debug.log", "a") as f:
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"intent_classifier_tool.py:385","message":"Intent classification result","data":{"raw_intent":intent},"timestamp":int(__import__("time").time()*1000)})+"\n")
+            except: pass
+            # #endregion
             
             # Map intent
             intent_map = {
@@ -385,6 +409,14 @@ JSON only, no explanation:"""
                 "QUESTION": "question"
             }
             mapped_intent = intent_map.get(intent, "security_task")
+            
+            # #region agent log
+            try:
+                import json
+                with open("snode_debug.log", "a") as f:
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"intent_classifier_tool.py:395","message":"Final mapped intent","data":{"mapped_intent":mapped_intent,"will_route_to_target_verification":mapped_intent=="security_task"},"timestamp":int(__import__("time").time()*1000)})+"\n")
+            except: pass
+            # #endregion
             
             # Log what we understood
             if understanding.get("detected_target"):

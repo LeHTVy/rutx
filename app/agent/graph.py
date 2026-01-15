@@ -752,6 +752,15 @@ def reasoning_node(state: AgentState) -> AgentState:
 def route_after_intent(state: AgentState) -> str:
     """Route based on intent classification."""
     intent = state.get("intent", "question")
+    query = state.get("query", "")
+    
+    # #region agent log
+    try:
+        import json
+        with open("snode_debug.log", "a") as f:
+            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"graph.py:756","message":"Route after intent","data":{"intent":intent,"query":query,"will_route_to_target_verification":intent=="security_task"},"timestamp":int(__import__("time").time()*1000)})+"\n")
+    except: pass
+    # #endregion
     
     if intent == "security_task":
         return "target_verification"  # New step: verify target first

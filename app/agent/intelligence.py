@@ -247,23 +247,67 @@ Return ONLY the phase number (1-6):"""
             context_summary=context_summary
         )
         
+        # #region agent log
+        try:
+            import json
+            with open("snode_debug.log", "a") as f:
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"intelligence.py:245","message":"Intent classification LLM call","data":{"query":query,"context_summary":context_summary[:100]},"timestamp":int(__import__("time").time()*1000)})+"\n")
+        except: pass
+        # #endregion
+        
         try:
             # Use shorter timeout for intent classification (should be fast)
             response = self.llm.generate(prompt, timeout=15, stream=False)
             response_clean = response.strip().upper()
             
+            # #region agent log
+            try:
+                import json
+                with open("snode_debug.log", "a") as f:
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"intelligence.py:253","message":"Intent classification LLM response","data":{"response_clean":response_clean[:200],"has_question": "QUESTION" in response_clean,"has_security": "SECURITY" in response_clean or "TASK" in response_clean},"timestamp":int(__import__("time").time()*1000)})+"\n")
+            except: pass
+            # #endregion
+            
             # Extract intent from response - check QUESTION first (more specific)
             if "QUESTION" in response_clean:
+                # #region agent log
+                try:
+                    import json
+                    with open("snode_debug.log", "a") as f:
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"intelligence.py:260","message":"Intent classified as QUESTION","data":{"query":query},"timestamp":int(__import__("time").time()*1000)})+"\n")
+                except: pass
+                # #endregion
                 return "QUESTION"
             if "MEMORY" in response_clean:
                 return "MEMORY_QUERY"
             if "SECURITY" in response_clean or "TASK" in response_clean:
+                # #region agent log
+                try:
+                    import json
+                    with open("snode_debug.log", "a") as f:
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"intelligence.py:268","message":"Intent classified as SECURITY_TASK","data":{"query":query},"timestamp":int(__import__("time").time()*1000)})+"\n")
+                except: pass
+                # #endregion
                 return "SECURITY_TASK"
             
             # Default to QUESTION for unclear cases (safer than assuming SECURITY_TASK)
+            # #region agent log
+            try:
+                import json
+                with open("snode_debug.log", "a") as f:
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"intelligence.py:272","message":"Intent defaulted to QUESTION","data":{"query":query,"response_clean":response_clean[:100]},"timestamp":int(__import__("time").time()*1000)})+"\n")
+            except: pass
+            # #endregion
             return "QUESTION"
             
-        except Exception:
+        except Exception as e:
+            # #region agent log
+            try:
+                import json
+                with open("snode_debug.log", "a") as f:
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"intelligence.py:277","message":"Intent classification exception","data":{"query":query,"error":str(e)},"timestamp":int(__import__("time").time()*1000)})+"\n")
+            except: pass
+            # #endregion
             # On timeout/error, default to QUESTION (safer than SECURITY_TASK)
             return "QUESTION"
     
