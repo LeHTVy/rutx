@@ -36,6 +36,18 @@ class QuestionTool(AgentTool):
 Technologies: {context.get('detected_tech', [])}
 Tools Run: {', '.join(context.get('tools_run', []))}"""
         
+        # Import format_prompt and initialize detector_llm BEFORE the if/else block
+        # so they're available for question complexity and web research detection
+        from app.agent.prompt_loader import format_prompt
+        from app.llm.config import get_planner_model
+        
+        # Initialize lightweight LLM for detection (used by multiple detection tasks)
+        planner_model = get_planner_model()
+        if "functiongemma" in planner_model.lower() or "nemotron" in planner_model.lower():
+            detector_llm = OllamaClient(model="planner")
+        else:
+            detector_llm = OllamaClient()
+        
         # FAST PATH: Skip customer query detection for simple identity questions
         # These are clearly NOT customer queries
         simple_identity_questions = [
@@ -50,16 +62,6 @@ Tools Run: {', '.join(context.get('tools_run', []))}"""
             logger.debug("Fast path: Simple identity question, skipping customer query detection")
         else:
             # Check if this is a customer query using prompt file
-            from app.agent.prompt_loader import format_prompt
-            from app.llm.config import get_planner_model
-            
-            # Initialize lightweight LLM for detection
-            planner_model = get_planner_model()
-            if "functiongemma" in planner_model.lower() or "nemotron" in planner_model.lower():
-                detector_llm = OllamaClient(model="planner")
-            else:
-                detector_llm = OllamaClient()
-            
             try:
                 customer_detection_prompt = format_prompt(
                     "customer_query_detector",
@@ -187,7 +189,7 @@ Scan Results: No scan results found. Run nmap first."""
             except Exception:
                 pass
         
-        from app.agent.prompt_loader import format_prompt
+        # format_prompt already imported at the top of the function
         prompt = format_prompt("general_chat", query=query, context_str=context_str, web_context=web_context)
         
 

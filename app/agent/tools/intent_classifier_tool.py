@@ -41,14 +41,26 @@ class IntentClassifierTool(AgentTool):
         # Remove common terminal box-drawing and special characters
         query = re.sub(r'[│┌┐└┘├┤┬┴┼─═║╔╗╚╝╠╣╦╩╬]', '', query)
         query = re.sub(r'\s+', ' ', query)  # Collapse whitespace
-        query = query.lower().strip()
+        query_lower = query.lower().strip()
+        
+        # ─────────────────────────────────────────────────────────
+        # CHECK: If target verification is pending, route back to verification
+        # This prevents AutoChain from starting before target is verified
+        # ─────────────────────────────────────────────────────────
+        if context.get("target_verification_pending"):
+            logger.info("Target verification pending, routing back to target_verification")
+            # Keep the autochain flag if it was set, but route to verification first
+            return {
+                "intent": "security_task",
+                "context": context  # Keep all context including _enable_autochain
+            }
         
         # ─────────────────────────────────────────────────────────
         # AUTOCHAIN MODE DETECTION (NEW - Integrated)
         # "attack" command enables AutoChain mode (replaces old auto_mode)
         # ─────────────────────────────────────────────────────────
         auto_mode_triggers = ["attack ", "autonomous ", "auto ", "pentest ", "pwn ", "hack "]
-        if any(query.startswith(trigger) for trigger in auto_mode_triggers):
+        if any(query_lower.startswith(trigger) for trigger in auto_mode_triggers):
             # Set flag to enable AutoChain mode in LangGraphAgent
             context["_enable_autochain"] = True
             context["_autochain_trigger"] = query  # Store original query
@@ -204,12 +216,23 @@ JSON only, no explanation:"""
         query_lower = query.lower().strip()
         has_action_verb = any(verb in query_lower for verb in action_verbs)
         
+        # #region agent log
+        import json
+        with open('/home/hellrazor/rutx/.cursor/debug.log', 'a') as f:
+            f.write(json.dumps({"id":f"log_actionverb_{id(query)}","timestamp":int(__import__('time').time()*1000),"location":"intent_classifier_tool.py:217","message":"Action verb detection","data":{"query":query,"query_lower":query_lower,"has_action_verb":has_action_verb,"matched_verbs":[v for v in action_verbs if v in query_lower]},"sessionId":"debug-session","runId":"run1","hypothesisId":"A"})+"\n")
+        # #endregion
+        
         # Only check simple questions if NO action verbs present
         if not has_action_verb:
             simple_keywords = ["who are you", "what are you", "what is snode", "what can you do", 
                               "tell me about yourself", "who is snode", "what is this"]
             if any(keyword in query_lower for keyword in simple_keywords):
                 logger.info("Fast path: Simple identity question detected, routing to question node")
+                # #region agent log
+                import json
+                with open('/home/hellrazor/rutx/.cursor/debug.log', 'a') as f:
+                    f.write(json.dumps({"id":f"log_fastpath_{id(query)}","timestamp":int(__import__('time').time()*1000),"location":"intent_classifier_tool.py:224","message":"Fast path simple question","data":{"query":query,"has_action_verb":has_action_verb},"sessionId":"debug-session","runId":"run1","hypothesisId":"B"})+"\n")
+                # #endregion
                 return {
                     "intent": "question",
                     "context": context
@@ -366,6 +389,12 @@ JSON only, no explanation:"""
             # Use intelligence layer for intent classification
             intent = intel.classify_intent(query, context)
             
+            # #region agent log
+            import json
+            with open('/home/hellrazor/rutx/.cursor/debug.log', 'a') as f:
+                f.write(json.dumps({"id":f"log_intent_{id(intent)}","timestamp":int(__import__('time').time()*1000),"location":"intent_classifier_tool.py:379","message":"Intent classification result","data":{"query":query,"intent":intent,"has_action_verb":has_action_verb,"has_domain":has_domain},"sessionId":"debug-session","runId":"run1","hypothesisId":"A"})+"\n")
+            # #endregion
+            
             # Map intent
             intent_map = {
                 "SECURITY_TASK": "security_task",
@@ -373,6 +402,11 @@ JSON only, no explanation:"""
                 "QUESTION": "question"
             }
             mapped_intent = intent_map.get(intent, "security_task")
+            
+            # #region agent log
+            with open('/home/hellrazor/rutx/.cursor/debug.log', 'a') as f:
+                f.write(json.dumps({"id":f"log_mapped_{id(mapped_intent)}","timestamp":int(__import__('time').time()*1000),"location":"intent_classifier_tool.py:387","message":"Mapped intent","data":{"original_intent":intent,"mapped_intent":mapped_intent},"sessionId":"debug-session","runId":"run1","hypothesisId":"A"})+"\n")
+            # #endregion
             
             # Log what we understood
             if understanding.get("detected_target"):
