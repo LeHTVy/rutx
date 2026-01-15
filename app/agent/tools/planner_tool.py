@@ -13,6 +13,7 @@ logger = get_logger()
 from app.agent.core import (
     get_context_manager, get_context_aggregator,
     get_phase_manager, PHASE_NAMES, PhaseGateAction,
+    get_checklist_manager,
 )
 from app.agent.utils import (
     get_plan_validator, get_fallback_manager,
