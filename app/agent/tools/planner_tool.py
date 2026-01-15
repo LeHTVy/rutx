@@ -79,6 +79,14 @@ class PlannerTool(AgentTool):
         
         # If checklist exists, get next task
         if checklist:
+            # #region agent log
+            try:
+                import json
+                with open("/home/hellrazor/rutx/.cursor/debug.log", "a") as f:
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H7","location":"planner_tool.py:81","message":"Checklist exists - loading into manager","data":{"checklist_count":len(checklist),"session_id":session_id,"manager_has_checklist":bool(checklist_manager.get_checklist(session_id))},"timestamp":int(__import__("time").time()*1000)})+"\n")
+            except: pass
+            # #endregion
+            
             # Load checklist into manager if not already loaded
             if not checklist_manager.get_checklist(session_id):
                 from app.agent.analyzer import Task
@@ -86,8 +94,26 @@ class PlannerTool(AgentTool):
                     task = Task.from_dict(task_data)
                     checklist_manager.add_task(task, session_id)
             
+            # #region agent log
+            try:
+                import json
+                all_tasks = checklist_manager.get_checklist(session_id)
+                task_statuses = {t.id: {"status": t.status, "dependencies": t.dependencies} for t in all_tasks}
+                with open("/home/hellrazor/rutx/.cursor/debug.log", "a") as f:
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H7","location":"planner_tool.py:90","message":"Before get_next_task","data":{"task_count":len(all_tasks),"task_statuses":task_statuses},"timestamp":int(__import__("time").time()*1000)})+"\n")
+            except: pass
+            # #endregion
+            
             # Get next task from checklist
             next_task = checklist_manager.get_next_task(session_id)
+            
+            # #region agent log
+            try:
+                import json
+                with open("/home/hellrazor/rutx/.cursor/debug.log", "a") as f:
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H7","location":"planner_tool.py:95","message":"After get_next_task","data":{"next_task_id":next_task.id if next_task else None,"next_task_description":next_task.description if next_task else None},"timestamp":int(__import__("time").time()*1000)})+"\n")
+            except: pass
+            # #endregion
             
             if next_task:
                 # Mark task as in progress
@@ -106,6 +132,16 @@ class PlannerTool(AgentTool):
             else:
                 # All tasks done or blocked
                 progress = checklist_manager.get_progress(session_id)
+                # #region agent log
+                try:
+                    import json
+                    all_tasks = checklist_manager.get_checklist(session_id)
+                    blocked_tasks = [t.id for t in all_tasks if t.status == "pending" and not checklist_manager._dependencies_complete(t, all_tasks)]
+                    with open("/home/hellrazor/rutx/.cursor/debug.log", "a") as f:
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H7","location":"planner_tool.py:113","message":"No next task found","data":{"progress":progress,"blocked_tasks":blocked_tasks,"all_task_statuses":{t.id: t.status for t in all_tasks}},"timestamp":int(__import__("time").time()*1000)})+"\n")
+                except: pass
+                # #endregion
+                
                 if progress["completed"] == progress["total"]:
                     print(f"  ✅ All checklist tasks completed ({progress['completed']}/{progress['total']})")
                     context["checklist_complete"] = True

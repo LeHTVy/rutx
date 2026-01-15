@@ -167,6 +167,14 @@ def prompt_analysis_node(state: AgentState) -> AgentState:
     
     # Create checklist if needed
     response_text = ""
+    # #region agent log
+    try:
+        import json
+        with open("/home/hellrazor/rutx/.cursor/debug.log", "a") as f:
+            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H7","location":"graph.py:170","message":"Before checklist creation check","data":{"needs_checklist":analysis.get("needs_checklist",True),"has_existing_checklist":bool(context.get("checklist")),"existing_checklist_count":len(context.get("checklist",[]))},"timestamp":int(__import__("time").time()*1000)})+"\n")
+    except: pass
+    # #endregion
+    
     if analysis.get("needs_checklist", True):
         checklist_result = analyzer.create_checklist(query, context)
         context = checklist_result.get("context", context)
