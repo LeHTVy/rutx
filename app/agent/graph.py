@@ -1155,8 +1155,13 @@ class LangGraphAgent:
         if result.get("execution_results"):
             self.last_results.update(result.get("execution_results", {}))
         
-        response = result.get("response") or result.get("suggestion_message") or "No response"
         response_streamed = result.get("response_streamed", False)
+        
+        # If response was already streamed, don't show "No response" fallback
+        if response_streamed:
+            response = result.get("response") or ""  # Empty is fine, already displayed
+        else:
+            response = result.get("response") or result.get("suggestion_message") or "No response"
         
         # Save conversation
         if self.memory:
@@ -1299,8 +1304,13 @@ class LangGraphAgent:
         if result.get("execution_results"):
             self.last_results.update(result.get("execution_results", {}))
         
-        response = result.get("response") or result.get("suggestion_message") or "No response"
         response_streamed = result.get("response_streamed", False)  # Check if response was already streamed
+        
+        # If response was already streamed, don't show "No response" fallback
+        if response_streamed:
+            response = result.get("response") or ""  # Empty is fine, already displayed
+        else:
+            response = result.get("response") or result.get("suggestion_message") or "No response"
         
         # Save conversation to session memory
         if self.memory:

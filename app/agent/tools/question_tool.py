@@ -247,8 +247,11 @@ class QuestionTool(AgentTool):
                 except Exception as e:
                     logger.warning(f"Customer query tool failed: {e}")
         
-        # Classify question complexity
-        is_simple_question = _classify_question_complexity(query, base_context, detector_llm)
+        # Classify question complexity - simple identity questions skip classifier
+        if is_simple_identity:
+            is_simple_question = True
+        else:
+            is_simple_question = _classify_question_complexity(query, base_context, detector_llm)
         
         # Build detailed context (includes scan results if needed)
         context_str = _build_detailed_context(query_lower, base_context, context)
