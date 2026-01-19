@@ -9,6 +9,10 @@ import json
 import re
 from typing import Dict, Any, List, Optional
 
+from app.ui import get_logger
+
+logger = get_logger()
+
 
 class OutputParser:
     """
@@ -110,7 +114,7 @@ JSON:'''
                 return self._validate_findings(findings, domain)
             
         except Exception as e:
-            print(f"  ⚠️ LLM parser error: {e}")
+            logger.warning(f"LLM parser error: {e}", icon="")
         
         # Fallback to regex-based extraction
         return self._regex_fallback(output, domain)

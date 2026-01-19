@@ -3,7 +3,7 @@ Validators - Post-LLM Validation Layer
 =======================================
 
 Validates LLM outputs BEFORE acting on them.
-This is the Cursor-style "validation layer" pattern.
+This follows a post-call validation layer pattern.
 
 Catches:
 - Missing required parameters

@@ -16,6 +16,10 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 import re
 
+from app.ui import get_logger
+
+logger = get_logger()
+
 
 @dataclass
 class SessionContext:
@@ -236,7 +240,7 @@ class ContextManager:
             shared = self.shared_memory.to_dict()
             context = context.merge_with(shared)
         except Exception as e:
-            print(f"  ⚠️ SharedMemory merge failed: {e}")
+            logger.warning(f"SharedMemory merge failed: {e}", icon="")
         
         # Add SessionMemory data (subdomains, ports, vulns from session)
         try:
@@ -256,7 +260,7 @@ class ContextManager:
                 if agent_ctx.vulnerabilities:
                     context = context.merge_with({"vulns_found": agent_ctx.vulnerabilities})
         except Exception as e:
-            print(f"  ⚠️ SessionMemory merge failed: {e}")
+            logger.warning(f"SessionMemory merge failed: {e}", icon="")
         
         return context
     
@@ -277,7 +281,7 @@ class ContextManager:
         if "target_domain" in updates and updates["target_domain"]:
             domain = updates["target_domain"]
             if not self._validate_target(domain):
-                print(f"  ⚠️ Invalid target_domain: {domain}")
+                logger.warning(f"Invalid target_domain: {domain}", icon="")
                 updates.pop("target_domain")
         
         # Apply updates
@@ -287,7 +291,7 @@ class ContextManager:
         try:
             self._sync_to_shared_memory(updates)
         except Exception as e:
-            print(f"  ⚠️ SharedMemory sync failed: {e}")
+            logger.warning(f"SharedMemory sync failed: {e}", icon="")
         
         return self._session_context
     
@@ -328,7 +332,7 @@ class ContextManager:
             self.update_context({"last_candidate": target})
             return False
         
-        print(f"  📍 Target set: {target} (source: {source})")
+        logger.info(f"Target set: {target} (source: {source})", icon="")
         return True
     
     def get_target(self) -> Optional[str]:

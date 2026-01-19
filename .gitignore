@@ -9,6 +9,8 @@ arch.txt
 # Database & Data Files
 # ============================================================================
 data/pentest.db
+data/cve_chromadb/
+data/tool_index/
 *.db
 *.sqlite
 *.sqlite3
@@ -28,6 +30,7 @@ audit_*.json
 # ============================================================================
 tools/scan_results/
 scan_results/
+/reports/
 /tmp/nmap_scans/
 /tmp/masscan_scans/
 /tmp/bbot_*/

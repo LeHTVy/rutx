@@ -161,7 +161,7 @@ class ReasoningTool(AgentTool):
             context_summary=context_summary
         )
         
-        print("  🧠 Comprehensive analysis with reasoning model...")
+        logger.info("Comprehensive analysis with reasoning model...", icon="")
         
         try:
             # Generate comprehensive analysis with streaming

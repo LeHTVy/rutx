@@ -18,7 +18,13 @@ from typing import Dict, Any, Optional, List
 from pathlib import Path
 
 from app.memory.topics import History
-from app.agent.graph import AgentState
+from app.ui import get_logger
+
+# NOTE:
+# This module provides OPTIONAL multi-context switching for the CLI (/contexts, /switch).
+# It is intentionally isolated from the main LangGraph runtime to avoid tight coupling.
+
+logger = get_logger()
 
 
 @dataclass
@@ -195,7 +201,7 @@ class ContextManager:
             with open(ctx_file, 'w', encoding='utf-8') as f:
                 json.dump(ctx.to_dict(), f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"  ⚠️ Failed to save context {ctx.id}: {e}")
+            logger.warning(f"Failed to save context {ctx.id}: {e}")
     
     def _load_context(self, ctx_id: str) -> Optional[ConversationContext]:
         """Load context from disk."""
@@ -211,7 +217,7 @@ class ContextManager:
                 data = json.load(f)
             return ConversationContext.from_dict(data, agent=self._agent)
         except Exception as e:
-            print(f"  ⚠️ Failed to load context {ctx_id}: {e}")
+            logger.warning(f"Failed to load context {ctx_id}: {e}")
             return None
     
     def load_all_contexts(self):
@@ -226,7 +232,7 @@ class ContextManager:
                 if ctx:
                     self._contexts[ctx_id] = ctx
             except Exception as e:
-                print(f"  ⚠️ Failed to load context from {ctx_file}: {e}")
+                logger.warning(f"Failed to load context from {ctx_file}: {e}")
     
     def save_all_contexts(self):
         """Save all contexts to disk."""

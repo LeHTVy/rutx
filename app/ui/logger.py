@@ -20,22 +20,26 @@ class UILogger:
     
     def info(self, message: str, icon: str = None):
         """Print info message."""
-        icon = icon or self.theme.icons.get("info", "")
+        if icon is None:
+            icon = self.theme.icons.get("info", "")
         self.manager.print_info(f"{icon} {message}" if icon else message)
     
     def success(self, message: str, icon: str = None):
         """Print success message."""
-        icon = icon or self.theme.icons.get("success", "")
+        if icon is None:
+            icon = self.theme.icons.get("success", "")
         self.manager.print_success(f"{icon} {message}" if icon else message)
     
     def error(self, message: str, icon: str = None):
         """Print error message."""
-        icon = icon or self.theme.icons.get("error", "")
+        if icon is None:
+            icon = self.theme.icons.get("error", "")
         self.manager.print_error(f"{icon} {message}" if icon else message)
     
     def warning(self, message: str, icon: str = None):
         """Print warning message."""
-        icon = icon or self.theme.icons.get("warning", "")
+        if icon is None:
+            icon = self.theme.icons.get("warning", "")
         self.manager.print_warning(f"{icon} {message}" if icon else message)
     
     def debug(self, message: str):

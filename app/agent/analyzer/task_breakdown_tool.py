@@ -59,7 +59,7 @@ class TaskBreakdownTool(AgentTool):
             context_summary=context_summary if context_summary else "No prior context"
         )
         
-        print("  📋 Breaking down request into tasks...")
+        logger.info("Breaking down request into tasks...", icon="")
         
         try:
             # Generate breakdown
@@ -100,12 +100,12 @@ class TaskBreakdownTool(AgentTool):
             context["checklist_complete"] = False
             context["current_task_id"] = None
             
-            print(f"  ✅ Created {len(task_objects)} tasks")
+            logger.info(f"Created {len(task_objects)} tasks", icon="")
             
             # Show checklist summary
             for i, task in enumerate(task_objects, 1):
                 deps_str = f" (depends on: {', '.join(task.dependencies)})" if task.dependencies else ""
-                print(f"    [{i}] Phase {task.phase}: {task.description}{deps_str}")
+                logger.info(f"[{i}] Phase {task.phase}: {task.description}{deps_str}", icon="")
             
             return {
                 "checklist": [t.to_dict() for t in task_objects],

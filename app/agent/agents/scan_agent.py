@@ -7,6 +7,9 @@ Tools: nmap, masscan, gobuster, dirsearch, httpx
 """
 from typing import Dict, Any, List
 from .base_agent import BaseAgent
+from app.ui import get_logger
+
+logger = get_logger()
 
 
 class ScanAgent(BaseAgent):
@@ -99,7 +102,7 @@ class ScanAgent(BaseAgent):
                     return scan_type
             
         except Exception as e:
-            print(f"  ⚠️ LLM classification failed: {e}")
+            logger.warning(f"LLM classification failed: {e}", icon="")
         
         return "full_scan"
     

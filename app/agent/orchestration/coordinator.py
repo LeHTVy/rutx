@@ -18,6 +18,10 @@ from typing import Dict, Any, Optional, List
 import json
 import re
 
+from app.ui import get_logger
+
+logger = get_logger()
+
 # Import agents from agents folder
 from app.agent.agents import (
     BaseAgent,
@@ -252,7 +256,7 @@ Which agent should handle this task? Return ONLY the agent name (one word)."""
                     return self.agents[agent]
             
         except Exception as e:
-            print(f"  ⚠️ LLM routing error: {e}")
+            logger.warning(f"LLM routing error: {e}", icon="")
         
         # Fallback: use context-based inference
         return self._fallback_route(context)
@@ -457,7 +461,7 @@ Select 1-3 tools that best accomplish this task. Consider:
                     "targets": targets[:20]  # For batch operations
                 }
                 
-                print(f"  🤖 Agent '{agent.AGENT_NAME}' executing {tool}...")
+                logger.info(f"Agent '{agent.AGENT_NAME}' executing {tool}...", icon="")
                 results[tool] = agent.execute_tool(tool, command, params)
         
         return {
@@ -550,7 +554,7 @@ Select 1-3 tools that best accomplish this task. Consider:
         
         phase = self._infer_phase(context)
         
-        print(f"  🔍 Evaluating {PHASE_NAMES.get(phase, 'Unknown')} phase completion...")
+        logger.info(f"Evaluating {PHASE_NAMES.get(phase, 'Unknown')} phase completion...", icon="")
         
         # Use LLM-driven PhaseAnalyzer
         analysis = analyze_phase_completion(context)
@@ -606,14 +610,14 @@ Select 1-3 tools that best accomplish this task. Consider:
         evaluation = self.evaluate_phase_completion(context)
         
         if evaluation["is_complete"]:
-            print(f"  ✅ {evaluation['phase_name']} phase COMPLETE: {evaluation['reason']}")
+            logger.success(f"{evaluation['phase_name']} phase COMPLETE: {evaluation['reason']}", icon="")
             if evaluation.get("next_phase"):
-                print(f"  🔄 Auto-advancing to {evaluation['next_phase_name']} phase")
+                logger.info(f"Auto-advancing to {evaluation['next_phase_name']} phase", icon="")
             return evaluation
         else:
-            print(f"  ⏳ {evaluation['phase_name']} phase INCOMPLETE: {evaluation['reason']}")
+            logger.info(f"{evaluation['phase_name']} phase INCOMPLETE: {evaluation['reason']}", icon="")
             if evaluation.get("next_action"):
-                print(f"  💡 Suggested: {evaluation['next_action']}")
+                logger.info(f"Suggested: {evaluation['next_action']}", icon="")
             return None
 
 

@@ -45,9 +45,9 @@ def _aggregate_context(query: str, state: Any, context: Dict[str, Any]) -> Tuple
     
     # Log aggregated context
     if agg_context.has_past_data():
-        print(f"  📚 Context: {len(agg_context.relevant_facts)} past findings available")
+        logger.info(f"Context: {len(agg_context.relevant_facts)} past findings available", icon="")
     if agg_context.learning_hints:
-        print(f"  ⚡ Learning: {agg_context.learning_hints[0]}")
+        logger.info(f"Learning: {agg_context.learning_hints[0]}", icon="")
     
     return agg_context, context
 
@@ -99,11 +99,11 @@ def _check_phase_gates(tools: List[str], context: Dict[str, Any]) -> Tuple[List[
         
         if gate_result.is_blocked:
             blocked_tools.append((tool, gate_result))
-            print(f"  🚫 Phase Gate BLOCKED: {tool} (Phase {gate_result.requested_phase})")
+            logger.warning(f"Phase gate blocked: {tool} (Phase {gate_result.requested_phase})", icon="")
         else:
             allowed_tools.append(tool)
             if gate_result.action == PhaseGateAction.WARN:
-                logger.warning(f"Phase Gate WARN: {tool} (Phase {gate_result.requested_phase})")
+                logger.warning(f"Phase Gate WARN: {tool} (Phase {gate_result.requested_phase})", icon="")
     
     # If ALL tools are blocked, return remediation message
     if blocked_tools and not allowed_tools:
@@ -178,7 +178,7 @@ def _check_tool_availability(tools: List[str], commands: Dict[str, str],
             
             fallback = fallback_mgr.get_fallback(tool)
             if fallback and fallback_mgr.registry.is_available(fallback):
-                print(f"  🔄 Fallback: {tool} → {fallback}")
+                logger.info(f"Fallback: {tool} -> {fallback}", icon="")
                 adjusted_tools.append(fallback)
                 fallback_tools.append(fallback)
                 # Update commands for fallback tool
@@ -191,7 +191,7 @@ def _check_tool_availability(tools: List[str], commands: Dict[str, str],
                     "fallback": fallback
                 })
             else:
-                logger.warning(f"Tool unavailable: {tool}")
+                logger.warning(f"Tool unavailable: {tool}", icon="")
                 unavailable_tools.append({
                     "tool": tool,
                     "hint": install_hint,
@@ -251,7 +251,7 @@ class PlannerTool(AgentTool):
         query, context = prepare_query_with_task(query, context)
         
         # STEP 2: Get plan from coordinator
-        print(f"  🧠 Coordination: Routing '{query}'...")
+        logger.info(f"Routing '{query}'...", icon="")
         
         # Load analyzer recommendation if needed
         query_lower = query.lower()
@@ -273,7 +273,7 @@ class PlannerTool(AgentTool):
             commands = plan.get("commands", {})
             reasoning = plan.get("reasoning") or f"I have selected {len(tools)} tools to proceed with your request."
             
-            print(f"  🤖 Agent '{agent_name}' selected tools: {tools}")
+            logger.info(f"Agent '{agent_name}' selected tools: {tools}", icon="")
             
             # STEP 2.5: Phase gate check
             allowed_tools, blocked_tools, block_result = _check_phase_gates(tools, context)

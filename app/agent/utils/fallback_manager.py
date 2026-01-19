@@ -2,7 +2,7 @@
 Fallback Manager - Graceful Failure Handling
 =============================================
 
-Implements the Cursor-style "fallback" pattern:
+Implements a graceful fallback pattern:
 - If step A fails, try step B
 - Learn from past failures
 - Suggest parameter adjustments

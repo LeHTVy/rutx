@@ -10,6 +10,9 @@ Handles Phase 1 operations:
 """
 from typing import List, Dict, Any
 from .base_agent import BaseAgent
+from app.ui import get_logger
+
+logger = get_logger()
 
 
 class ReconAgent(BaseAgent):
@@ -83,7 +86,7 @@ class ReconAgent(BaseAgent):
                     return recon_type
             
         except Exception as e:
-            print(f"  ⚠️ LLM classification failed: {e}")
+            logger.warning(f"LLM classification failed: {e}", icon="")
         
         # Default to subdomain enum if we have a domain but no subdomains
         if has_domain and not has_subdomains:

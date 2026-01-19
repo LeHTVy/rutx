@@ -8,6 +8,10 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
 import re
 
+from app.ui import get_logger
+
+logger = get_logger()
+
 # Import hierarchy support
 try:
     from app.agent.orchestration.hierarchy import HierarchicalAgentMixin, SubordinateAgent
@@ -30,7 +34,6 @@ class BaseAgent(ABC):
     def __init__(self, llm=None):
         """Initialize agent with optional LLM client."""
         self._llm = llm
-        self._tool_index = None
         self._registry = None
         
         if _HIERARCHY_AVAILABLE:
@@ -50,14 +53,6 @@ class BaseAgent(ABC):
                 from app.agent.graph import OllamaClient
                 self._llm = OllamaClient()
         return self._llm
-    
-    @property
-    def tool_index(self):
-        """Lazy-load tool index."""
-        if self._tool_index is None:
-            from app.rag.tool_index import ToolIndex
-            self._tool_index = ToolIndex()
-        return self._tool_index
     
     @property
     def registry(self):
@@ -171,7 +166,7 @@ class BaseAgent(ABC):
             return matches[:n_results]
             
         except Exception as e:
-            print(f"  ⚠️ RAG tool discovery failed: {e}")
+            logger.warning(f"RAG tool discovery failed: {e}", icon="")
             return []
     
     def plan_with_user_priority(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -197,10 +192,13 @@ class BaseAgent(ABC):
             
             # Warn about unavailable tools
             if unavailable:
-                print(f"  ⚠️ Requested tools not available: {', '.join(unavailable)}")
+                logger.warning(f"Requested tools not available: {', '.join(unavailable)}", icon="")
                 # If this is from analyzer recommendation, try to suggest alternatives
                 if user_requested_tool and user_requested_tool in unavailable:
-                    print(f"  💡 Analyzer recommended '{user_requested_tool}' but it's not available. Suggesting alternatives...")
+                    logger.info(
+                        f"Analyzer recommended '{user_requested_tool}' but it's not available. Suggesting alternatives...",
+                        icon="",
+                    )
                     # Try to find similar tools
                     from app.tools.registry import ToolCategory
                     try:
@@ -211,7 +209,10 @@ class BaseAgent(ABC):
                             alternatives = [t for t in self.registry.list_tools(category) 
                                           if t != user_requested_tool and self.registry.is_available(t)]
                             if alternatives:
-                                print(f"  💡 Alternative tools in same category: {', '.join(alternatives[:3])}")
+                                logger.info(
+                                    f"Alternative tools in same category: {', '.join(alternatives[:3])}",
+                                    icon="",
+                                )
                                 # Use first available alternative
                                 valid_tools = [alternatives[0]]
                                 unavailable = []  # Clear unavailable since we have alternative
@@ -237,7 +238,10 @@ class BaseAgent(ABC):
             elif user_requested_tool and user_requested_tool in unavailable:
                 # Analyzer recommended tool is unavailable, but still try to use agent's plan
                 # but pass the recommendation info so agent can consider it
-                print(f"  ⚠️ Analyzer recommended '{user_requested_tool}' but it's not available. Using agent's selection instead.")
+                logger.warning(
+                    f"Analyzer recommended '{user_requested_tool}' but it's not available. Using agent's selection instead.",
+                    icon="",
+                )
                 # Still call plan() but with recommendation in context for agent to consider
                 context["_analyzer_recommended_unavailable"] = user_requested_tool
                 return self.plan(query, context)
@@ -328,7 +332,12 @@ class BaseAgent(ABC):
     
     def search_tools(self, query: str, n_results: int = 5) -> List[Dict]:
         """Search for relevant tools using semantic search."""
-        return self.tool_index.search(query, n_results=n_results)
+        try:
+            from app.rag.unified_memory import get_unified_rag
+            rag = get_unified_rag()
+            return rag.search_tools(query, n_results=n_results)
+        except Exception:
+            return []
     
     def filter_by_specialty(self, tools: List[str]) -> List[str]:
         """Filter tools to only those in this agent's specialty."""
@@ -408,7 +417,7 @@ class BaseAgent(ABC):
                 tool_params["_batch_file"] = target_file  # Store for cleanup if needed
                 
             except Exception as e:
-                print(f"  ⚠️ Failed to create batch file: {e}")
+                logger.warning(f"Failed to create batch file: {e}", icon="")
                 # Fallback: use targets directly
                 tool_params["target"] = " ".join(targets[:20])
                 tool_params["targets"] = targets[:50]
@@ -641,7 +650,7 @@ class BaseAgent(ABC):
                 return json.loads(json_match.group())
                 
         except Exception as e:
-            print(f"  ⚠️ LLM analysis skipped: {e}")
+            logger.warning(f"LLM analysis skipped: {e}", icon="")
         
         # Fallback
         return {

@@ -3,7 +3,7 @@ Context Aggregator - Pre-LLM Context Gathering
 ===============================================
 
 Gathers ALL relevant context BEFORE making LLM calls.
-This is the Cursor-style "context aggregation" pattern.
+This follows a pre-call context aggregation pattern.
 
 Flow:
 1. User query comes in
@@ -23,6 +23,10 @@ if TYPE_CHECKING:
     from app.agent.core.context_manager import SessionContext
     from app.memory import Fact
     FailedAction = dict  # Simplified - failures stored as dicts now
+
+from app.ui import get_logger
+
+logger = get_logger()
 
 
 @dataclass
@@ -139,7 +143,7 @@ class ContextAggregator:
         self._context_manager = None
         self._attack_memory = None
         self._intelligence = None
-        self._tool_index = None
+        self._rag = None
     
     @property
     def context_manager(self):
@@ -172,15 +176,15 @@ class ContextAggregator:
         return self._intelligence
     
     @property
-    def tool_index(self):
-        """Lazy-load tool index."""
-        if self._tool_index is None:
+    def rag(self):
+        """Lazy-load UnifiedRAG (preferred tool semantic search)."""
+        if self._rag is None:
             try:
-                from app.rag.tool_index import ToolIndex
-                self._tool_index = ToolIndex()
-            except:
-                pass
-        return self._tool_index
+                from app.rag.unified_memory import get_unified_rag
+                self._rag = get_unified_rag()
+            except Exception:
+                self._rag = None
+        return self._rag
     
     def aggregate_for_planning(self, query: str, state: Dict[str, Any] = None) -> AggregatedContext:
         """
@@ -215,7 +219,7 @@ class ContextAggregator:
             try:
                 agg.relevant_facts = self.attack_memory.get_facts_for_target(agg.target)
             except Exception as e:
-                print(f"  ⚠️ Fact query failed: {e}")
+                logger.warning(f"Fact query failed: {e}", icon="")
         
         # 4. Get past failures for learning
         if self.attack_memory and agg.target:
@@ -232,20 +236,20 @@ class ContextAggregator:
                     hint = failure.suggest_fix() if hasattr(failure, 'suggest_fix') else str(failure.error)[:50]
                     agg.learning_hints.append(f"{failure.action}: {hint}")
             except Exception as e:
-                print(f"  ⚠️ Failure query failed: {e}")
+                logger.warning(f"Failure query failed: {e}", icon="")
         
         # 5. Query CVE RAG if we have detected technologies
         if agg.session and agg.session.detected_tech:
             try:
                 agg.relevant_cves = self._get_cves_for_tech(agg.session.detected_tech)
             except Exception as e:
-                print(f"  ⚠️ CVE query failed: {e}")
+                logger.warning(f"CVE query failed: {e}", icon="")
         
         # 6. Get tool suggestions from semantic search
         try:
             agg.tool_suggestions = self._get_tool_suggestions(query)
         except Exception as e:
-            print(f"  ⚠️ Tool suggestion failed: {e}")
+            logger.warning(f"Tool suggestion failed: {e}", icon="")
         
         # 7. Get conversation history from state
         if state and state.get("messages"):
@@ -404,7 +408,7 @@ class ContextAggregator:
                     results = cve_rag.search(tech, n_results=2)
                     cves.extend(results)
             except Exception as e:
-                print(f"  ⚠️ CVE RAG query failed: {e}")
+                logger.warning(f"CVE RAG query failed: {e}", icon="")
         
         return cves[:10]  # Limit total CVEs
     
@@ -412,11 +416,11 @@ class ContextAggregator:
         """Get tool suggestions from semantic search."""
         suggestions = []
         
-        if self.tool_index:
+        # Prefer UnifiedRAG (command-level search)
+        if self.rag:
             try:
-                results = self.tool_index.search(query, n_results=5)
-                suggestions = results
-            except:
+                suggestions = self.rag.search_tools(query, n_results=5)
+            except Exception:
                 pass
         
         # Fallback to intelligence layer

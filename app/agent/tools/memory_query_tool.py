@@ -6,6 +6,9 @@ Retrieves and displays stored data from memory/context.
 """
 from typing import Dict, Any, Optional
 from app.agent.tools.base import AgentTool
+from app.ui import get_logger
+
+logger = get_logger()
 
 
 class MemoryQueryTool(AgentTool):
@@ -36,7 +39,7 @@ class MemoryQueryTool(AgentTool):
             response = display_service.format_memory_query(context, domain)
         except Exception as e:
             # Fallback if service fails
-            print(f"  ⚠️ Memory display service error: {e}")
+            logger.warning(f"Memory display service error: {e}", icon="")
             response = f"## 📊 Stored Data for {domain}\n\nError formatting memory data. Please try again."
         
         return {

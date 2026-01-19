@@ -19,6 +19,10 @@ from typing import Dict, Any, List, Optional, Generator, AsyncGenerator
 from dataclasses import dataclass, field
 from enum import Enum
 
+from app.ui import get_logger
+
+logger = get_logger()
+
 
 class OrchestrationStatus(Enum):
     """Status of the orchestration loop."""
@@ -293,7 +297,7 @@ class AutonomousOrchestrator:
                 "targets": targets[:10]  # For batch operations
             }
             
-            print(f"  🤖 Agent '{agent.AGENT_NAME}' executing {tool}...")
+            logger.info(f"Agent '{agent.AGENT_NAME}' executing {tool}...", icon="")
             
             try:
                 result = agent.execute_tool(tool, command, params)

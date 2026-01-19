@@ -378,33 +378,12 @@ def handle_amass(action_input: Dict[str, Any], state: Any) -> str:
     from app.core.state import save_subdomains
     import subprocess
     
-    # #region agent log
-    try:
-        import json
-        with open("snode_debug.log", "a") as f:
-            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"recon.py:376","message":"Amass handler entry","data":{"state_is_none":state is None,"state_context_is_none":state.context is None if state else None,"has_context_attr":hasattr(state,"context") if state else False},"timestamp":int(__import__("time").time()*1000)})+"\n")
-    except: pass
-    # #endregion
-    
     domain = action_input.get("domain", "")
     if not domain:
-        # #region agent log
-        try:
-            import json
-            with open("snode_debug.log", "a") as f:
-                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"recon.py:383","message":"Before state.context.get","data":{"state_context_type":type(state.context).__name__ if state and hasattr(state,"context") else "N/A"},"timestamp":int(__import__("time").time()*1000)})+"\n")
-        except: pass
-        # #endregion
         if state and hasattr(state, "context") and state.context is not None:
             domain = state.context.get("last_domain", "")
         else:
-            # #region agent log
-            try:
-                import json
-                with open("snode_debug.log", "a") as f:
-                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"recon.py:388","message":"State.context is None or missing","data":{"state_type":type(state).__name__ if state else "None"},"timestamp":int(__import__("time").time()*1000)})+"\n")
-            except: pass
-            # #endregion
+            pass
     if not domain:
         return "Error: No domain specified"
     
@@ -429,25 +408,12 @@ def handle_amass(action_input: Dict[str, Any], state: Any) -> str:
             subdomains = [s.strip() for s in result.stdout.strip().split('\n') if s.strip()]
             
             save_subdomains(subdomains, domain)
-            # #region agent log
-            try:
-                import json
-                with open("snode_debug.log", "a") as f:
-                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"recon.py:408","message":"Before updating state.context","data":{"state_context_is_none":state.context is None if state and hasattr(state,"context") else True,"subdomain_count":len(subdomains)},"timestamp":int(__import__("time").time()*1000)})+"\n")
-            except: pass
-            # #endregion
             if state and hasattr(state, "context") and state.context is not None:
                 state.context["last_domain"] = domain
                 state.context["has_subdomains"] = True
                 state.context["subdomain_count"] = len(subdomains)
             else:
-                # #region agent log
-                try:
-                    import json
-                    with open("snode_debug.log", "a") as f:
-                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"recon.py:415","message":"Cannot update state.context - is None","data":{},"timestamp":int(__import__("time").time()*1000)})+"\n")
-                except: pass
-                # #endregion
+                pass
             
             output = f"Amass found {len(subdomains)} subdomains:\n"
             for sub in subdomains[:15]:

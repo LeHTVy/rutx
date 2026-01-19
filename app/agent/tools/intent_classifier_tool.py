@@ -123,7 +123,7 @@ JSON only, no explanation:"""
                 for k, v in parsed.items():
                     if v and k != "no_changes":
                         modifications[k] = v
-                        print(f"  🧠 LLM parsed: {k}={v}")
+                        logger.info(f"LLM parsed: {k}={v}", icon="")
                 return modifications
     except Exception as e:
         logger.warning(f"LLM parse skipped: {e}")
@@ -161,7 +161,7 @@ def _check_target_correction(query: str, context: Dict[str, Any]) -> Optional[Di
     if query.startswith("no") and len(query) > 5:
         correction_indicators = ["its", "it's", "the one", "actually", "meant", "in ", "from ", ".za", ".co", ".com"]
         if any(ind in query for ind in correction_indicators):
-            print(f"  🔄 Target correction detected: routing to verification")
+            logger.info("Target correction detected: routing to verification", icon="")
             context["is_correction"] = True
             context["correction_query"] = query
             return {"intent": "security_task", "context": context}
@@ -267,7 +267,7 @@ def _classify_intent_intelligence(query: str, context: Dict[str, Any]) -> Dict[s
     
     intel = get_intelligence()
     
-    print("  🧠 Intelligence layer analyzing...")
+    logger.info("Intelligence layer analyzing...", icon="")
     
     try:
         # Get semantic understanding of query
@@ -289,9 +289,9 @@ def _classify_intent_intelligence(query: str, context: Dict[str, Any]) -> Dict[s
         
         # Log what we understood
         if understanding.get("detected_target"):
-            print(f"  📍 Target: {understanding['detected_target']}")
+            logger.info(f"Target: {understanding['detected_target']}", icon="")
         
-        print(f"  → Intent: {intent.upper()}")
+        logger.info(f"Intent: {intent.upper()}", icon="")
         
         return {
             **understanding_dict,

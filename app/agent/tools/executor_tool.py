@@ -210,7 +210,7 @@ def _execute_clatscope(params: Dict[str, Any], context: Dict[str, Any]) -> Dict[
     elif params.get("email"):
         osint_command = "breach" if "breach" in str(params) else "email"
     
-    print(f"  🔍 OSINT: {osint_command}")
+    logger.info(f"OSINT: {osint_command}", icon="")
     
     osint_result = execute_clatscope(osint_command, params)
     formatted = format_clatscope_result(osint_command, osint_result)
@@ -263,7 +263,7 @@ def _parse_tool_output(tool_name: str, output: str, domain: str, context: Dict[s
                 found_items.append(f"{len(findings['technologies'])} technologies")
             
             if found_items:
-                print(f"  📊 LLM Parser: {', '.join(found_items)}")
+                logger.info(f"LLM Parser: {', '.join(found_items)}", icon="")
             
             # Persist to RAG
             try:
@@ -318,7 +318,7 @@ def _detect_security_tech_single(tool_name: str, output: str, context: Dict[str,
                 if pattern.lower() in output_lower:
                     if tech_id not in detected_security:
                         detected_security.append(tech_id)
-                        print(f"  🛡️ {tech.name} detected in output")
+                        logger.info(f"Detected security tech in output: {tech.name}", icon="")
                     break
         
         if detected_security:
@@ -344,7 +344,7 @@ def _detect_security_tech_all(results: Dict[str, Any], context: Dict[str, Any]) 
                 if pattern.lower() in all_output:
                     if tech_id not in detected_security:
                         detected_security.append(tech_id)
-                        print(f"  🛡️ {tech.name} detected in output")
+                        logger.info(f"Detected security tech in output: {tech.name}", icon="")
                     break
         
         if detected_security:
@@ -399,7 +399,7 @@ def _execute_single_tool(tool_name: str, params: Dict[str, Any], context: Dict[s
     # Prepare tool parameters
     command, tool_params = _prepare_tool_params(tool_name, None, params, context, state, registry)
     
-    print(f"  🔧 Executing {tool_name}:{command}")
+    logger.info(f"Executing {tool_name}:{command}", icon="")
     
     # Validate parameters
     domain = params.get("domain") or params.get("target") or context.get("last_domain") or context.get("target_domain") or ""
@@ -429,7 +429,7 @@ def _execute_single_tool(tool_name: str, params: Dict[str, Any], context: Dict[s
     
     # Execute via agent
     agent = get_coordinator().get_agent(context.get("current_agent", "base"))
-    print(f"  🤖 Agent '{agent.AGENT_NAME}' executing {tool_name}...")
+    logger.info(f"Agent '{agent.AGENT_NAME}' executing {tool_name}...", icon="")
     execution_result = agent.execute_tool(tool_name, command, tool_params)
     
     # Extension hook: after_tool_execution
@@ -446,9 +446,9 @@ def _execute_single_tool(tool_name: str, params: Dict[str, Any], context: Dict[s
         # Print output (full for OSINT tools, truncated for verbose tools)
         osint_tools = {"securitytrails", "shodan", "clatscope", "whois", "dig", "dnsrecon"}
         if tool_name in osint_tools or len(output) < 5000:
-            print(output)
+            logger.dim(output)
         else:
-            print(f"{output[:1500]}...\n... (truncated {len(output)} chars) ...\n{output[-1500:]}")
+            logger.dim(f"{output[:1500]}...\n... (truncated {len(output)} chars) ...\n{output[-1500:]}")
         
         # Parse output and update context
         _parse_tool_output(tool_name, output, domain, context)

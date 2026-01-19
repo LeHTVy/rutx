@@ -10,6 +10,12 @@ from typing import Dict, Any, Optional
 from app.agent.tools.base import AgentTool
 from app.llm.client import OllamaClient
 from app.ui import get_logger
+from app.agent.analyzer.target_verification_service import (
+    build_conversation_context,
+    extract_domain,
+    extract_ip,
+    format_research_results,
+)
 
 logger = get_logger()
 
@@ -35,23 +41,17 @@ class TargetVerificationTool(AgentTool):
             context = self.state.get("context", {}) if self.state else {}
         if intent is None:
             intent = self.state.get("intent", "") if self.state else ""
+
+        # Deterministic normalization (safe): fix spaced IPs/domains/URLs
+        try:
+            from app.agent.core.input_normalizer import normalize_query
+            query = normalize_query(query)
+        except Exception:
+            # Do not break target verification if normalizer import fails
+            query = query or ""
         
         # Only verify for security tasks
-        # #region agent log
-        try:
-            import json
-            with open("snode_debug.log", "a") as f:
-                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H2","location":"target_verification_tool.py:40","message":"Target verification entry check","data":{"query":query,"intent":intent,"will_proceed":intent=="security_task"},"timestamp":int(__import__("time").time()*1000)})+"\n")
-        except: pass
-        # #endregion
         if intent != "security_task":
-            # #region agent log
-            try:
-                import json
-                with open("snode_debug.log", "a") as f:
-                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H2","location":"target_verification_tool.py:48","message":"Early return - intent not security_task","data":{"intent":intent,"query":query},"timestamp":int(__import__("time").time()*1000)})+"\n")
-            except: pass
-            # #endregion
             return {}
         
         # helper to proceed to planner
@@ -76,29 +76,20 @@ class TargetVerificationTool(AgentTool):
 
         if not is_correction_from_context:
             if context.get("target_domain") and "." in context.get("target_domain"):
-                print(f"  📍 Using verified target: {context.get('target_domain')}")
+                logger.info(f"Using verified target: {context.get('target_domain')}", icon="")
                 return {**proceed_to_planner(), "context": context}
             if context.get("last_domain") and "." in context.get("last_domain"):
                 return {**proceed_to_planner(), "context": context}
             
             
-            domain_match = re.search(r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}', query)
-            # #region agent log
-            try:
-                import json
-                with open("snode_debug.log", "a") as f:
-                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H5","location":"target_verification_tool.py:78","message":"Domain regex check","data":{"query":query,"domain_match":domain_match.group() if domain_match else None},"timestamp":int(__import__("time").time()*1000)})+"\n")
-            except: pass
-            # #endregion
-            if domain_match:
-                potential_domain = domain_match.group()
+            potential_domain = extract_domain(query)
+            if potential_domain:
                 if not context.get("last_domain"):
                     context["last_domain"] = potential_domain
-                    print(f"  📍 Domain found in query: {potential_domain}")
+                    logger.info(f"Domain found in query: {potential_domain}", icon="")
                 return {"context": context, "next_action": "planner"}
             
-            ip_match = re.search(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', query)
-            if ip_match:
+            if extract_ip(query):
                 return proceed_to_planner()
 
         
@@ -108,20 +99,11 @@ class TargetVerificationTool(AgentTool):
             
             # Build conversation context from recent messages
             messages = self.state.get("messages", []) if self.state else []
-            conversation_context = "None"
-            if messages:
-                recent = messages[-6:]  
-                context_lines = []
-                for msg in recent:
-                    role = msg.get("role", "user").upper()
-                    content = msg.get("content", "")[:200]
-                    context_lines.append(f"{role}: {content}")
-                conversation_context = "\n".join(context_lines) if context_lines else "None"
-            
-            if context.get("last_candidate"):
-                conversation_context += f"\n(Previously discussed: {context.get('last_candidate')})"
-            if context.get("target_domain"):
-                conversation_context += f"\n(Resolved domain: {context.get('target_domain')})"
+            conversation_context = build_conversation_context(
+                messages=messages,
+                last_candidate=context.get("last_candidate"),
+                resolved_domain=context.get("target_domain"),
+            )
             
             extraction_prompt = format_prompt("target_extraction", query=query, conversation_context=conversation_context)
             # Use general model for target extraction (better at understanding intent and extracting entities)
@@ -149,14 +131,6 @@ class TargetVerificationTool(AgentTool):
             confidence = extraction.get("confidence", "medium")
             interpretation = extraction.get("interpretation", "")
             
-            # #region agent log
-            try:
-                import json
-                with open("snode_debug.log", "a") as f:
-                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H3","location":"target_verification_tool.py:137","message":"Entity extraction result","data":{"entity_name":entity_name,"entity_name_len":len(entity_name),"search_query":search_query,"resolved_domain":resolved_domain},"timestamp":int(__import__("time").time()*1000)})+"\n")
-            except: pass
-            # #endregion
-            
             # Log typo corrections
             if corrected_from:
                 logger.info(f"Corrected typo: '{corrected_from}' → '{entity_name or resolved_domain}'")
@@ -164,7 +138,7 @@ class TargetVerificationTool(AgentTool):
             # Only log interpretation if it's actually a correction AND we're clearing an old target
             # Don't log generic interpretations for normal queries
             if interpretation and is_correction and context.get("target_domain"):
-                print(f"  💭 Understood: {interpretation}")
+                logger.info(f"Understood: {interpretation}", icon="")
             
             # ============================================================
             # LLM DETECTED CORRECTION: Clear old target and re-verify
@@ -173,7 +147,7 @@ class TargetVerificationTool(AgentTool):
             if is_correction:
                 old_target = context.get("target_domain")
                 if old_target:
-                    print(f"  🔄 LLM detected correction: clearing '{old_target}'")
+                    logger.info(f"LLM detected correction: clearing '{old_target}'", icon="")
                     context.pop("target_domain", None)
                     context["last_candidate"] = old_target.split(".")[0] if "." in old_target else old_target
                 # IMPORTANT: When user corrects/clarifies, DO NOT auto-resolve domain
@@ -187,7 +161,7 @@ class TargetVerificationTool(AgentTool):
             if is_followup and not is_correction:
                 if context.get("last_candidate") and not entity_name:
                     entity_name = context.get("last_candidate")
-                    print(f"  🧠 Follow-up detected, using: {entity_name}") 
+                    logger.info(f"Follow-up detected, using: {entity_name}", icon="")
                 if context.get("target_domain") and not resolved_domain:
                     resolved_domain = context.get("target_domain")
             
@@ -204,13 +178,6 @@ class TargetVerificationTool(AgentTool):
                 return {"context": context, "next_action": "planner"}
             
             if not entity_name or len(entity_name) < 2:
-                # #region agent log
-                try:
-                    import json
-                    with open("snode_debug.log", "a") as f:
-                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H3","location":"target_verification_tool.py:176","message":"Entity name too short or empty","data":{"entity_name":entity_name,"entity_name_len":len(entity_name) if entity_name else 0,"has_stored_domain":bool(context.get("target_domain"))},"timestamp":int(__import__("time").time()*1000)})+"\n")
-                except: pass
-                # #endregion
                 # Last resort: check if we have a stored domain to use
                 if context.get("target_domain"):
                     logger.info(f"Using stored domain: {context.get('target_domain')}")
@@ -226,39 +193,15 @@ class TargetVerificationTool(AgentTool):
             if not search_query:
                 search_query = f"{entity_name} {user_context} official website".strip()
             
-            # #region agent log
-            try:
-                import json
-                with open("snode_debug.log", "a") as f:
-                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H4","location":"target_verification_tool.py:193","message":"Before web search call","data":{"search_query":search_query,"entity_name":entity_name},"timestamp":int(__import__("time").time()*1000)})+"\n")
-            except: pass
-            # #endregion
-            
             logger.info(f"Researching: {search_query}...")
             research = web_search(search_query, max_results=5)
             
-            # #region agent log
-            try:
-                import json
-                with open("snode_debug.log", "a") as f:
-                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H4","location":"target_verification_tool.py:197","message":"Web search result","data":{"success":research.get("success") if research else False,"has_snippets":bool(research.get("snippets")) if research else False,"snippet_count":len(research.get("snippets",[])) if research else 0,"error":research.get("error") if research else None},"timestamp":int(__import__("time").time()*1000)})+"\n")
-            except: pass
-            # #endregion
-            
             if not research or not research.get("success"):
-                # #region agent log
-                try:
-                    import json
-                    with open("snode_debug.log", "a") as f:
-                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H4","location":"target_verification_tool.py:200","message":"Web search failed or no results","data":{"research":research},"timestamp":int(__import__("time").time()*1000)})+"\n")
-                except: pass
-                # #endregion
                 logger.warning("No search results. Proceeding to planner.")
                 return proceed_to_planner()
             
             research_str = ""
-            for i, (snip, src) in enumerate(zip(research.get("snippets", []), research.get("sources", []))):
-                research_str += f"Source {i+1}: {src.get('title', 'N/A')} ({src.get('url', '')})\nSnippet: {snip}\n\n"
+            research_str = format_research_results(research)
             
             # 4.5. Extract detailed company/entity information from research
             company_info = None

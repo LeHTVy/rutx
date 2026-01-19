@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import Dict, Type, Optional
 from app.agent.tools.base import AgentTool
 from app.agent.graph import AgentState
+from app.ui import get_logger
+
+logger = get_logger()
 
 
 # Cache for loaded tool classes
@@ -46,7 +49,7 @@ def _load_tool_classes():
                     _TOOL_CLASSES[tool_name] = attr
         except Exception as e:
             # Skip modules that can't be imported
-            print(f"⚠️ Could not load tool from {module_name}: {e}")
+            logger.warning(f"Could not load tool from {module_name}: {e}", icon="")
             continue
     
     return _TOOL_CLASSES

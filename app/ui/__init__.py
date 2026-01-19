@@ -27,7 +27,6 @@ from .formatters import (
 from .themes import Theme, get_theme, set_theme
 from .autochain import AutoChainProgress, IterationCard
 from .logger import UILogger, get_logger
-from .gemini_style import GeminiStyleUI, get_gemini_ui
 
 __all__ = [
     # Console
@@ -63,8 +62,4 @@ __all__ = [
     # Logger
     "UILogger",
     "get_logger",
-    
-    # Gemini Style
-    "GeminiStyleUI",
-    "get_gemini_ui",
 ]

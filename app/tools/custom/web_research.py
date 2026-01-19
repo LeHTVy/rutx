@@ -204,45 +204,28 @@ def web_search(query: str, max_results: int = 5) -> dict:
     Returns:
         Dict with snippets and sources
     """
-    researcher = get_researcher()
-    
     try:
-        url = "https://html.duckduckgo.com/html/"
-        response = researcher.session.post(
-            url,
-            data={"q": query},
-            timeout=15
-        )
-        
-        if response.status_code != 200:
-            return {"success": False, "error": "Search failed"}
-        
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(response.text, "html.parser")
-        
+        from app.websearch.aggregator import get_search_aggregator
+
+        agg = get_search_aggregator()
+        res = agg.search(query=query, num_results=max_results, timeout=15)
+
+        if not res.get("success"):
+            return {"success": False, "error": res.get("error", "Search failed")}
+
         snippets = []
         sources = []
-        
-        for result in soup.select(".result__body")[:max_results]:
-            snippet = result.select_one(".result__snippet")
-            link = result.select_one(".result__a")
-            
+        for r in res.get("results", [])[:max_results]:
+            snippet = (r.get("snippet") or "").strip()
+            title = (r.get("title") or "").strip()
+            url = (r.get("url") or "").strip()
+
             if snippet:
-                text = snippet.get_text(strip=True)
-                snippets.append(text[:300])
-            
-            if link:
-                href = link.get("href", "")
-                title = link.get_text(strip=True)
-                if href and title:
-                    sources.append({"title": title[:80], "url": href})
-        
-        return {
-            "success": True,
-            "query": query,
-            "snippets": snippets,
-            "sources": sources
-        }
+                snippets.append(snippet[:300])
+            if title and url:
+                sources.append({"title": title[:80], "url": url})
+
+        return {"success": True, "query": query, "snippets": snippets, "sources": sources}
         
     except Exception as e:
         return {"success": False, "error": str(e)}

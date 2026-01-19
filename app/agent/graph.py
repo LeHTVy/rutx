@@ -36,6 +36,10 @@ from app.agent.utils import (
     get_fallback_manager,
 )
 
+from app.ui import get_logger
+
+logger = get_logger()
+
 
 # ============================================================
 # STATE SCHEMA
@@ -152,9 +156,10 @@ def prompt_analysis_node(state: AgentState) -> AgentState:
     3. Create checklist from analyzed prompt
     """
     from app.agent.analyzer import get_user_prompt_analyzer
+    from app.agent.core.input_normalizer import normalize_query
     
     analyzer = get_user_prompt_analyzer()
-    query = state.get("query", "")
+    query = normalize_query(state.get("query", ""))
     context = state.get("context", {})
     
     # Analyze prompt
@@ -167,13 +172,6 @@ def prompt_analysis_node(state: AgentState) -> AgentState:
     
     # Create checklist if needed
     response_text = ""
-    # #region agent log
-    try:
-        import json
-        with open("/home/hellrazor/rutx/.cursor/debug.log", "a") as f:
-            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H7","location":"graph.py:170","message":"Before checklist creation check","data":{"needs_checklist":analysis.get("needs_checklist",True),"has_existing_checklist":bool(context.get("checklist")),"existing_checklist_count":len(context.get("checklist",[]))},"timestamp":int(__import__("time").time()*1000)})+"\n")
-    except: pass
-    # #endregion
     
     if analysis.get("needs_checklist", True):
         checklist_result = analyzer.create_checklist(query, context)
@@ -190,16 +188,9 @@ def prompt_analysis_node(state: AgentState) -> AgentState:
     # Determine next action
     next_action = "target_verification" if analysis.get("needs_checklist", True) else "planner"
     
-    # #region agent log
-    try:
-        import json
-        with open("snode_debug.log", "a") as f:
-            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H5","location":"graph.py:182","message":"Prompt analysis complete","data":{"needs_checklist":analysis.get("needs_checklist",True),"next_action":next_action,"has_checklist":bool(context.get("checklist"))},"timestamp":int(__import__("time").time()*1000)})+"\n")
-    except: pass
-    # #endregion
-    
     return {
         **state,
+        "query": query,
         "context": context,
         "prompt_analysis": analysis,
         "response": response_text if response_text else "Prompt analyzed. Proceeding to target verification...",
@@ -219,13 +210,6 @@ def target_verification_node(state: AgentState) -> AgentState:
     3. Web search using LLM-generated query.
     4. LLM analyzes results with user context to resolve or ask.
     """
-    # #region agent log
-    try:
-        import json
-        with open("snode_debug.log", "a") as f:
-            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H5","location":"graph.py:202","message":"Target verification node entry","data":{"query":state.get("query",""),"has_context":bool(state.get("context"))},"timestamp":int(__import__("time").time()*1000)})+"\n")
-    except: pass
-    # #endregion
     
     from app.agent.analyzer import TargetVerificationTool
     
@@ -235,14 +219,6 @@ def target_verification_node(state: AgentState) -> AgentState:
         context=state.get("context", {}),
         intent=state.get("intent", "")
     )
-    
-    # #region agent log
-    try:
-        import json
-        with open("snode_debug.log", "a") as f:
-            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H5","location":"graph.py:228","message":"Target verification node exit","data":{"next_action":result.get("next_action",""),"has_response":bool(result.get("response"))},"timestamp":int(__import__("time").time()*1000)})+"\n")
-    except: pass
-    # #endregion
     
     # Merge result into state
     return {**state, **result}
@@ -254,7 +230,7 @@ def planner_node(state: AgentState) -> AgentState:
     """
     Plan using specialized agents via Coordinator.
     
-    ENHANCED with Cursor-style patterns:
+    Implementation details:
     1. Context Aggregation - Gather all context BEFORE LLM call
     2. Coordinator routes query to appropriate agent
     3. Validation - Check plan BEFORE returning to user
@@ -291,13 +267,13 @@ def confirm_node(state: AgentState) -> AgentState:
         selected = state.get("selected_tools") or state.get("tools") or state.get("suggested_tools", [])
         context = state.get("context", {})
         if not selected and context.get("target_domain"):
-            print(f"  ✓ Target '{context.get('target_domain')}' confirmed. Getting tool suggestions...")
+            logger.info(f"Target '{context.get('target_domain')}' confirmed. Getting tool suggestions...", icon="")
             return {
                 **state,
                 "next_action": "planner"
             }
         
-        print(f"  ✓ User confirmed. Running: {selected}")
+        logger.info(f"User confirmed. Running: {selected}", icon="")
         
         # Infer correct agent from tool type if not already set
         if not context.get("current_agent") or context.get("current_agent") == "base":
@@ -395,7 +371,7 @@ def executor_node(state: AgentState) -> AgentState:
     """
     Execute tools via registry.
     
-    ENHANCED with Cursor-style patterns:
+    Implementation details:
     - Uses ContextManager for target resolution
     - Integrates FallbackManager for failure handling
     - Records failures for learning
@@ -513,12 +489,12 @@ def analyzer_node(state: AgentState) -> AgentState:
                 progress.render_iteration_summary(iteration_num, summary, successful, failed)
             except ImportError:
                 # Fallback if UI not available
-                print(f"\n  📊 Iteration {iteration_num}/5 Summary:")
-                print(f"     {summary}")
+                logger.info(f"Iteration {iteration_num}/5 Summary:", icon="")
+                logger.info(f"{summary}", icon="")
                 if successful:
-                    print(f"     ✅ Tools executed: {', '.join(successful)}")
+                    logger.info(f"Tools executed: {', '.join(successful)}", icon="")
                 if failed:
-                    print(f"     ❌ Failed tools: {', '.join(failed)}")
+                    logger.info(f"Failed tools: {', '.join(failed)}", icon="")
             
             # If not last iteration, continue to next iteration
             if autochain_iteration + 1 < 5:
@@ -532,9 +508,9 @@ def analyzer_node(state: AgentState) -> AgentState:
                 try:
                     from app.ui import get_logger
                     logger = get_logger()
-                    logger.info("Generating comprehensive analysis from all 5 iterations...")
+                    logger.info("Generating comprehensive analysis from all 5 iterations...", icon="")
                 except ImportError:
-                    print(f"\n  🔍 Generating comprehensive analysis from all 5 iterations...\n")
+                    logger.info("Generating comprehensive analysis from all 5 iterations...", icon="")
                 comprehensive_result = tool.execute_comprehensive_analyze(autochain_results, context)
                 
                 # Add summary header
@@ -583,14 +559,14 @@ def auto_chain_node(state: AgentState) -> AgentState:
         return {**state, "next_action": "respond"}
     
     # Show what we're about to do
-    print(f"\n  🔗 AUTO-CHAIN: Preparing {pending_tools}")
+    logger.info(f"AUTO-CHAIN: Preparing {pending_tools}", icon="")
     
     # Check iteration limit
     chain_count = context.get("auto_chain_count", 0)
     max_chains = 5  # Prevent infinite loops
     
     if chain_count >= max_chains:
-        print(f"  ⚠️ Chain limit reached ({max_chains}), stopping")
+        logger.warning(f"Chain limit reached ({max_chains}), stopping", icon="")
         context["auto_mode"] = False
         return {
             **state,
@@ -641,9 +617,9 @@ def auto_chain_node(state: AgentState) -> AgentState:
             try:
                 from app.ui import get_logger
                 logger = get_logger()
-                logger.info(f"Found {len(all_targets)} targets ({len(subdomains)} subdomains + main)")
+                logger.info(f"Found {len(all_targets)} targets ({len(subdomains)} subdomains + main)", icon="")
             except ImportError:
-                print(f"  📋 Found {len(all_targets)} targets ({len(subdomains)} subdomains + main)")
+                logger.info(f"Found {len(all_targets)} targets ({len(subdomains)} subdomains + main)", icon="")
         
         # Also check context for subdomains
         if not subdomains and context.get("subdomains"):
@@ -652,17 +628,17 @@ def auto_chain_node(state: AgentState) -> AgentState:
             try:
                 from app.ui import get_logger
                 logger = get_logger()
-                logger.info(f"Using context subdomains: {len(subdomains)}")
+                logger.info(f"Using context subdomains: {len(subdomains)}", icon="")
             except ImportError:
-                print(f"  📋 Using context subdomains: {len(subdomains)}")
+                logger.info(f"Using context subdomains: {len(subdomains)}", icon="")
             
     except Exception as e:
         try:
             from app.ui import get_logger
             logger = get_logger()
-            logger.warning(f"Could not get subdomains: {e}")
+            logger.warning(f"Could not get subdomains: {e}", icon="")
         except ImportError:
-            print(f"  ⚠️ Could not get subdomains: {e}")
+            logger.warning(f"Could not get subdomains: {e}", icon="")
     
     # IMPORTANT: Update context with subdomains for executor to use
     if subdomains:
@@ -695,10 +671,10 @@ def auto_chain_node(state: AgentState) -> AgentState:
     
     # For scanning tools, if we have many targets, use first 20
     if any(t in scanning_tools for t in pending_tools) and len(all_targets) > 1:
-        print(f"  🎯 Will scan {min(len(all_targets), 20)} targets: {all_targets[:3]}...")
+        logger.info(f"Will scan {min(len(all_targets), 20)} targets: {all_targets[:3]}...", icon="")
         tool_params["targets"] = all_targets[:20]
     
-    print(f"  🚀 Auto-executing: {list(suggested_commands.keys())} on {domain}")
+    logger.info(f"Auto-executing: {list(suggested_commands.keys())} on {domain}", icon="")
     
     # Clear pending to avoid loops
     context.pop("pending_auto_tools", None)
@@ -834,15 +810,7 @@ def route_after_intent(state: AgentState) -> str:
     """Route based on intent classification."""
     intent = state.get("intent", "question")
     query = state.get("query", "")
-    
-    # #region agent log
-    try:
-        import json
-        with open("snode_debug.log", "a") as f:
-            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H1","location":"graph.py:756","message":"Route after intent","data":{"intent":intent,"query":query,"will_route_to_target_verification":intent=="security_task"},"timestamp":int(__import__("time").time()*1000)})+"\n")
-    except: pass
-    # #endregion
-    
+
     if intent == "security_task":
         return "prompt_analysis"  # New: analyze prompt first, then verify target
     elif intent == "confirm":
@@ -858,15 +826,7 @@ def route_after_intent(state: AgentState) -> str:
 def route_after_action(state: AgentState) -> str:
     """Route based on next_action field."""
     action = state.get("next_action", "end")
-    
-    # #region agent log
-    try:
-        import json
-        with open("snode_debug.log", "a") as f:
-            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H5","location":"graph.py:823","message":"Route after action","data":{"next_action":action,"state_keys":list(state.keys())},"timestamp":int(__import__("time").time()*1000)})+"\n")
-    except: pass
-    # #endregion
-    
+
     # Map actions to node names
     routes = {
         "plan": "planner",
@@ -882,15 +842,7 @@ def route_after_action(state: AgentState) -> str:
     }
     
     route_result = routes.get(action, END)
-    
-    # #region agent log
-    try:
-        import json
-        with open("snode_debug.log", "a") as f:
-            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H5","location":"graph.py:850","message":"Route result","data":{"action":action,"route_result":route_result},"timestamp":int(__import__("time").time()*1000)})+"\n")
-    except: pass
-    # #endregion
-    
+
     return route_result
 
 
@@ -1083,7 +1035,7 @@ class LangGraphAgent:
             from app.memory import get_session_memory
             self.memory = get_session_memory()
         except Exception as e:
-            print(f"⚠️ Memory init failed: {e}")
+            logger.warning(f"Memory init failed: {e}", icon="")
             self.memory = None
     
     def set_mode(self, mode: str):
@@ -1095,7 +1047,7 @@ class LangGraphAgent:
             # Reset iteration count when switching to autochain
             self.autochain_iteration_count = 0
             self.autochain_results = []
-        print(f"  🔄 Mode switched to: {mode.upper()}")
+        logger.info(f"Mode switched to: {mode.upper()}", icon="")
     
     def _run_autochain_iteration(self, query: str, context: Dict[str, Any]) -> tuple[str, Dict[str, Any], bool, bool]:
         """
@@ -1108,9 +1060,9 @@ class LangGraphAgent:
         """
         # Show progress indicator
         iteration_num = self.autochain_iteration_count + 1
-        print(f"\n{'='*70}")
-        print(f"  🔄 AutoChain Mode - Iteration {iteration_num}/5")
-        print(f"{'='*70}\n")
+        logger.dim("=" * 70)
+        logger.info(f"AutoChain Mode - Iteration {iteration_num}/5", icon="")
+        logger.dim("=" * 70)
         
         # Load conversation history
         messages = []
@@ -1176,9 +1128,9 @@ class LangGraphAgent:
             try:
                 from app.ui import get_logger
                 logger = get_logger()
-                logger.success(f"Iteration {iteration_num}/5 completed. Continuing to next iteration...")
+                logger.success(f"Iteration {iteration_num}/5 completed. Continuing to next iteration...", icon="")
             except ImportError:
-                print(f"\n  ✅ Iteration {iteration_num}/5 completed. Continuing to next iteration...\n")
+                logger.success(f"Iteration {iteration_num}/5 completed. Continuing to next iteration...", icon="")
         elif self.autochain_iteration_count >= 5:
             # All iterations done, show comprehensive summary
             try:
@@ -1186,9 +1138,9 @@ class LangGraphAgent:
                 progress = AutoChainProgress()
                 progress.render_completion()
             except ImportError:
-                print(f"\n{'='*70}")
-                print(f"  🎯 AutoChain Mode - All 5 iterations completed!")
-                print(f"{'='*70}\n")
+                logger.dim("=" * 70)
+                logger.success("AutoChain Mode - All 5 iterations completed!", icon="")
+                logger.dim("=" * 70)
             self.mode = "manual"
         
         return response, self.context, needs_confirmation, response_streamed
@@ -1210,7 +1162,7 @@ class LangGraphAgent:
                  # Get messages from SessionMemory
                  messages = self.memory.get_llm_context(max_messages=20)
              except Exception as e:
-                 print(f"⚠️ Failed to load history: {e}")
+                 logger.warning(f"Failed to load history: {e}", icon="")
         
         # Phase 2: Compress history if over limit (before LLM calls)
         try:
@@ -1225,7 +1177,7 @@ class LangGraphAgent:
             import asyncio
             compressed = asyncio.run(memory_manager.compress_history())
             if compressed:
-                print("  📦 History compressed to fit context window")
+                logger.info("History compressed to fit context window", icon="")
             
             # Use topic-based history if available (Phase 1)
             history_messages = memory_manager.get_history_messages()

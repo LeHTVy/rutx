@@ -313,7 +313,7 @@ class AnalyzerTool(AgentTool):
                 agent_analysis = agent.analyze_results(results, context)
                 if agent_analysis:
                     results_str += f"\n\nAGENCY ANALYSIS ({agent.AGENT_NAME}):\n{agent_analysis}\n"
-                    print(f"  🧠 Included insights from {agent.AGENT_NAME} agent")
+                    logger.info(f"Included insights from {agent.AGENT_NAME} agent", icon="")
         except Exception as e:
             logger.error(f"Agent analysis failed: {e}")
         

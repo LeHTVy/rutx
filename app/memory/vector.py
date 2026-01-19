@@ -31,16 +31,29 @@ class VectorMemory:
             metadata={"hnsw:space": "cosine"}
         )
         self._embedding_model = None
+
+    def _ensure_text(self, value: Any) -> str:
+        """
+        Ensure a value is a string for ChromaDB `documents`.
+
+        ChromaDB requires documents to be `str`. Some internal callers may pass
+        structured dict/list outputs (e.g., LLM-parsed JSON). We serialize those
+        deterministically to JSON text to avoid runtime errors like:
+        "Expected document to be a str, got {...} in add."
+        """
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (dict, list)):
+            try:
+                return json.dumps(value, ensure_ascii=False)
+            except Exception:
+                return str(value)
+        return str(value)
     
     def _get_embedding(self, text: str) -> List[float]:
         """Generate embedding using Ollama."""
         # Ensure text is a string
-        if not isinstance(text, str):
-            if isinstance(text, dict):
-                import json
-                text = json.dumps(text)
-            else:
-                text = str(text)
+        text = self._ensure_text(text)
         
         try:
             import requests
@@ -67,12 +80,7 @@ class VectorMemory:
     def _simple_embedding(self, text: str) -> List[float]:
         """Simple fallback embedding (word frequency based)."""
         # Ensure text is a string
-        if not isinstance(text, str):
-            if isinstance(text, dict):
-                import json
-                text = json.dumps(text)
-            else:
-                text = str(text)
+        text = self._ensure_text(text)
         
         # Very simple - just for fallback
         import hashlib
@@ -118,13 +126,16 @@ class VectorMemory:
         self,
         session_id: str,
         role: str,
-        content: str,
+        content: Any,
         domain: str = None,
         tools: List[str] = None,
         metadata: Dict = None
     ) -> str:
         """Add a message to vector memory."""
         doc_id = str(uuid.uuid4())
+
+        # ChromaDB requires `documents` to be strings
+        content_text = self._ensure_text(content)
         
         meta = {
             "session_id": session_id,
@@ -141,12 +152,12 @@ class VectorMemory:
         
         meta = self._sanitize_metadata(meta)
         
-        embedding = self._get_embedding(content)
+        embedding = self._get_embedding(content_text)
         
         self.collection.add(
             ids=[doc_id],
             embeddings=[embedding],
-            documents=[content],
+            documents=[content_text],
             metadatas=[meta]
         )
         
@@ -155,8 +166,8 @@ class VectorMemory:
                 from app.rag.unified_memory import get_unified_rag
                 rag = get_unified_rag()
                 rag.add_conversation_turn(
-                    user_msg=content if role == "user" else "",
-                    ai_msg=content if role == "assistant" else "",
+                    user_msg=content_text if role == "user" else "",
+                    ai_msg=content_text if role == "assistant" else "",
                     tools_used=tools,
                     domain=domain,
                     session_id=session_id
@@ -171,7 +182,7 @@ class VectorMemory:
         session_id: str,
         tool_name: str,
         command: str,
-        output_summary: str,
+        output_summary: Any,
         domain: str = None,
         metadata: Dict = None
     ) -> str:
@@ -182,9 +193,11 @@ class VectorMemory:
         "what did we find on example.com" or "show me the nmap results"
         """
         doc_id = str(uuid.uuid4())
+
+        output_summary_text = self._ensure_text(output_summary)
         
         # Create searchable document
-        doc = f"Tool: {tool_name}. Command: {command}. Domain: {domain or 'unknown'}. Results: {output_summary[:1000]}"
+        doc = f"Tool: {tool_name}. Command: {command}. Domain: {domain or 'unknown'}. Results: {output_summary_text[:1000]}"
         
         meta = {
             "session_id": session_id,
@@ -217,7 +230,7 @@ class VectorMemory:
             rag.add_tool_execution(
                 tool_name=tool_name,
                 command=command,
-                output_summary=output_summary,
+                    output_summary=output_summary_text,
                 domain=domain,
                 session_id=session_id
             )
@@ -229,7 +242,7 @@ class VectorMemory:
     
     def search(
         self,
-        query: str,
+        query: Any,
         n_results: int = 5,
         domain: str = None,
         role: str = None
@@ -243,7 +256,7 @@ class VectorMemory:
             where["role"] = role
         
         # Generate query embedding
-        query_embedding = self._get_embedding(query)
+        query_embedding = self._get_embedding(self._ensure_text(query))
         
         # Search
         results = self.collection.query(
@@ -266,7 +279,7 @@ class VectorMemory:
     
     def search_similar_context(
         self,
-        query: str,
+        query: Any,
         domain: str = None,
         n_results: int = 3
     ) -> str:

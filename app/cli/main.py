@@ -3,7 +3,7 @@
 SNODE CLI - Main Entry Point
 =============================
 
-Enhanced with Gemini CLI-like features:
+Enhanced CLI features:
 - Tab autocomplete
 - Command history (arrow keys)
 - Thinking spinner
@@ -893,13 +893,7 @@ def run_snode():
                 continue
             
             # Run through LangGraph agent
-            # Use Gemini-style UI for cleaner output
-            try:
-                from app.ui import get_gemini_ui
-                gemini_ui = get_gemini_ui()
-                gemini_ui.render_thinking("Processing...")
-            except ImportError:
-                console.print(f"\n[dim]Processing: {user_input}...[/]\n")
+            console.print(f"\n[dim]Processing: {user_input}...[/]\n")
             
             result = agent.run(user_input, context)
             if len(result) == 4:
@@ -909,37 +903,23 @@ def run_snode():
                 response, context, needs_confirmation = result
                 response_streamed = False
             
-            # Display result with Gemini-style UI
             # If response was already streamed, don't print again
             if response_streamed:
                 # Response was already streamed during generation, just add spacing
                 # Don't print response again to avoid duplication
                 console.print()
             elif response and response.strip():
-                try:
-                    from app.ui import get_gemini_ui
-                    gemini_ui = get_gemini_ui()
-                    
-                    if needs_confirmation:
-                        # Show suggestion with Gemini style
-                        gemini_ui.render_info_card("💡 Suggestion", response, border_style="yellow")
-                        console.print("[dim]Type 'yes' to proceed, 'no' to cancel[/]\n")
-                    else:
-                        # Render response in Gemini style
-                        gemini_ui.render_response(response)
-                except ImportError:
-                    # Fallback to old style
+                console.print()
+                if needs_confirmation:
+                    console.print(Panel(
+                        Markdown(response),
+                        title="💡 Suggestion",
+                        border_style="yellow",
+                    ))
+                    console.print("[dim]Type 'yes' to proceed, 'no' to cancel[/]\n")
+                else:
+                    console.print(Markdown(response))
                     console.print()
-                    if needs_confirmation:
-                        console.print(Panel(
-                            Markdown(response),
-                            title="💡 SNODE Suggestion",
-                            border_style="yellow",
-                        ))
-                        console.print("[dim]Type 'yes' to proceed, 'no' to cancel[/]\n")
-                    else:
-                        console.print(Markdown(response))
-                        console.print()
             
             # Save to persistent memory
             if memory:
