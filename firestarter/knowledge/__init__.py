@@ -1,1 +1,0 @@
-"""LlamaIndex knowledge base setup."""
