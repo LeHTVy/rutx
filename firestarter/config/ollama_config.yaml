@@ -1,0 +1,39 @@
+# Ollama connection configuration
+ollama:
+  base_url: "http://localhost:11434"
+  timeout: 300
+  verify_ssl: false
+  
+# Model configurations
+models:
+  qwen3:
+    model_name: "qwen3:8b"
+    temperature: 0.7
+    top_p: 0.9
+    top_k: 40
+    num_predict: 2048
+    context_window: 8192
+    
+  nemotron_3_nano:
+    model_name: "nemotron-3-nano:30b"
+    temperature: 0.0
+    top_p: 0.9
+    top_k: 40
+    num_predict: 512
+    context_window: 4096
+    
+  deepseek_r1:
+    model_name: "deepseek-r1:latest"
+    temperature: 0.7
+    top_p: 0.9
+    top_k: 40
+    num_predict: 4096
+    context_window: 16384
+    
+  functiongemma:
+    model_name: "functiongemma:270m"
+    temperature: 0.0
+    top_p: 0.9
+    top_k: 40
+    num_predict: 512
+    context_window: 32768

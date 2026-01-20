@@ -37,6 +37,26 @@ opentelemetry-api>=1.20.0
 opentelemetry-sdk>=1.20.0
 
 # ─────────────────────────────────────────────────────────────────
+# Production Database (PostgreSQL + Redis)
+# ─────────────────────────────────────────────────────────────────
+psycopg2-binary>=2.9.0  # PostgreSQL adapter
+pgvector>=0.2.0  # PostgreSQL vector extension
+redis>=5.0.0  # Redis for short-term memory buffer
+
+# ─────────────────────────────────────────────────────────────────
+# Fuzzy Matching
+# ─────────────────────────────────────────────────────────────────
+rapidfuzz>=3.0.0  # Fast fuzzy string matching
+python-Levenshtein>=0.21.0  # Levenshtein distance
+
+# ─────────────────────────────────────────────────────────────────
+# Web Search Enhancement
+# ─────────────────────────────────────────────────────────────────
+ddgs>=0.1.0  # DuckDuckGo search fallback
+newspaper3k>=0.2.8  # Article extraction
+lxml[html_clean]>=4.9.0  # HTML parsing
+
+# ─────────────────────────────────────────────────────────────────
 # External Security Tools (install separately)
 # ─────────────────────────────────────────────────────────────────
 # Install script: ./install_tools.sh

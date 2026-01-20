@@ -62,6 +62,34 @@ except ImportError:
     def get_vector():
         raise ImportError("Vector memory not available")
 
+# ============== NEW PRODUCTION STORES (firestarter pattern) ==============
+
+# pgvector store (replaces ChromaDB for production)
+try:
+    from .pgvector_store import PgVectorStore, get_pgvector_store
+except ImportError:
+    PgVectorStore = None
+    def get_pgvector_store(*args, **kwargs):
+        raise ImportError("pgvector not available: pip install psycopg2-binary pgvector")
+
+# Redis buffer (short-term memory)
+try:
+    from .redis_buffer import RedisBuffer, get_redis_buffer
+except ImportError:
+    RedisBuffer = None
+    def get_redis_buffer(*args, **kwargs):
+        raise ImportError("Redis not available: pip install redis")
+
+# Conversation store (PostgreSQL persistence)
+try:
+    from .conversation_store import ConversationStore, get_conversation_store
+except ImportError:
+    ConversationStore = None
+    def get_conversation_store(*args, **kwargs):
+        raise ImportError("ConversationStore not available: pip install psycopg2-binary")
+
+# ==========================================================================
+
 try:
     from .manager import MemoryManager, get_memory_manager
 except ImportError:

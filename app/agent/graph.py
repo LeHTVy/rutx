@@ -153,7 +153,7 @@ def prompt_analysis_node(state: AgentState) -> AgentState:
     Flow:
     1. Analyze prompt → extract requirements
     2. Extract target (with typo handling)
-    3. Create checklist from analyzed prompt
+    3. Go directly to planner (checklist disabled)
     """
     from app.agent.analyzer import get_user_prompt_analyzer
     from app.agent.core.input_normalizer import normalize_query
@@ -170,30 +170,19 @@ def prompt_analysis_node(state: AgentState) -> AgentState:
     if target:
         context["target_hint"] = target
     
-    # Create checklist if needed
+    # DISABLED: Checklist/task breakdown
+    # Go directly to target verification and then planner
     response_text = ""
     
-    if analysis.get("needs_checklist", True):
-        checklist_result = analyzer.create_checklist(query, context)
-        context = checklist_result.get("context", context)
-        if checklist_result.get("checklist"):
-            context["checklist"] = checklist_result["checklist"]
-            # Build response message about checklist creation
-            checklist = context.get("checklist", [])
-            if checklist:
-                response_text = f"✅ Created {len(checklist)} tasks in checklist.\n\n"
-                response_text += "Next step: Verify target domain, then proceed with execution.\n"
-                response_text += "Type 'yes' to continue to target verification."
-    
-    # Determine next action
-    next_action = "target_verification" if analysis.get("needs_checklist", True) else "planner"
+    # Determine next action - skip checklist, go to target verification
+    next_action = "target_verification"
     
     return {
         **state,
         "query": query,
         "context": context,
         "prompt_analysis": analysis,
-        "response": response_text if response_text else "Prompt analyzed. Proceeding to target verification...",
+        "response": response_text if response_text else "Analyzing target...",
         "next_action": next_action
     }
 
@@ -807,12 +796,17 @@ def reasoning_node(state: AgentState) -> AgentState:
 # ============================================================
 
 def route_after_intent(state: AgentState) -> str:
-    """Route based on intent classification."""
+    """Route based on intent classification.
+    
+    SIMPLIFIED: Skip prompt_analysis and task_breakdown - go directly to planner.
+    This reduces LLM calls and timeouts.
+    """
     intent = state.get("intent", "question")
     query = state.get("query", "")
 
     if intent == "security_task":
-        return "prompt_analysis"  # New: analyze prompt first, then verify target
+        # SIMPLIFIED: Go directly to planner (no extra LLM calls)
+        return "planner"
     elif intent == "confirm":
         return "confirm"
     elif intent == "memory_query":

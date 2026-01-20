@@ -2,7 +2,17 @@
 Memory Manager for SNODE.
 
 Combines PostgreSQL (exact) and Vector DB (semantic) memory.
+
+Production Mode (PostgreSQL + pgvector + Redis):
+- PgVectorStore for semantic search (replaces ChromaDB)
+- RedisBuffer for short-term conversation buffer
+- ConversationStore for persistent conversation history
+
+Legacy Mode (fallback):
+- PostgresMemory for exact history
+- VectorMemory (ChromaDB) for semantic search
 """
+import os
 import uuid
 import asyncio
 from datetime import datetime
@@ -14,18 +24,56 @@ from .areas import MemoryArea, classify_memory_area
 from .consolidation import get_memory_consolidator, ConsolidationConfig
 from .topics import History
 
+# Optional production stores (graceful fallback if not available)
+try:
+    from .pgvector_store import PgVectorStore
+    PGVECTOR_AVAILABLE = True
+except ImportError:
+    PGVECTOR_AVAILABLE = False
+
+try:
+    from .redis_buffer import RedisBuffer
+    REDIS_AVAILABLE = True
+except ImportError:
+    REDIS_AVAILABLE = False
+
+try:
+    from .conversation_store import ConversationStore
+    CONVERSATION_STORE_AVAILABLE = True
+except ImportError:
+    CONVERSATION_STORE_AVAILABLE = False
+
 
 class MemoryManager:
     """
     Combined memory manager.
     
+    Production mode (USE_PRODUCTION_MEMORY=true):
+    - PgVectorStore: Semantic search via pgvector
+    - RedisBuffer: Short-term conversation cache
+    - ConversationStore: Persistent conversation history
+    
+    Legacy mode (default fallback):
     - PostgreSQL: Exact conversation history, sessions, findings
-    - Vector DB: Semantic search for relevant context
+    - ChromaDB: Semantic search for relevant context
     """
     
     def __init__(self, auto_cleanup_days: int = 30, enable_consolidation: bool = True):
+        # Check if production mode is enabled
+        self.use_production = os.getenv("USE_PRODUCTION_MEMORY", "false").lower() == "true"
+        
+        # Legacy stores (always available as fallback)
         self.postgres = get_postgres()
         self.vector = get_vector()
+        
+        # Production stores (optional, with graceful fallback)
+        self.pgvector_store = None
+        self.redis_buffer = None
+        self.conversation_store = None
+        
+        if self.use_production:
+            self._init_production_stores()
+        
         self.session_id: Optional[str] = None
         self.target_domain: Optional[str] = None
         self.auto_cleanup_days = auto_cleanup_days
@@ -44,6 +92,33 @@ class MemoryManager:
         
         # Run cleanup on init (async-friendly)
         self._cleanup_old_data()
+    
+    def _init_production_stores(self):
+        """Initialize production stores if available."""
+        if PGVECTOR_AVAILABLE:
+            try:
+                self.pgvector_store = PgVectorStore(collection_name="snode_memory")
+                print("✅ PgVectorStore initialized (production semantic search)")
+            except Exception as e:
+                print(f"⚠️ PgVectorStore unavailable: {e}")
+        
+        if REDIS_AVAILABLE:
+            try:
+                self.redis_buffer = RedisBuffer()
+                if self.redis_buffer.health_check():
+                    print("✅ RedisBuffer initialized (short-term cache)")
+                else:
+                    self.redis_buffer = None
+                    print("⚠️ Redis connection failed, using fallback")
+            except Exception as e:
+                print(f"⚠️ RedisBuffer unavailable: {e}")
+        
+        if CONVERSATION_STORE_AVAILABLE:
+            try:
+                self.conversation_store = ConversationStore()
+                print("✅ ConversationStore initialized (persistent history)")
+            except Exception as e:
+                print(f"⚠️ ConversationStore unavailable: {e}")
     
     def set_agent(self, agent):
         """Set agent instance for history compression."""
@@ -296,11 +371,32 @@ class MemoryManager:
         
         # 2. Semantic search for relevant past conversations
         if include_semantic:
-            semantic = self.vector.search(query, n_results=5, domain=domain)
-            context["semantic"] = [
-                {"content": s["content"], "role": s["metadata"].get("role")}
-                for s in semantic
-            ]
+            # Prefer production pgvector store if available
+            if self.pgvector_store:
+                try:
+                    semantic = self.pgvector_store.similarity_search(
+                        query, 
+                        k=5, 
+                        filter={"domain": domain} if domain else None
+                    )
+                    context["semantic"] = [
+                        {"content": s.get("content", ""), "role": s.get("metadata", {}).get("role")}
+                        for s in semantic
+                    ]
+                except Exception as e:
+                    # Fallback to ChromaDB
+                    semantic = self.vector.search(query, n_results=5, domain=domain)
+                    context["semantic"] = [
+                        {"content": s["content"], "role": s["metadata"].get("role")}
+                        for s in semantic
+                    ]
+            else:
+                # Legacy ChromaDB path
+                semantic = self.vector.search(query, n_results=5, domain=domain)
+                context["semantic"] = [
+                    {"content": s["content"], "role": s["metadata"].get("role")}
+                    for s in semantic
+                ]
         
         # 3. Findings for domain
         if domain:

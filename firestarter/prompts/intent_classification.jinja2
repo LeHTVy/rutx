@@ -1,0 +1,16 @@
+Classify the following user prompt as either a "question" (asking for information) or a "request" (requesting an action to be performed).
+
+User prompt: {{ user_prompt }}
+
+Return your classification in JSON format:
+```json
+{
+  "intent": "question|request",
+  "confidence": 0.0-1.0,
+  "reasoning": "Brief explanation of why this classification was chosen"
+}
+```
+
+Guidelines:
+- "question": User is asking for information, explanation, or knowledge (e.g., "What is X?", "How does Y work?", "Explain Z")
+- "request": User is requesting an action to be performed (e.g., "scan X", "test Y", "assess Z", "run tool on target")

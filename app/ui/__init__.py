@@ -28,6 +28,10 @@ from .themes import Theme, get_theme, set_theme
 from .autochain import AutoChainProgress, IterationCard
 from .logger import UILogger, get_logger
 
+# Streaming Display (adapted from firestarter for natural responses)
+from .panels import ToolExecutionPanel, ModelResponsePanel, ProgressPanel
+from .streaming_manager import StreamingManager, get_streaming_manager
+
 __all__ = [
     # Console
     "get_console",
@@ -62,4 +66,11 @@ __all__ = [
     # Logger
     "UILogger",
     "get_logger",
+    
+    # Streaming Display (firestarter pattern)
+    "ToolExecutionPanel",
+    "ModelResponsePanel",
+    "ProgressPanel",
+    "StreamingManager",
+    "get_streaming_manager",
 ]
